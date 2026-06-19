@@ -1599,11 +1599,18 @@ const SNAPSHOT_INTERVAL_MS = Math.max(2000, Number(process.env.AIS_SNAPSHOT_INTE
 const CANDIDATE_RETENTION_MS = 2 * 60 * 60 * 1000; // 2 hours
 const MAX_DENSITY_ZONES = 200;
 const MAX_CANDIDATE_REPORTS = 1500;
+const MAX_VESSEL_STATIC = MAX_VESSELS;
+
+// Default + ceiling for the /ais/vessels viewport query.
+const DEFAULT_VESSELS_LIMIT = 2000;
+const MAX_VESSELS_LIMIT = 5000;
 
 const vessels = new Map();
 const vesselHistory = new Map();
 const densityGrid = new Map();
 const candidateReports = new Map();
+// Per-MMSI static data (destination, IMO, ship type) from ShipStaticData messages.
+const vesselStatic = new Map();
 
 let snapshotSequence = 0;
 let lastSnapshot = null;
@@ -1655,6 +1662,17 @@ function isLikelyMilitaryCandidate(meta) {
   }
 
   return false;
+}
+
+// Bucket an AIS ship type code (0-99) into a coarse commercial category.
+function shipTypeCategory(shipType) {
+  const t = Number(shipType);
+  if (!Number.isFinite(t)) return 'other';
+  if (t >= 60 && t <= 69) return 'passenger';
+  if (t >= 70 && t <= 79) return 'cargo';
+  if (t >= 80 && t <= 89) return 'tanker';
+  if (t >= 40 && t <= 49) return 'hsc'; // high-speed craft (many fast ferries)
+  return 'other';
 }
 
 function getUpstreamQueueSize() {
@@ -1754,6 +1772,8 @@ function processRawUpstreamMessage(raw) {
     const parsed = JSON.parse(raw);
     if (parsed?.MessageType === 'PositionReport') {
       processPositionReportForSnapshot(parsed);
+    } else if (parsed?.MessageType === 'ShipStaticData') {
+      processShipStaticData(parsed);
     }
   } catch {
     // Ignore malformed upstream payloads
@@ -1798,6 +1818,7 @@ function processPositionReportForSnapshot(data) {
     heading: pos.TrueHeading,
     speed: pos.Sog,
     course: pos.Cog,
+    navStatus: pos.NavigationalStatus,
   });
 
   const history = vesselHistory.get(mmsi) || [];
@@ -1836,6 +1857,28 @@ function processPositionReportForSnapshot(data) {
       timestamp: now,
     });
   }
+}
+
+// ShipStaticData (AIS message types 5/24) carries the voyage + identity fields
+// that PositionReport lacks: destination, IMO, reliable ship type, call sign.
+function processShipStaticData(data) {
+  const meta = data?.MetaData;
+  const stat = data?.Message?.ShipStaticData;
+  if (!meta || !stat) return;
+
+  const mmsi = String(meta.MMSI || '');
+  if (!mmsi) return;
+
+  const shipType = Number.isFinite(stat.Type) ? stat.Type : undefined;
+  vesselStatic.set(mmsi, {
+    mmsi,
+    name: meta.ShipName || stat.Name || '',
+    shipType,
+    imo: stat.ImoNumber ? String(stat.ImoNumber) : '',
+    destination: (stat.Destination || '').trim(),
+    callSign: (stat.CallSign || '').trim(),
+    timestamp: Date.now(),
+  });
 }
 
 function cleanupAggregates() {
@@ -1893,6 +1936,12 @@ function cleanupAggregates() {
   }
   // Hard cap: keep freshest candidate reports.
   evictMapByTimestamp(candidateReports, MAX_CANDIDATE_REPORTS, (report) => report.timestamp || 0);
+
+  // Drop static data for vessels we no longer track, then hard-cap.
+  for (const mmsi of vesselStatic.keys()) {
+    if (!vessels.has(mmsi)) vesselStatic.delete(mmsi);
+  }
+  evictMapByTimestamp(vesselStatic, MAX_VESSEL_STATIC, (s) => s.timestamp || 0);
 
   // Clean chokepoint buckets: remove stale vessels
   for (const [cpName, bucket] of chokepointBuckets) {
@@ -3651,6 +3700,79 @@ const server = http.createServer(async (req, res) => {
         'CDN-Cache-Control': 'public, max-age=10',
       }, JSON.stringify(payload));
     }
+  } else if (pathname === '/ais/vessels') {
+    // Individual vessel positions inside a viewport — powers commercial vessel
+    // (ferry/cargo/tanker) tracking. Viewport + type filtering keep payloads
+    // bounded instead of streaming all ~20k tracked vessels.
+    connectUpstream();
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+
+    const bboxParam = url.searchParams.get('bbox');
+    let bounds = null;
+    if (bboxParam) {
+      const parts = bboxParam.split(',').map(Number);
+      if (parts.length === 4 && parts.every(Number.isFinite)) {
+        const [aLat, aLon, bLat, bLon] = parts;
+        bounds = {
+          swLat: Math.min(aLat, bLat),
+          neLat: Math.max(aLat, bLat),
+          swLon: Math.min(aLon, bLon),
+          neLon: Math.max(aLon, bLon),
+        };
+      }
+    }
+
+    const typesParam = url.searchParams.get('types');
+    const wantTypes = typesParam
+      ? new Set(typesParam.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean))
+      : null;
+
+    const limit = Math.min(
+      MAX_VESSELS_LIMIT,
+      Math.max(1, Number(url.searchParams.get('limit')) || DEFAULT_VESSELS_LIMIT),
+    );
+
+    const out = [];
+    for (const [mmsi, v] of vessels) {
+      if (bounds && (v.lat < bounds.swLat || v.lat > bounds.neLat || v.lon < bounds.swLon || v.lon > bounds.neLon)) {
+        continue;
+      }
+      const stat = vesselStatic.get(mmsi);
+      const shipType = Number.isFinite(v.shipType)
+        ? v.shipType
+        : (stat && Number.isFinite(stat.shipType) ? stat.shipType : undefined);
+      const category = shipTypeCategory(shipType);
+      if (wantTypes && !wantTypes.has(category)) continue;
+
+      out.push({
+        mmsi,
+        name: v.name || (stat && stat.name) || '',
+        lat: v.lat,
+        lon: v.lon,
+        speed: v.speed,
+        course: v.course,
+        heading: v.heading,
+        navStatus: v.navStatus,
+        shipType,
+        category,
+        imo: stat ? stat.imo : '',
+        destination: stat ? stat.destination : '',
+        timestamp: v.timestamp,
+      });
+      if (out.length >= limit) break;
+    }
+
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=5',
+      'CDN-Cache-Control': 'public, max-age=10',
+    }, JSON.stringify({
+      vessels: out,
+      count: out.length,
+      tracked: vessels.size,
+      bbox: bounds,
+      generatedAt: Date.now(),
+    }));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;
@@ -4125,7 +4247,9 @@ function connectUpstream() {
     socket.send(JSON.stringify({
       APIKey: API_KEY,
       BoundingBoxes: [[[-90, -180], [90, 180]]],
-      FilterMessageTypes: ['PositionReport'],
+      // ShipStaticData carries destination, IMO and ship type — needed for
+      // commercial vessel tracking (the /ais/vessels endpoint).
+      FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
     }));
   });
 

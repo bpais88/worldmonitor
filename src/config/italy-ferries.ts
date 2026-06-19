@@ -37,6 +37,9 @@ export interface FerryRoute {
   operatorId?: string;
 }
 
+/** Bounding box covering Italy + surrounding seas: [swLat, swLon, neLat, neLon]. */
+export const ITALY_BBOX: [number, number, number, number] = [35.0, 6.0, 46.5, 19.5];
+
 export const ITALY_FERRY_PORTS: FerryPort[] = [
   // ---- Mainland gateways ----
   { id: 'genoa', name: 'Genoa', lat: 44.41, lon: 8.90, side: 'mainland', aisNames: ['GENOA', 'GENOVA'] },
