@@ -5,5 +5,7 @@ export * from './classify';
 export * from './geo';
 export * from './eta';
 export * from './ferry';
+export * from './ferry-tracker';
+export * from './shipment-store';
 export * from './providers/types';
 export * from './providers/aisstream';
