@@ -1664,16 +1664,9 @@ function isLikelyMilitaryCandidate(meta) {
   return false;
 }
 
-// Bucket an AIS ship type code (0-99) into a coarse commercial category.
-function shipTypeCategory(shipType) {
-  const t = Number(shipType);
-  if (!Number.isFinite(t)) return 'other';
-  if (t >= 60 && t <= 69) return 'passenger';
-  if (t >= 70 && t <= 79) return 'cargo';
-  if (t >= 80 && t <= 89) return 'tanker';
-  if (t >= 40 && t <= 49) return 'hsc'; // high-speed craft (many fast ferries)
-  return 'other';
-}
+// Pure query/filter helpers for /ais/vessels live in a separate module so they
+// can be unit-tested without starting the relay server.
+const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-vessels-query.cjs');
 
 function getUpstreamQueueSize() {
   return upstreamQueue.length - upstreamQueueReadIndex;
@@ -3707,60 +3700,14 @@ const server = http.createServer(async (req, res) => {
     connectUpstream();
     const url = new URL(req.url, `http://localhost:${PORT}`);
 
-    const bboxParam = url.searchParams.get('bbox');
-    let bounds = null;
-    if (bboxParam) {
-      const parts = bboxParam.split(',').map(Number);
-      if (parts.length === 4 && parts.every(Number.isFinite)) {
-        const [aLat, aLon, bLat, bLon] = parts;
-        bounds = {
-          swLat: Math.min(aLat, bLat),
-          neLat: Math.max(aLat, bLat),
-          swLon: Math.min(aLon, bLon),
-          neLon: Math.max(aLon, bLon),
-        };
-      }
-    }
+    const bounds = parseBbox(url.searchParams.get('bbox'));
+    const wantTypes = parseTypes(url.searchParams.get('types'));
+    const limit = clampLimit(url.searchParams.get('limit'), {
+      def: DEFAULT_VESSELS_LIMIT,
+      max: MAX_VESSELS_LIMIT,
+    });
 
-    const typesParam = url.searchParams.get('types');
-    const wantTypes = typesParam
-      ? new Set(typesParam.split(',').map((s) => s.trim().toLowerCase()).filter(Boolean))
-      : null;
-
-    const limit = Math.min(
-      MAX_VESSELS_LIMIT,
-      Math.max(1, Number(url.searchParams.get('limit')) || DEFAULT_VESSELS_LIMIT),
-    );
-
-    const out = [];
-    for (const [mmsi, v] of vessels) {
-      if (bounds && (v.lat < bounds.swLat || v.lat > bounds.neLat || v.lon < bounds.swLon || v.lon > bounds.neLon)) {
-        continue;
-      }
-      const stat = vesselStatic.get(mmsi);
-      const shipType = Number.isFinite(v.shipType)
-        ? v.shipType
-        : (stat && Number.isFinite(stat.shipType) ? stat.shipType : undefined);
-      const category = shipTypeCategory(shipType);
-      if (wantTypes && !wantTypes.has(category)) continue;
-
-      out.push({
-        mmsi,
-        name: v.name || (stat && stat.name) || '',
-        lat: v.lat,
-        lon: v.lon,
-        speed: v.speed,
-        course: v.course,
-        heading: v.heading,
-        navStatus: v.navStatus,
-        shipType,
-        category,
-        imo: stat ? stat.imo : '',
-        destination: stat ? stat.destination : '',
-        timestamp: v.timestamp,
-      });
-      if (out.length >= limit) break;
-    }
+    const out = buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit });
 
     return sendCompressed(req, res, 200, {
       'Content-Type': 'application/json',
