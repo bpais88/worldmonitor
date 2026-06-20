@@ -37,7 +37,12 @@ export interface TrackedFerry {
   /** Crew-entered AIS ETA, "MM-DD HH:MMZ" (UTC), if present. */
   etaAis?: string;
   /** Relay-computed delay status (ETA drift / stalled), if flagged. */
-  delay?: { slipping?: boolean; stalled?: boolean; etaGrowthMin?: number };
+  delay?: {
+    slipping?: boolean;
+    stalled?: boolean;
+    etaGrowthMin?: number;
+    reasons?: { source: string; kind: string; summary: string; confidence: number; url?: string }[];
+  };
   status: FerryStatus;
   destinationPortId?: string;
   destinationName?: string;
@@ -92,7 +97,12 @@ export function toTrackedFerry(v: LiveVessel, now: number = Date.now()): Tracked
     callSign: v.callSign,
     etaAis: v.etaAis,
     delay: v.delay && (v.delay.slipping || v.delay.stalled)
-      ? { slipping: v.delay.slipping, stalled: v.delay.stalled, etaGrowthMin: v.delay.etaGrowthMin }
+      ? {
+          slipping: v.delay.slipping,
+          stalled: v.delay.stalled,
+          etaGrowthMin: v.delay.etaGrowthMin,
+          reasons: v.delay.reasons,
+        }
       : undefined,
     status: deriveStatus(v),
     destinationPortId: port?.id,

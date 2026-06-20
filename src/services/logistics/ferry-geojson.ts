@@ -11,6 +11,7 @@ import {
   formatFerrySize,
   formatFerryDraught,
   formatFerryDelay,
+  formatFerryWhy,
 } from './ferry-format';
 
 export interface FerryFeatureProps {
@@ -33,6 +34,8 @@ export interface FerryFeatureProps {
   etaAisText: string;
   /** '', 'Delayed +N min', or 'Stalled'. */
   delayText: string;
+  /** Likely-cause line, e.g. "🌊 Rough conditions…", or ''. */
+  whyText: string;
 }
 
 export interface FerryFeature {
@@ -64,6 +67,7 @@ export function ferryProps(f: TrackedFerry): FerryFeatureProps {
     callSign: f.callSign ?? '',
     etaAisText: f.etaAis ?? '',
     delayText: formatFerryDelay(f),
+    whyText: formatFerryWhy(f),
   };
 }
 

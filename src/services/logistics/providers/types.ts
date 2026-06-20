@@ -8,6 +8,16 @@
 import type { VesselPosition } from '../types';
 import type { ShipCategory } from '../classify';
 
+/** A candidate explanation for a delay (weather, news, ...). */
+export interface DelayReason {
+  source: string;
+  kind: string;
+  summary: string;
+  confidence: number;
+  url?: string;
+  detail?: string;
+}
+
 /** Delay status from the relay's ETA-drift detection (Method B). */
 export interface VesselDelay {
   /** Predicted arrival is sliding later vs the recent trend. */
@@ -18,6 +28,8 @@ export interface VesselDelay {
   etaGrowthMin?: number;
   windowMin?: number;
   samples?: number;
+  /** Ranked candidate reasons for the delay (highest confidence first). */
+  reasons?: DelayReason[];
 }
 
 /** A live vessel position enriched with its coarse category. */

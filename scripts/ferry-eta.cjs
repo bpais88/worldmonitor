@@ -83,4 +83,14 @@ function etaFor(vessel, port, now = Date.now()) {
   return { hoursRemaining, etaTs: Math.round(now + hoursRemaining * MS_PER_HOUR) };
 }
 
-module.exports = { resolveDestinationPort, etaFor, haversineKm };
+/** Match a vessel name to a known Italian ferry operator's display name, or ''. */
+function resolveOperatorName(vesselName) {
+  if (!vesselName) return '';
+  const upper = String(vesselName).toUpperCase();
+  for (const op of data.operators || []) {
+    if ((op.keywords || []).some((k) => upper.includes(k))) return op.name;
+  }
+  return '';
+}
+
+module.exports = { resolveDestinationPort, etaFor, haversineKm, resolveOperatorName };

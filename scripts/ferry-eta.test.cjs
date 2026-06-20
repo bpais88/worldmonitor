@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { resolveDestinationPort, etaFor } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName } = require('./ferry-eta.cjs');
 
 test('resolves a plain LOCODE to its port', () => {
   const p = resolveDestinationPort('ITNAP');
@@ -56,4 +56,12 @@ test('etaFor halves the time when speed doubles', () => {
 test('etaFor returns null when stopped (below underway threshold)', () => {
   assert.equal(etaFor({ ...NAPLES, speedKnots: 0.3 }, CAPRI, NOW), null);
   assert.equal(etaFor({ ...NAPLES, speedKnots: undefined }, CAPRI, NOW), null);
+});
+
+test('resolveOperatorName matches a known operator from the vessel name', () => {
+  assert.equal(resolveOperatorName('CAREMAR DRIADE'), 'Caremar');
+  assert.equal(resolveOperatorName('GNV AZZURRA'), 'Grandi Navi Veloci');
+  assert.equal(resolveOperatorName('MOBY TOMMY'), 'Moby Lines');
+  assert.equal(resolveOperatorName('UNKNOWN VESSEL'), '');
+  assert.equal(resolveOperatorName(''), '');
 });

@@ -56,23 +56,7 @@ export const ITALY_FERRY_PORTS: FerryPort[] = ferryData.ports as unknown as Ferr
  */
 export const PORT_LOCODES: Record<string, string> = ferryData.locodes;
 
-export const ITALY_FERRY_OPERATORS: FerryOperator[] = [
-  { id: 'tirrenia', name: 'Tirrenia / CIN', keywords: ['TIRRENIA'] },
-  { id: 'gnv', name: 'Grandi Navi Veloci', keywords: ['GNV', 'GRANDI NAVI VELOCI'] },
-  { id: 'moby', name: 'Moby Lines', keywords: ['MOBY'] },
-  { id: 'grimaldi', name: 'Grimaldi Lines', keywords: ['GRIMALDI'] },
-  { id: 'corsica_sardinia', name: 'Corsica Sardinia Ferries', keywords: ['CORSICA', 'SARDINIA FERRIES'] },
-  { id: 'caremar', name: 'Caremar', keywords: ['CAREMAR'] },
-  { id: 'siremar', name: 'Siremar', keywords: ['SIREMAR'] },
-  { id: 'liberty_lines', name: 'Liberty Lines', keywords: ['LIBERTY LINES', 'USTICA LINES'] },
-  { id: 'snav', name: 'SNAV', keywords: ['SNAV'] },
-  { id: 'toremar', name: 'Toremar', keywords: ['TOREMAR'] },
-  { id: 'laziomar', name: 'Laziomar', keywords: ['LAZIOMAR'] },
-  { id: 'alilauro', name: 'Alilauro', keywords: ['ALILAURO'] },
-  { id: 'nlg', name: 'Navigazione Libera del Golfo', keywords: ['NLG', 'LIBERA DEL GOLFO'] },
-  { id: 'blunavy', name: 'Blu Navy', keywords: ['BLU NAVY'] },
-  { id: 'caronte', name: 'Caronte & Tourist', keywords: ['CARONTE', 'BLU JET'] },
-];
+export const ITALY_FERRY_OPERATORS: FerryOperator[] = ferryData.operators as unknown as FerryOperator[];
 
 export const ITALY_FERRY_ROUTES: FerryRoute[] = [
   // Sardinia

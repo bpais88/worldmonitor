@@ -1673,8 +1673,60 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // ETA on a timer, and flags crossings whose predicted arrival is slipping (or
 // stalled mid-crossing) — without any external timetable. History persists to
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
-const { resolveDestinationPort, etaFor } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
+const { runExplainers } = require('./delay-explainers.cjs');
+const { weatherExplainer } = require('./explainer-weather.cjs');
+const { newsExplainer } = require('./explainer-news.cjs');
+
+// Pluggable "why is it delayed?" explainers — add sources here over time.
+const DELAY_EXPLAINERS = [weatherExplainer, newsExplainer];
+const reasonsByMmsi = new Map(); // mmsi -> { reasons, ts }
+const ENRICH_INTERVAL_MS = 2 * 60_000;
+const ENRICH_TTL_MS = 15 * 60_000;   // re-explain a flagged vessel at most this often
+const ENRICH_MAX_PER_TICK = 6;       // bound external calls per pass
+
+// For each currently-flagged vessel, fetch candidate reasons (weather/news),
+// cached, bounded. Runs off the hot path; never throws into the request flow.
+async function enrichFerryDelays(now = Date.now()) {
+  const due = [];
+  for (const [mmsi] of delayByMmsi) {
+    const cached = reasonsByMmsi.get(mmsi);
+    if (!cached || now - cached.ts > ENRICH_TTL_MS) due.push(mmsi);
+    if (due.length >= ENRICH_MAX_PER_TICK) break;
+  }
+  for (const mmsi of due) {
+    const v = vessels.get(mmsi);
+    const drift = delayByMmsi.get(mmsi);
+    if (!v || !drift) continue;
+    const stat = vesselStatic.get(mmsi);
+    const port = resolveDestinationPort(stat && stat.destination);
+    const ctx = {
+      mmsi,
+      lat: v.lat,
+      lon: v.lon,
+      destPortId: port ? port.portId : undefined,
+      destName: port ? port.name : undefined,
+      operatorName: resolveOperatorName(v.name || (stat && stat.name)),
+      etaGrowthMin: drift.etaGrowthMin,
+      stalled: drift.stalled,
+    };
+    try {
+      const reasons = await runExplainers(DELAY_EXPLAINERS, ctx);
+      reasonsByMmsi.set(mmsi, { reasons, ts: now });
+    } catch (e) {
+      console.warn('[Relay] ferry enrich failed:', e.message);
+    }
+  }
+  // Drop reason caches for vessels no longer flagged.
+  for (const mmsi of reasonsByMmsi.keys()) {
+    if (!delayByMmsi.has(mmsi)) reasonsByMmsi.delete(mmsi);
+  }
+}
+
+function startFerryEnrichLoop() {
+  setInterval(() => { void enrichFerryDelays(); }, ENRICH_INTERVAL_MS).unref?.();
+}
 
 const FERRY_DELAY_REDIS_KEY = `${RELAY_ENV_PREFIX}relay:ferry:eta-history:v1`;
 const FERRY_DELAY_INTERVAL_MS = 60_000;
@@ -3837,10 +3889,13 @@ const server = http.createServer(async (req, res) => {
 
     const out = buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit });
 
-    // Attach delay status (Method B) for any returned vessel we're tracking.
+    // Attach delay status (Method B) + any explainer reasons for the vessel.
     for (const v of out) {
       const d = delayByMmsi.get(v.mmsi);
-      if (d) v.delay = d;
+      if (d) {
+        const cached = reasonsByMmsi.get(v.mmsi);
+        v.delay = cached && cached.reasons.length ? { ...d, reasons: cached.reasons } : d;
+      }
     }
 
     return sendCompressed(req, res, 200, {
@@ -4378,6 +4433,7 @@ server.listen(PORT, () => {
   startMarketDataSeedLoop();
   startAviationSeedLoop();
   startFerryDelayLoop();
+  startFerryEnrichLoop();
 });
 
 wss.on('connection', (ws, req) => {
