@@ -1,5 +1,6 @@
 import { Panel } from './Panel';
 import { escapeHtml } from '@/utils/sanitize';
+import { ItalyFerryMap } from './ItalyFerryMap';
 import {
   getTrackedItalianFerries,
   type TrackedFerry,
@@ -37,6 +38,8 @@ function formatEta(ferry: TrackedFerry): string {
 export class ItalyFerryPanel extends Panel {
   private ferries: TrackedFerry[] = [];
   private timer: ReturnType<typeof setInterval> | null = null;
+  private map: ItalyFerryMap | null = null;
+  private mapMounted = false;
 
   constructor() {
     super({ id: 'italy-ferries', title: 'Italy Ferries', showCount: true });
@@ -54,21 +57,26 @@ export class ItalyFerryPanel extends Panel {
       const ferries = await getTrackedItalianFerries();
       this.ferries = ferries;
       this.setCount(ferries.length);
-      this.setDataBadge('live', `${ferries.length} tracked`);
+      this.setDataBadge('live');
       this.render();
     } catch {
       this.setDataBadge('unavailable');
       if (this.ferries.length === 0) {
-        this.showError('Ferry feed unavailable — is the AIS relay running?');
+        this.teardownMap();
+        // Imperative (not setContent) so it never races the debounced content path.
+        this.content.innerHTML = '<div class="error-message">Ferry feed unavailable — is the AIS relay running?</div>';
       }
     }
   }
 
   private render(): void {
     if (this.ferries.length === 0) {
-      this.setContent('<div class="economic-empty">No Italian ferries currently in view.</div>');
+      this.teardownMap();
+      this.content.innerHTML = '<div class="economic-empty">No Italian ferries currently in view.</div>';
       return;
     }
+
+    this.ensureScaffold();
 
     // Group by destination island group (fallback bucket for unresolved).
     const groups = new Map<string, TrackedFerry[]>();
@@ -108,12 +116,39 @@ export class ItalyFerryPanel extends Panel {
       </div>`;
     }).join('');
 
-    this.setContent(`
-      ${sections}
+    const board = this.content.querySelector('.ferry-board');
+    if (board) board.innerHTML = sections;
+    this.map?.setFerries(this.ferries);
+  }
+
+  /**
+   * Build the persistent map host + legend + table container once, synchronously
+   * (bypassing the debounced setContent so the host exists immediately for the
+   * MapLibre instance, which is then updated in place rather than re-created).
+   */
+  private ensureScaffold(): void {
+    if (this.mapMounted) return;
+    this.content.innerHTML = `
+      <div class="ferry-map-host"></div>
+      <div class="ferry-map-legend">
+        <span><i style="background:#2fbf85"></i>Under way (arrow = heading)</span>
+        <span><i style="background:#e0a032"></i>At anchor</span>
+        <span><i style="background:#9aa0a6"></i>In port</span>
+      </div>
+      <div class="ferry-board"></div>
       <div class="economic-footer">
         <span class="economic-source">Source: AIS (aisstream.io) · ~ = inferred from course</span>
       </div>
-    `);
+    `;
+    const host = this.content.querySelector<HTMLElement>('.ferry-map-host');
+    if (host) this.map = new ItalyFerryMap(host);
+    this.mapMounted = true;
+  }
+
+  private teardownMap(): void {
+    this.map?.destroy();
+    this.map = null;
+    this.mapMounted = false;
   }
 
   public override destroy(): void {
@@ -121,6 +156,7 @@ export class ItalyFerryPanel extends Panel {
       clearInterval(this.timer);
       this.timer = null;
     }
+    this.teardownMap();
     super.destroy();
   }
 }

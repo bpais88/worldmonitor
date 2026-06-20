@@ -3,7 +3,7 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3004 http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; font-src 'self' data: https:; img-src 'self' data:;" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' http://localhost:3004 http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; font-src 'self' data: https:; img-src 'self' data: blob: https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com;" />
     <title>Italy Ferry Tracker — World Monitor</title>
     <script>(function(){try{var t=localStorage.getItem('worldmonitor-theme');if(t==='light')document.documentElement.dataset.theme='light';}catch(e){}})()</script>
     <style>
@@ -26,6 +26,13 @@
       .ferry-route-warn { color: #e0a032; font-weight: 700; }
       .economic-empty, .error-message { padding: 24px; text-align: center; opacity: 0.7; }
       .economic-footer { margin-top: 12px; font-size: 11px; opacity: 0.5; }
+      /* Ferry map (MapLibre) */
+      .ferry-map-host { height: 420px; width: 100%; border-radius: 8px; overflow: hidden;
+        border: 1px solid rgba(127,127,127,0.18); }
+      .ferry-map-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 18px;
+        font-size: 11px; opacity: 0.75; }
+      .ferry-map-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+        margin-right: 5px; vertical-align: middle; }
     </style>
   </head>
   <body style="margin:0;background:var(--bg,#1a1c1e);color:var(--text,#e8eaed);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
