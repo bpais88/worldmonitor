@@ -46,11 +46,23 @@ function popupHtml(p: FerryFeatureProps): string {
   const color = STATUS_COLOR[p.status] ?? '#9aa0a6';
   const dest = p.destinationName ? `→ ${escapeHtml(p.destinationName)}` : 'destination unknown';
   const operator = p.operatorName ? `<div class="ferry-popup-op">${escapeHtml(p.operatorName)}</div>` : '';
+
+  // Optional detail lines — only rendered when the vessel broadcast the data.
+  const detail: string[] = [];
+  const sizeDraught = [p.sizeText, p.draughtText].filter(Boolean).map(escapeHtml).join(' · ');
+  if (sizeDraught) detail.push(`<div class="ferry-popup-row ferry-popup-dim">${sizeDraught}</div>`);
+  const idEta = [
+    p.callSign ? `Call ${escapeHtml(p.callSign)}` : '',
+    p.etaAisText ? `Crew ETA ${escapeHtml(p.etaAisText)}` : '',
+  ].filter(Boolean).join(' · ');
+  if (idEta) detail.push(`<div class="ferry-popup-row ferry-popup-dim">${idEta}</div>`);
+
   return `<div class="ferry-popup">
     <div class="ferry-popup-name">${escapeHtml(p.name)}</div>
     ${operator}
     <div class="ferry-popup-row"><span class="ferry-popup-dot" style="background:${color}" title="${escapeHtml(p.statusLabel)}"></span>${dest}</div>
     <div class="ferry-popup-row">${escapeHtml(p.speedText)} · ETA ${escapeHtml(p.etaText)}</div>
+    ${detail.join('')}
   </div>`;
 }
 

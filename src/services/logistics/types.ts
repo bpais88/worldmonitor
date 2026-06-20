@@ -29,6 +29,16 @@ export interface VesselPosition extends LatLon {
   shipType?: number;
   /** Free-text AIS destination field (crew-entered, often UPPERCASE). */
   destination?: string;
+  /** AIS call sign (from ShipStaticData). */
+  callSign?: string;
+  /** Max static draught in metres (load indicator, from ShipStaticData). */
+  draughtMeters?: number;
+  /** Overall hull length in metres (Dimension A+B). */
+  lengthMeters?: number;
+  /** Hull beam in metres (Dimension C+D). */
+  beamMeters?: number;
+  /** Crew-entered AIS ETA, pre-formatted "MM-DD HH:MMZ" (UTC), if present. */
+  etaAis?: string;
   /** Epoch ms of the position report. */
   timestamp: number;
 }

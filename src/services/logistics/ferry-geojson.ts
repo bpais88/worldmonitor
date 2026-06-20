@@ -4,7 +4,13 @@
 // tsx node test runner (which has no DOM/WebGL).
 
 import type { TrackedFerry } from './ferry-tracker';
-import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed } from './ferry-format';
+import {
+  FERRY_STATUS_LABEL,
+  formatFerryEta,
+  formatFerrySpeed,
+  formatFerrySize,
+  formatFerryDraught,
+} from './ferry-format';
 
 export interface FerryFeatureProps {
   mmsi: string;
@@ -20,6 +26,10 @@ export interface FerryFeatureProps {
   destinationName: string;
   speedText: string;
   etaText: string;
+  sizeText: string;
+  draughtText: string;
+  callSign: string;
+  etaAisText: string;
 }
 
 export interface FerryFeature {
@@ -46,6 +56,10 @@ export function ferryProps(f: TrackedFerry): FerryFeatureProps {
     destinationName: f.destinationName ?? '',
     speedText: formatFerrySpeed(f),
     etaText: formatFerryEta(f),
+    sizeText: formatFerrySize(f),
+    draughtText: formatFerryDraught(f),
+    callSign: f.callSign ?? '',
+    etaAisText: f.etaAis ?? '',
   };
 }
 

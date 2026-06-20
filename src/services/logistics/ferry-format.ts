@@ -24,3 +24,17 @@ export function formatFerryEta(ferry: TrackedFerry): string {
 export function formatFerrySpeed(ferry: TrackedFerry): string {
   return typeof ferry.speedKnots === 'number' ? `${ferry.speedKnots.toFixed(0)} kn` : '—';
 }
+
+/** Size string from hull dimensions, e.g. "175 × 27 m", "175 m", or '' if unknown. */
+export function formatFerrySize(ferry: TrackedFerry): string {
+  const l = ferry.lengthMeters;
+  const b = ferry.beamMeters;
+  if (l && b) return `${Math.round(l)} × ${Math.round(b)} m`;
+  if (l) return `${Math.round(l)} m`;
+  return '';
+}
+
+/** Draught string, e.g. "6.4 m draught", or '' if unknown. */
+export function formatFerryDraught(ferry: TrackedFerry): string {
+  return ferry.draughtMeters ? `${ferry.draughtMeters.toFixed(1)} m draught` : '';
+}

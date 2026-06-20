@@ -21,6 +21,11 @@ export interface RawRelayVessel {
   category?: string;
   imo?: string;
   destination?: string;
+  callSign?: string;
+  draught?: number;
+  length?: number;
+  beam?: number;
+  etaAis?: string;
   timestamp?: number;
 }
 
@@ -48,6 +53,11 @@ export function toLiveVessel(raw: RawRelayVessel): LiveVessel | null {
     shipType,
     imo: raw.imo || undefined,
     destination: raw.destination || undefined,
+    callSign: raw.callSign || undefined,
+    draughtMeters: Number.isFinite(raw.draught) && (raw.draught as number) > 0 ? raw.draught : undefined,
+    lengthMeters: Number.isFinite(raw.length) && (raw.length as number) > 0 ? raw.length : undefined,
+    beamMeters: Number.isFinite(raw.beam) && (raw.beam as number) > 0 ? raw.beam : undefined,
+    etaAis: raw.etaAis || undefined,
     category: normalizeCategory(raw.category, shipType),
     navStatus: Number.isFinite(raw.navStatus) ? raw.navStatus : undefined,
     timestamp: Number.isFinite(raw.timestamp) ? (raw.timestamp as number) : Date.now(),

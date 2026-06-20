@@ -26,6 +26,16 @@ export interface TrackedFerry {
   lon: number;
   speedKnots?: number;
   courseDeg?: number;
+  /** Overall hull length in metres (from ShipStaticData). */
+  lengthMeters?: number;
+  /** Hull beam in metres. */
+  beamMeters?: number;
+  /** Max static draught in metres (load indicator). */
+  draughtMeters?: number;
+  /** AIS call sign. */
+  callSign?: string;
+  /** Crew-entered AIS ETA, "MM-DD HH:MMZ" (UTC), if present. */
+  etaAis?: string;
   status: FerryStatus;
   destinationPortId?: string;
   destinationName?: string;
@@ -74,6 +84,11 @@ export function toTrackedFerry(v: LiveVessel, now: number = Date.now()): Tracked
     lon: v.lon,
     speedKnots: v.speedKnots,
     courseDeg: v.courseDeg,
+    lengthMeters: v.lengthMeters,
+    beamMeters: v.beamMeters,
+    draughtMeters: v.draughtMeters,
+    callSign: v.callSign,
+    etaAis: v.etaAis,
     status: deriveStatus(v),
     destinationPortId: port?.id,
     destinationName: port?.name,
