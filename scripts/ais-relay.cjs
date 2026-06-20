@@ -1666,7 +1666,7 @@ function isLikelyMilitaryCandidate(meta) {
 
 // Pure query/filter helpers for /ais/vessels live in a separate module so they
 // can be unit-tested without starting the relay server.
-const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-vessels-query.cjs');
+const { parseBbox, parseTypes, clampLimit, buildVesselList, shipTypeCategory } = require('./ais-vessels-query.cjs');
 
 // --- Ferry delay detection (Method B): ETA-drift over time -----------------
 // Resolves each Italian-island-bound vessel's destination + ETA, snapshots the
@@ -1679,11 +1679,25 @@ const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
+const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 
 // Pluggable "why is it delayed?" explainers — add sources here over time.
-// Port congestion reads our own live vessel map (no external call).
+// Port congestion + cross-vessel read our own live data (no external call).
 const portCongestionExplainer = makePortCongestionExplainer(() => Array.from(vessels.values()));
-const DELAY_EXPLAINERS = [portCongestionExplainer, weatherExplainer, newsExplainer];
+// Ferry list (passenger/hsc) with current delayed flags, for cross-vessel correlation.
+function getFerriesForCorrelation() {
+  const out = [];
+  for (const [mmsi, v] of vessels) {
+    const stat = vesselStatic.get(mmsi);
+    const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
+    const cat = shipTypeCategory(st);
+    if (cat !== 'passenger' && cat !== 'hsc') continue;
+    out.push({ mmsi, lat: v.lat, lon: v.lon, delayed: delayByMmsi.has(mmsi) });
+  }
+  return out;
+}
+const crossVesselExplainer = makeCrossVesselExplainer(getFerriesForCorrelation);
+const DELAY_EXPLAINERS = [portCongestionExplainer, crossVesselExplainer, weatherExplainer, newsExplainer];
 const reasonsByMmsi = new Map(); // mmsi -> { reasons, ts }
 const ENRICH_INTERVAL_MS = 2 * 60_000;
 const ENRICH_TTL_MS = 15 * 60_000;   // re-explain a flagged vessel at most this often

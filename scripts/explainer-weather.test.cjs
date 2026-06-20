@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { interpretMarineWeather } = require('./explainer-weather.cjs');
+const { interpretMarineWeather, interpretVisibility } = require('./explainer-weather.cjs');
 
 test('flags rough seas at high wave height (high confidence)', () => {
   const r = interpretMarineWeather({ waveHeightM: 2.8 });
@@ -35,4 +35,25 @@ test('flags strong wind even when waves are modest', () => {
 test('returns null when no usable data', () => {
   assert.equal(interpretMarineWeather({}), null);
   assert.equal(interpretMarineWeather(null), null);
+});
+
+test('flags fog at very low visibility (high confidence)', () => {
+  const r = interpretVisibility(600);
+  assert.ok(r);
+  assert.equal(r.source, 'weather');
+  assert.equal(r.kind, 'low_visibility');
+  assert.ok(r.confidence >= 0.7);
+  assert.match(r.summary, /fog|visibility/i);
+});
+
+test('flags poor visibility at moderate levels (lower confidence)', () => {
+  const r = interpretVisibility(1600);
+  assert.ok(r && r.kind === 'low_visibility');
+  assert.ok(r.confidence > 0 && r.confidence < 0.7);
+});
+
+test('returns null for clear visibility or missing data', () => {
+  assert.equal(interpretVisibility(8000), null);
+  assert.equal(interpretVisibility(undefined), null);
+  assert.equal(interpretVisibility(null), null);
 });

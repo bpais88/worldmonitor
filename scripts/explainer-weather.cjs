@@ -38,6 +38,26 @@ function interpretMarineWeather(wx) {
   };
 }
 
+// Ferry-relevant visibility thresholds (metres). Hydrofoils especially slow or
+// suspend in fog.
+const VIS_FOG_M = 1000;   // fog -> high confidence
+const VIS_POOR_M = 2000;  // poor visibility -> moderate
+
+/** Interpret visibility into a reason, or null when clear/unknown. Pure. */
+function interpretVisibility(visibilityM) {
+  if (!Number.isFinite(visibilityM)) return null;
+  if (visibilityM >= VIS_POOR_M) return null;
+  const fog = visibilityM < VIS_FOG_M;
+  const km = (visibilityM / 1000).toFixed(1);
+  return {
+    source: 'weather',
+    kind: 'low_visibility',
+    summary: fog ? `Fog / low visibility on the route (${km} km)` : `Poor visibility on the route (${km} km)`,
+    confidence: fog ? 0.8 : 0.5,
+    detail: `${Math.round(visibilityM)} m visibility`,
+  };
+}
+
 function getJson(url, timeoutMs) {
   return new Promise((resolve, reject) => {
     const req = https.get(url, { timeout: timeoutMs }, (res) => {
@@ -56,16 +76,18 @@ const MS_TO_KTS = 1.94384;
 /** Fetch marine wave height + wind at a position (Open-Meteo, keyless). */
 async function fetchMarineWeather(lat, lon, timeoutMs = 8000) {
   const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=wave_height`;
-  const windUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=wind_speed_10m`;
+  const windUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=wind_speed_10m,visibility`;
   const [marine, wind] = await Promise.allSettled([
     getJson(marineUrl, timeoutMs),
     getJson(windUrl, timeoutMs),
   ]);
   const waveHeightM = marine.status === 'fulfilled' ? marine.value?.current?.wave_height : undefined;
   const windMs = wind.status === 'fulfilled' ? wind.value?.current?.wind_speed_10m : undefined;
+  const visibilityM = wind.status === 'fulfilled' ? wind.value?.current?.visibility : undefined;
   return {
     waveHeightM: Number.isFinite(waveHeightM) ? waveHeightM : undefined,
     windKts: Number.isFinite(windMs) ? windMs * MS_TO_KTS : undefined,
+    visibilityM: Number.isFinite(visibilityM) ? visibilityM : undefined,
   };
 }
 
@@ -75,9 +97,8 @@ const weatherExplainer = {
   async explain(ctx) {
     if (!Number.isFinite(ctx?.lat) || !Number.isFinite(ctx?.lon)) return [];
     const wx = await fetchMarineWeather(ctx.lat, ctx.lon);
-    const reason = interpretMarineWeather(wx);
-    return reason ? [reason] : [];
+    return [interpretMarineWeather(wx), interpretVisibility(wx.visibilityM)].filter(Boolean);
   },
 };
 
-module.exports = { interpretMarineWeather, fetchMarineWeather, weatherExplainer };
+module.exports = { interpretMarineWeather, interpretVisibility, fetchMarineWeather, weatherExplainer };

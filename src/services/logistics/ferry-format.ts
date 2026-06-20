@@ -51,7 +51,7 @@ export function formatFerryDelay(ferry: TrackedFerry): string {
   return '';
 }
 
-const REASON_ICON: Record<string, string> = { weather: '🌊', news: '📰', port: '⚓' };
+const REASON_ICON: Record<string, string> = { weather: '🌊', news: '📰', port: '⚓', fleet: '🛳' };
 
 /** The likely-cause line for a delay, e.g. "🌊 Rough conditions…", or '' if none. */
 export function formatFerryWhy(ferry: TrackedFerry): string {
