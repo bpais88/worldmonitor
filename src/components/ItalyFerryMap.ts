@@ -33,13 +33,23 @@ const STATUS_MATCH = [
 
 const INTERACTIVE_LAYERS = ['ferry-dots', 'ferry-arrows'];
 
+// Status -> colour, matching the legend and the map markers.
+const STATUS_COLOR: Record<string, string> = {
+  under_way: '#2fbf85',
+  at_anchor: '#e0a032',
+  in_port: '#9aa0a6',
+};
+
 function popupHtml(p: FerryFeatureProps): string {
-  const dest = p.destinationName ? ` → ${escapeHtml(p.destinationName)}` : '';
+  // The dot colour already conveys status (same colours as the markers/legend),
+  // so the destination line shows a status dot instead of repeating the words.
+  const color = STATUS_COLOR[p.status] ?? '#9aa0a6';
+  const dest = p.destinationName ? `→ ${escapeHtml(p.destinationName)}` : 'destination unknown';
   const operator = p.operatorName ? `<div class="ferry-popup-op">${escapeHtml(p.operatorName)}</div>` : '';
   return `<div class="ferry-popup">
     <div class="ferry-popup-name">${escapeHtml(p.name)}</div>
     ${operator}
-    <div class="ferry-popup-row">${escapeHtml(p.statusLabel)}${dest}</div>
+    <div class="ferry-popup-row"><span class="ferry-popup-dot" style="background:${color}" title="${escapeHtml(p.statusLabel)}"></span>${dest}</div>
     <div class="ferry-popup-row">${escapeHtml(p.speedText)} · ETA ${escapeHtml(p.etaText)}</div>
   </div>`;
 }

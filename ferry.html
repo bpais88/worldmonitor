@@ -20,14 +20,18 @@
       .ferry-name { font-weight: 600; }
       .ferry-table tbody tr { cursor: pointer; }
       .ferry-table tbody tr:hover { background: rgba(127,127,127,0.10); }
-      /* Map popup */
-      .maplibregl-popup-content { background: #1f2224; color: #e8eaed; border-radius: 8px;
-        padding: 8px 12px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
-      .maplibregl-popup-tip { border-top-color: #1f2224 !important; border-bottom-color: #1f2224 !important; }
-      .maplibregl-popup-close-button { color: #aaa; font-size: 16px; padding: 0 5px; }
-      .ferry-popup-name { font-weight: 700; font-size: 13px; }
-      .ferry-popup-op { opacity: 0.7; margin-bottom: 3px; }
-      .ferry-popup-row { opacity: 0.9; }
+      /* Map popup (override MapLibre's default white style) */
+      .maplibregl-popup-content { background: #1f2224 !important; color: #f1f3f4 !important;
+        border-radius: 8px; padding: 9px 13px; font-size: 12px; line-height: 1.45;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.55); }
+      .maplibregl-popup-tip { border-top-color: #1f2224 !important; border-bottom-color: #1f2224 !important;
+        border-left-color: #1f2224 !important; border-right-color: #1f2224 !important; }
+      .maplibregl-popup-close-button { color: #cfd3d6 !important; font-size: 18px; padding: 0 6px; line-height: 1; }
+      .maplibregl-popup-close-button:hover { background: rgba(255,255,255,0.08) !important; }
+      .ferry-popup-name { font-weight: 700; font-size: 13px; color: #ffffff; }
+      .ferry-popup-op { color: #b9bdc1; margin-bottom: 2px; }
+      .ferry-popup-row { display: flex; align-items: center; gap: 6px; }
+      .ferry-popup-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
       .ferry-status { padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
       .ferry-status-underway { background: rgba(56,189,138,0.18); color: #2fbf85; }
       .ferry-status-anchor { background: rgba(245,179,66,0.18); color: #e0a032; }
