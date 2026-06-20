@@ -18,6 +18,16 @@
       .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,0.18); }
       .ferry-table th { opacity: 0.6; font-weight: 500; }
       .ferry-name { font-weight: 600; }
+      .ferry-table tbody tr { cursor: pointer; }
+      .ferry-table tbody tr:hover { background: rgba(127,127,127,0.10); }
+      /* Map popup */
+      .maplibregl-popup-content { background: #1f2224; color: #e8eaed; border-radius: 8px;
+        padding: 8px 12px; font-size: 12px; box-shadow: 0 4px 16px rgba(0,0,0,0.4); }
+      .maplibregl-popup-tip { border-top-color: #1f2224 !important; border-bottom-color: #1f2224 !important; }
+      .maplibregl-popup-close-button { color: #aaa; font-size: 16px; padding: 0 5px; }
+      .ferry-popup-name { font-weight: 700; font-size: 13px; }
+      .ferry-popup-op { opacity: 0.7; margin-bottom: 3px; }
+      .ferry-popup-row { opacity: 0.9; }
       .ferry-status { padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
       .ferry-status-underway { background: rgba(56,189,138,0.18); color: #2fbf85; }
       .ferry-status-anchor { background: rgba(245,179,66,0.18); color: #e0a032; }

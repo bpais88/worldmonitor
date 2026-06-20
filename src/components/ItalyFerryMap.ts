@@ -7,8 +7,9 @@
 // page CSP (see ferry.html).
 
 import maplibregl from 'maplibre-gl';
+import { escapeHtml } from '@/utils/sanitize';
 import { ITALY_BBOX } from '@/config/italy-ferries';
-import { ferriesToGeoJSON } from '@/services/logistics/ferry-geojson';
+import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
 
 // Same basemap as DeckGLMap (keyless Carto vector style).
@@ -30,10 +31,24 @@ const STATUS_MATCH = [
   '#9aa0a6',
 ] as const;
 
+const INTERACTIVE_LAYERS = ['ferry-dots', 'ferry-arrows'];
+
+function popupHtml(p: FerryFeatureProps): string {
+  const dest = p.destinationName ? ` → ${escapeHtml(p.destinationName)}` : '';
+  const operator = p.operatorName ? `<div class="ferry-popup-op">${escapeHtml(p.operatorName)}</div>` : '';
+  return `<div class="ferry-popup">
+    <div class="ferry-popup-name">${escapeHtml(p.name)}</div>
+    ${operator}
+    <div class="ferry-popup-row">${escapeHtml(p.statusLabel)}${dest}</div>
+    <div class="ferry-popup-row">${escapeHtml(p.speedText)} · ETA ${escapeHtml(p.etaText)}</div>
+  </div>`;
+}
+
 export class ItalyFerryMap {
   private map: maplibregl.Map;
   private ready = false;
   private pending: TrackedFerry[] | null = null;
+  private popup: maplibregl.Popup;
 
   constructor(container: HTMLElement) {
     this.map = new maplibregl.Map({
@@ -47,6 +62,7 @@ export class ItalyFerryMap {
       dragRotate: false,
       pitchWithRotate: false,
     });
+    this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 12 });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
   }
@@ -108,11 +124,38 @@ export class ItalyFerryMap {
       },
     });
 
+    this.wireInteractions();
+
     this.ready = true;
     if (this.pending) {
       this.setFerries(this.pending);
       this.pending = null;
     }
+  }
+
+  /** Click a vessel for a popup; pointer cursor on hover. */
+  private wireInteractions(): void {
+    for (const id of INTERACTIVE_LAYERS) {
+      this.map.on('click', id, (e) => {
+        const feature = e.features?.[0];
+        if (!feature) return;
+        const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
+        this.popup
+          .setLngLat(coords)
+          .setHTML(popupHtml(feature.properties as unknown as FerryFeatureProps))
+          .addTo(this.map);
+      });
+      this.map.on('mouseenter', id, () => { this.map.getCanvas().style.cursor = 'pointer'; });
+      this.map.on('mouseleave', id, () => { this.map.getCanvas().style.cursor = ''; });
+    }
+  }
+
+  /** Fly to a vessel and open its popup — used when a table row is clicked. */
+  public focusFerry(ferry: TrackedFerry): void {
+    if (!this.ready) return;
+    const center: [number, number] = [ferry.lon, ferry.lat];
+    this.map.flyTo({ center, zoom: Math.max(this.map.getZoom(), 9), speed: 1.2 });
+    this.popup.setLngLat(center).setHTML(popupHtml(ferryProps(ferry))).addTo(this.map);
   }
 
   /** Build an upward-pointing arrow as an SDF icon so it can be tinted per status. */

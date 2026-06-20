@@ -53,11 +53,18 @@ describe('ferriesToGeoJSON', () => {
     assert.equal(fc.features[0].properties.courseDeg, 0);
   });
 
-  it('passes through name, speed and destination; nulls missing values', () => {
+  it('passes through display text; empties missing values', () => {
     const fc = ferriesToGeoJSON([ferry({ name: 'TIRRENIA', speedKnots: undefined, destinationName: undefined })]);
     const p = fc.features[0].properties;
     assert.equal(p.name, 'TIRRENIA');
-    assert.equal(p.speedKnots, null);
-    assert.equal(p.destinationName, null);
+    assert.equal(p.speedText, '—');
+    assert.equal(p.destinationName, '');
+  });
+
+  it('formats speed and status label for the popup', () => {
+    const fc = ferriesToGeoJSON([ferry({ status: 'at_anchor', speedKnots: 12 })]);
+    const p = fc.features[0].properties;
+    assert.equal(p.speedText, '12 kn');
+    assert.equal(p.statusLabel, 'At anchor');
   });
 });

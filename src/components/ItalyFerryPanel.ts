@@ -6,30 +6,15 @@ import {
   type TrackedFerry,
   type FerryStatus,
 } from '@/services/logistics/ferry-tracker';
+import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed } from '@/services/logistics/ferry-format';
 
 const REFRESH_INTERVAL_MS = 60_000;
-
-const STATUS_LABEL: Record<FerryStatus, string> = {
-  under_way: 'Under way',
-  at_anchor: 'At anchor',
-  in_port: 'In port',
-};
 
 const STATUS_CLASS: Record<FerryStatus, string> = {
   under_way: 'ferry-status-underway',
   at_anchor: 'ferry-status-anchor',
   in_port: 'ferry-status-port',
 };
-
-function formatEta(ferry: TrackedFerry): string {
-  if (ferry.status === 'in_port') return 'In port';
-  if (ferry.hoursRemaining === null) return '—';
-  const totalMin = Math.round(ferry.hoursRemaining * 60);
-  const h = Math.floor(totalMin / 60);
-  const m = totalMin % 60;
-  const eta = h > 0 ? `${h}h ${m}m` : `${m}m`;
-  return ferry.etaSource === 'course_inference' ? `~${eta}` : eta;
-}
 
 /**
  * Live board of Italian island ferries derived from AIS. Self-contained: call
@@ -40,6 +25,7 @@ export class ItalyFerryPanel extends Panel {
   private timer: ReturnType<typeof setInterval> | null = null;
   private map: ItalyFerryMap | null = null;
   private mapMounted = false;
+  private readonly ferryByMmsi = new Map<string, TrackedFerry>();
 
   constructor() {
     super({ id: 'italy-ferries', title: 'Italy Ferries', showCount: true });
@@ -78,6 +64,10 @@ export class ItalyFerryPanel extends Panel {
 
     this.ensureScaffold();
 
+    // Index by MMSI so a table-row click can focus the matching vessel on the map.
+    this.ferryByMmsi.clear();
+    for (const f of this.ferries) this.ferryByMmsi.set(f.mmsi, f);
+
     // Group by destination island group (fallback bucket for unresolved).
     const groups = new Map<string, TrackedFerry[]>();
     for (const f of this.ferries) {
@@ -94,14 +84,13 @@ export class ItalyFerryPanel extends Panel {
           : f.routeStatus === 'unknown' && f.destinationName ? ' <span class="ferry-route-warn" title="Off-schedule / unverified route">!</span>'
           : '';
         const dest = f.destinationName ? `${escapeHtml(f.destinationName)}${destBadge}` : 'unknown';
-        const speed = typeof f.speedKnots === 'number' ? `${f.speedKnots.toFixed(0)} kn` : '—';
-        return `<tr>
+        return `<tr data-mmsi="${escapeHtml(f.mmsi)}" title="Show on map">
           <td class="ferry-name">${escapeHtml(f.name)}</td>
           <td class="ferry-operator">${operator}</td>
-          <td><span class="ferry-status ${STATUS_CLASS[f.status]}">${STATUS_LABEL[f.status]}</span></td>
+          <td><span class="ferry-status ${STATUS_CLASS[f.status]}">${FERRY_STATUS_LABEL[f.status]}</span></td>
           <td class="ferry-dest">${dest}</td>
-          <td class="ferry-speed">${speed}</td>
-          <td class="ferry-eta">${escapeHtml(formatEta(f))}</td>
+          <td class="ferry-speed">${escapeHtml(formatFerrySpeed(f))}</td>
+          <td class="ferry-eta">${escapeHtml(formatFerryEta(f))}</td>
         </tr>`;
       }).join('');
 
@@ -142,6 +131,18 @@ export class ItalyFerryPanel extends Panel {
     `;
     const host = this.content.querySelector<HTMLElement>('.ferry-map-host');
     if (host) this.map = new ItalyFerryMap(host);
+
+    // Click a table row to fly to that vessel on the map (delegated, so it keeps
+    // working as the board's innerHTML is replaced on each refresh).
+    const board = this.content.querySelector<HTMLElement>('.ferry-board');
+    board?.addEventListener('click', (e) => {
+      const row = (e.target as HTMLElement).closest<HTMLElement>('tr[data-mmsi]');
+      const mmsi = row?.dataset.mmsi;
+      if (!mmsi) return;
+      const ferry = this.ferryByMmsi.get(mmsi);
+      if (ferry) this.map?.focusFerry(ferry);
+    });
+
     this.mapMounted = true;
   }
 
