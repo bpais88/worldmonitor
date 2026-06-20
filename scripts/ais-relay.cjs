@@ -1678,9 +1678,12 @@ const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
+const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 
 // Pluggable "why is it delayed?" explainers — add sources here over time.
-const DELAY_EXPLAINERS = [weatherExplainer, newsExplainer];
+// Port congestion reads our own live vessel map (no external call).
+const portCongestionExplainer = makePortCongestionExplainer(() => Array.from(vessels.values()));
+const DELAY_EXPLAINERS = [portCongestionExplainer, weatherExplainer, newsExplainer];
 const reasonsByMmsi = new Map(); // mmsi -> { reasons, ts }
 const ENRICH_INTERVAL_MS = 2 * 60_000;
 const ENRICH_TTL_MS = 15 * 60_000;   // re-explain a flagged vessel at most this often
@@ -1707,6 +1710,8 @@ async function enrichFerryDelays(now = Date.now()) {
       lon: v.lon,
       destPortId: port ? port.portId : undefined,
       destName: port ? port.name : undefined,
+      destLat: port ? port.lat : undefined,
+      destLon: port ? port.lon : undefined,
       operatorName: resolveOperatorName(v.name || (stat && stat.name)),
       etaGrowthMin: drift.etaGrowthMin,
       stalled: drift.stalled,
