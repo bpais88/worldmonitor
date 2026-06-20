@@ -8,11 +8,25 @@
 import type { VesselPosition } from '../types';
 import type { ShipCategory } from '../classify';
 
+/** Delay status from the relay's ETA-drift detection (Method B). */
+export interface VesselDelay {
+  /** Predicted arrival is sliding later vs the recent trend. */
+  slipping?: boolean;
+  /** Stopped mid-crossing (not in port). */
+  stalled?: boolean;
+  /** How many minutes the predicted arrival moved later over the window. */
+  etaGrowthMin?: number;
+  windowMin?: number;
+  samples?: number;
+}
+
 /** A live vessel position enriched with its coarse category. */
 export interface LiveVessel extends VesselPosition {
   category: ShipCategory;
   /** AIS navigational status code (0=under way, 1=at anchor, 5=moored, ...). */
   navStatus?: number;
+  /** Delay status computed by the relay, if available. */
+  delay?: VesselDelay;
 }
 
 /** Viewport + filter for a vessel query. */

@@ -67,4 +67,13 @@ describe('ferriesToGeoJSON', () => {
     assert.equal(p.speedText, '12 kn');
     assert.equal(p.statusLabel, 'At anchor');
   });
+
+  it('surfaces delay status: slipping, stalled, or empty', () => {
+    const slip = ferriesToGeoJSON([ferry({ delay: { slipping: true, etaGrowthMin: 25 } })]);
+    assert.equal(slip.features[0].properties.delayText, 'Delayed +25 min');
+    const stall = ferriesToGeoJSON([ferry({ delay: { stalled: true } })]);
+    assert.equal(stall.features[0].properties.delayText, 'Stalled');
+    const none = ferriesToGeoJSON([ferry()]);
+    assert.equal(none.features[0].properties.delayText, '');
+  });
 });

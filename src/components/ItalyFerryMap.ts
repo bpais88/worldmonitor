@@ -57,11 +57,16 @@ function popupHtml(p: FerryFeatureProps): string {
   ].filter(Boolean).join(' · ');
   if (idEta) detail.push(`<div class="ferry-popup-row ferry-popup-dim">${idEta}</div>`);
 
+  const delay = p.delayText
+    ? `<div class="ferry-popup-row ferry-popup-delay">⚠ ${escapeHtml(p.delayText)}</div>`
+    : '';
+
   return `<div class="ferry-popup">
     <div class="ferry-popup-name">${escapeHtml(p.name)}</div>
     ${operator}
     <div class="ferry-popup-row"><span class="ferry-popup-dot" style="background:${color}" title="${escapeHtml(p.statusLabel)}"></span>${dest}</div>
     <div class="ferry-popup-row">${escapeHtml(p.speedText)} · ETA ${escapeHtml(p.etaText)}</div>
+    ${delay}
     ${detail.join('')}
   </div>`;
 }

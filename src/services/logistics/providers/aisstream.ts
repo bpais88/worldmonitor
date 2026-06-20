@@ -7,6 +7,15 @@ import { shipTypeCategory, type ShipCategory } from '../classify';
 const VESSELS_PROXY_URL = '/api/ais-vessels';
 const LOCAL_RELAY_VESSELS_URL = 'http://localhost:3004/ais/vessels';
 
+/** Delay status computed by the relay (Method B — ETA drift). */
+export interface RawRelayDelay {
+  slipping?: boolean;
+  stalled?: boolean;
+  etaGrowthMin?: number;
+  windowMin?: number;
+  samples?: number;
+}
+
 /** Raw vessel shape as returned by the relay /ais/vessels endpoint. */
 export interface RawRelayVessel {
   mmsi: string;
@@ -26,6 +35,7 @@ export interface RawRelayVessel {
   length?: number;
   beam?: number;
   etaAis?: string;
+  delay?: RawRelayDelay;
   timestamp?: number;
 }
 
@@ -60,6 +70,13 @@ export function toLiveVessel(raw: RawRelayVessel): LiveVessel | null {
     etaAis: raw.etaAis || undefined,
     category: normalizeCategory(raw.category, shipType),
     navStatus: Number.isFinite(raw.navStatus) ? raw.navStatus : undefined,
+    delay: raw.delay && (raw.delay.slipping || raw.delay.stalled) ? {
+      slipping: !!raw.delay.slipping,
+      stalled: !!raw.delay.stalled,
+      etaGrowthMin: Number.isFinite(raw.delay.etaGrowthMin) ? raw.delay.etaGrowthMin : undefined,
+      windowMin: Number.isFinite(raw.delay.windowMin) ? raw.delay.windowMin : undefined,
+      samples: Number.isFinite(raw.delay.samples) ? raw.delay.samples : undefined,
+    } : undefined,
     timestamp: Number.isFinite(raw.timestamp) ? (raw.timestamp as number) : Date.now(),
   };
 }

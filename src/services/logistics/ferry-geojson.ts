@@ -10,6 +10,7 @@ import {
   formatFerrySpeed,
   formatFerrySize,
   formatFerryDraught,
+  formatFerryDelay,
 } from './ferry-format';
 
 export interface FerryFeatureProps {
@@ -30,6 +31,8 @@ export interface FerryFeatureProps {
   draughtText: string;
   callSign: string;
   etaAisText: string;
+  /** '', 'Delayed +N min', or 'Stalled'. */
+  delayText: string;
 }
 
 export interface FerryFeature {
@@ -60,6 +63,7 @@ export function ferryProps(f: TrackedFerry): FerryFeatureProps {
     draughtText: formatFerryDraught(f),
     callSign: f.callSign ?? '',
     etaAisText: f.etaAis ?? '',
+    delayText: formatFerryDelay(f),
   };
 }
 

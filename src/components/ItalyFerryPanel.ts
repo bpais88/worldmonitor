@@ -6,7 +6,7 @@ import {
   type TrackedFerry,
   type FerryStatus,
 } from '@/services/logistics/ferry-tracker';
-import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed } from '@/services/logistics/ferry-format';
+import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -87,13 +87,15 @@ export class ItalyFerryPanel extends Panel {
           : f.routeStatus === 'unknown' && f.destinationName ? ' <span class="ferry-route-warn" title="Off-schedule / unverified route">!</span>'
           : '';
         const dest = f.destinationName ? `${escapeHtml(f.destinationName)}${destBadge}` : 'unknown';
+        const delayText = formatFerryDelay(f);
+        const delayBadge = delayText ? ` <span class="ferry-delay-badge" title="Predicted arrival slipping vs recent trend">${escapeHtml(delayText)}</span>` : '';
         return `<tr data-mmsi="${escapeHtml(f.mmsi)}" title="Show on map">
           <td class="ferry-name">${escapeHtml(f.name)}</td>
           <td class="ferry-operator">${operator}</td>
           <td><span class="ferry-status ${STATUS_CLASS[f.status]}">${FERRY_STATUS_LABEL[f.status]}</span></td>
           <td class="ferry-dest">${dest}</td>
           <td class="ferry-speed">${escapeHtml(formatFerrySpeed(f))}</td>
-          <td class="ferry-eta">${escapeHtml(formatFerryEta(f))}</td>
+          <td class="ferry-eta">${escapeHtml(formatFerryEta(f))}${delayBadge}</td>
         </tr>`;
       }).join('');
       return groupRow + rows;
