@@ -9,7 +9,8 @@
       "aisNames": [
         "GENOA",
         "GENOVA"
-      ]
+      ],
+      "region": "Liguria"
     },
     {
       "id": "civitavecchia",
@@ -19,7 +20,8 @@
       "side": "mainland",
       "aisNames": [
         "CIVITAVECCHIA"
-      ]
+      ],
+      "region": "Lazio"
     },
     {
       "id": "livorno",
@@ -29,7 +31,8 @@
       "side": "mainland",
       "aisNames": [
         "LIVORNO"
-      ]
+      ],
+      "region": "Toscana"
     },
     {
       "id": "piombino",
@@ -39,7 +42,8 @@
       "side": "mainland",
       "aisNames": [
         "PIOMBINO"
-      ]
+      ],
+      "region": "Toscana"
     },
     {
       "id": "naples",
@@ -50,7 +54,8 @@
       "aisNames": [
         "NAPLES",
         "NAPOLI"
-      ]
+      ],
+      "region": "Campania"
     },
     {
       "id": "salerno",
@@ -60,7 +65,8 @@
       "side": "mainland",
       "aisNames": [
         "SALERNO"
-      ]
+      ],
+      "region": "Campania"
     },
     {
       "id": "villa_san_giovanni",
@@ -72,7 +78,8 @@
         "VILLA S GIOVANNI",
         "VILLA SAN GIOVANNI",
         "VILLA S.G."
-      ]
+      ],
+      "region": "Calabria"
     },
     {
       "id": "reggio_calabria",
@@ -83,7 +90,8 @@
       "aisNames": [
         "REGGIO CALABRIA",
         "REGGIO"
-      ]
+      ],
+      "region": "Calabria"
     },
     {
       "id": "milazzo",
@@ -94,7 +102,8 @@
       "group": "Sicily",
       "aisNames": [
         "MILAZZO"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "trapani",
@@ -105,7 +114,8 @@
       "group": "Sicily",
       "aisNames": [
         "TRAPANI"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "porto_empedocle",
@@ -117,7 +127,8 @@
       "aisNames": [
         "PORTO EMPEDOCLE",
         "EMPEDOCLE"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "termoli",
@@ -127,7 +138,8 @@
       "side": "mainland",
       "aisNames": [
         "TERMOLI"
-      ]
+      ],
+      "region": "Molise"
     },
     {
       "id": "olbia",
@@ -138,7 +150,8 @@
       "group": "Sardinia",
       "aisNames": [
         "OLBIA"
-      ]
+      ],
+      "region": "Sardegna"
     },
     {
       "id": "golfo_aranci",
@@ -150,7 +163,8 @@
       "aisNames": [
         "GOLFO ARANCI",
         "ARANCI"
-      ]
+      ],
+      "region": "Sardegna"
     },
     {
       "id": "porto_torres",
@@ -163,7 +177,8 @@
         "PORTO TORRES",
         "P TORRES",
         "TORRES"
-      ]
+      ],
+      "region": "Sardegna"
     },
     {
       "id": "cagliari",
@@ -174,7 +189,8 @@
       "group": "Sardinia",
       "aisNames": [
         "CAGLIARI"
-      ]
+      ],
+      "region": "Sardegna"
     },
     {
       "id": "arbatax",
@@ -185,7 +201,8 @@
       "group": "Sardinia",
       "aisNames": [
         "ARBATAX"
-      ]
+      ],
+      "region": "Sardegna"
     },
     {
       "id": "palermo",
@@ -196,7 +213,8 @@
       "group": "Sicily",
       "aisNames": [
         "PALERMO"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "catania",
@@ -207,7 +225,8 @@
       "group": "Sicily",
       "aisNames": [
         "CATANIA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "messina",
@@ -218,7 +237,8 @@
       "group": "Sicily",
       "aisNames": [
         "MESSINA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "portoferraio",
@@ -230,7 +250,8 @@
       "aisNames": [
         "PORTOFERRAIO",
         "P FERRAIO"
-      ]
+      ],
+      "region": "Toscana"
     },
     {
       "id": "rio_marina",
@@ -241,7 +262,8 @@
       "group": "Tuscan Archipelago",
       "aisNames": [
         "RIO MARINA"
-      ]
+      ],
+      "region": "Toscana"
     },
     {
       "id": "cavo",
@@ -252,7 +274,8 @@
       "group": "Tuscan Archipelago",
       "aisNames": [
         "CAVO"
-      ]
+      ],
+      "region": "Toscana"
     },
     {
       "id": "lipari",
@@ -263,7 +286,8 @@
       "group": "Aeolian",
       "aisNames": [
         "LIPARI"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "vulcano",
@@ -274,7 +298,8 @@
       "group": "Aeolian",
       "aisNames": [
         "VULCANO"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "salina",
@@ -286,7 +311,8 @@
       "aisNames": [
         "SALINA",
         "SANTA MARINA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "stromboli",
@@ -297,7 +323,8 @@
       "group": "Aeolian",
       "aisNames": [
         "STROMBOLI"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "panarea",
@@ -308,7 +335,8 @@
       "group": "Aeolian",
       "aisNames": [
         "PANAREA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "capri",
@@ -319,7 +347,8 @@
       "group": "Bay of Naples",
       "aisNames": [
         "CAPRI"
-      ]
+      ],
+      "region": "Campania"
     },
     {
       "id": "ischia",
@@ -330,7 +359,8 @@
       "group": "Bay of Naples",
       "aisNames": [
         "ISCHIA"
-      ]
+      ],
+      "region": "Campania"
     },
     {
       "id": "procida",
@@ -341,7 +371,8 @@
       "group": "Bay of Naples",
       "aisNames": [
         "PROCIDA"
-      ]
+      ],
+      "region": "Campania"
     },
     {
       "id": "ponza",
@@ -352,7 +383,8 @@
       "group": "Pontine",
       "aisNames": [
         "PONZA"
-      ]
+      ],
+      "region": "Lazio"
     },
     {
       "id": "ventotene",
@@ -363,7 +395,8 @@
       "group": "Pontine",
       "aisNames": [
         "VENTOTENE"
-      ]
+      ],
+      "region": "Lazio"
     },
     {
       "id": "favignana",
@@ -374,7 +407,8 @@
       "group": "Egadi",
       "aisNames": [
         "FAVIGNANA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "levanzo",
@@ -385,7 +419,8 @@
       "group": "Egadi",
       "aisNames": [
         "LEVANZO"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "marettimo",
@@ -396,7 +431,8 @@
       "group": "Egadi",
       "aisNames": [
         "MARETTIMO"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "lampedusa",
@@ -407,7 +443,8 @@
       "group": "Pelagie",
       "aisNames": [
         "LAMPEDUSA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "linosa",
@@ -418,7 +455,8 @@
       "group": "Pelagie",
       "aisNames": [
         "LINOSA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "pantelleria",
@@ -429,7 +467,8 @@
       "group": "Sicily Channel",
       "aisNames": [
         "PANTELLERIA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "ustica",
@@ -440,7 +479,8 @@
       "group": "Tyrrhenian",
       "aisNames": [
         "USTICA"
-      ]
+      ],
+      "region": "Sicilia"
     },
     {
       "id": "tremiti",
@@ -452,7 +492,8 @@
       "aisNames": [
         "TREMITI",
         "SAN DOMINO"
-      ]
+      ],
+      "region": "Puglia"
     }
   ],
   "locodes": {

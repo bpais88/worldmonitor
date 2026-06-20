@@ -23,6 +23,8 @@ export interface FerryPort {
   side: 'mainland' | 'island';
   /** Island group / region (for grouping island ports). */
   group?: string;
+  /** Italian administrative region (matches Meteoalarm cap:areaDesc, e.g. "Campania"). */
+  region?: string;
   /** Common AIS destination-field spellings (UPPERCASE) for text matching. */
   aisNames: string[];
 }

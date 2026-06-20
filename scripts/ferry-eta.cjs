@@ -13,7 +13,7 @@ const ROUNDTRIP_TOKENS = new Set(['VV', 'V', 'E', 'EVV', 'RT', 'AR', 'ANDATA', '
 
 function toResult(port) {
   if (!port) return null;
-  return { portId: port.id, name: port.name, lat: port.lat, lon: port.lon };
+  return { portId: port.id, name: port.name, lat: port.lat, lon: port.lon, region: port.region };
 }
 
 /** Resolve an AIS destination string to a known port, or null. */
