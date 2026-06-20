@@ -734,6 +734,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         settings: resolve(__dirname, 'settings.html'),
         liveChannels: resolve(__dirname, 'live-channels.html'),
+        ferry: resolve(__dirname, 'ferry.html'),
       },
       output: {
         manualChunks(id) {

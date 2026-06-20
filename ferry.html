@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; connect-src 'self' http://localhost:3004 http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:*; font-src 'self' data: https:; img-src 'self' data:;" />
+    <title>Italy Ferry Tracker — World Monitor</title>
+    <script>(function(){try{var t=localStorage.getItem('worldmonitor-theme');if(t==='light')document.documentElement.dataset.theme='light';}catch(e){}})()</script>
+    <style>
+      .ferry-demo-wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+      .ferry-demo-head { margin-bottom: 16px; }
+      .ferry-demo-head h1 { font-size: 20px; margin: 0 0 4px; }
+      .ferry-demo-head p { margin: 0; opacity: 0.7; font-size: 13px; }
+      .ferry-group { margin-bottom: 18px; }
+      .ferry-group-title { font-weight: 600; margin: 10px 0 6px; font-size: 14px; }
+      .ferry-group-count { opacity: 0.6; font-weight: 400; }
+      table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+      .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,0.18); }
+      .ferry-table th { opacity: 0.6; font-weight: 500; }
+      .ferry-name { font-weight: 600; }
+      .ferry-status { padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+      .ferry-status-underway { background: rgba(56,189,138,0.18); color: #2fbf85; }
+      .ferry-status-anchor { background: rgba(245,179,66,0.18); color: #e0a032; }
+      .ferry-status-port { background: rgba(127,127,127,0.18); }
+      .ferry-route-ok { color: #2fbf85; }
+      .ferry-route-warn { color: #e0a032; font-weight: 700; }
+      .economic-empty, .error-message { padding: 24px; text-align: center; opacity: 0.7; }
+      .economic-footer { margin-top: 12px; font-size: 11px; opacity: 0.5; }
+    </style>
+  </head>
+  <body style="margin:0;background:var(--bg,#1a1c1e);color:var(--text,#e8eaed);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+    <div class="ferry-demo-wrap">
+      <div class="ferry-demo-head">
+        <h1>🇮🇹 Italy Ferry Tracker</h1>
+        <p>Live commercial ferries (mainland ⇄ islands) from AIS. Requires the relay running on <code>localhost:3004</code>.</p>
+      </div>
+      <div id="app"></div>
+    </div>
+    <script type="module" src="/src/ferry-main.ts"></script>
+  </body>
+</html>

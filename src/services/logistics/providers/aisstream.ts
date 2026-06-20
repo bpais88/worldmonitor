@@ -5,6 +5,7 @@ import type { VesselDataProvider, VesselQuery, LiveVessel } from './types';
 import { shipTypeCategory, type ShipCategory } from '../classify';
 
 const VESSELS_PROXY_URL = '/api/ais-vessels';
+const LOCAL_RELAY_VESSELS_URL = 'http://localhost:3004/ais/vessels';
 
 /** Raw vessel shape as returned by the relay /ais/vessels endpoint. */
 export interface RawRelayVessel {
@@ -69,14 +70,29 @@ export class AisStreamProvider implements VesselDataProvider {
   constructor(private readonly baseUrl: string = VESSELS_PROXY_URL) {}
 
   async getVesselsInBounds(query: VesselQuery): Promise<LiveVessel[]> {
-    const url = `${this.baseUrl}${buildVesselsQueryString(query)}`;
-    const res = await fetch(url, { headers: { Accept: 'application/json' } });
+    const qs = buildVesselsQueryString(query);
+    try {
+      return await this.fetchVessels(this.baseUrl, qs);
+    } catch (err) {
+      // Local dev fallback: hit the relay directly when the /api proxy isn't
+      // running (e.g. plain `vite dev` without Vercel functions).
+      if (
+        typeof window !== 'undefined' &&
+        window.location.hostname === 'localhost' &&
+        this.baseUrl !== LOCAL_RELAY_VESSELS_URL
+      ) {
+        return this.fetchVessels(LOCAL_RELAY_VESSELS_URL, qs);
+      }
+      throw err;
+    }
+  }
+
+  private async fetchVessels(base: string, qs: string): Promise<LiveVessel[]> {
+    const res = await fetch(`${base}${qs}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error(`ais-vessels request failed: ${res.status}`);
-
     const data = await res.json();
-    const rows: unknown = data?.vessels;
+    const rows: unknown = (data as { vessels?: unknown })?.vessels;
     if (!Array.isArray(rows)) return [];
-
     const out: LiveVessel[] = [];
     for (const row of rows) {
       const v = toLiveVessel(row as RawRelayVessel);
