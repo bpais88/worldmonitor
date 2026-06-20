@@ -40,6 +40,8 @@ describe('toTrackedFerry', () => {
     assert.equal(f.destinationGroup, 'Sardinia');
     assert.equal(f.status, 'under_way');
     assert.ok(f.hoursRemaining && f.hoursRemaining > 0);
+    // Olbia is a known ferry destination -> plausible (no origin in a snapshot).
+    assert.equal(f.routeStatus, 'plausible');
   });
 
   it('marks a moored vessel as in port with no ETA', () => {

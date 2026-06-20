@@ -13,6 +13,7 @@ import {
   ITALY_FERRY_OPERATORS,
 } from '../../config/italy-ferries';
 import { isItalianFerry, matchItalianFerryOperator, estimateFerryEta } from './ferry';
+import { validateSailing, type RouteStatus } from './route-validation';
 
 export type FerryStatus = 'under_way' | 'at_anchor' | 'in_port';
 
@@ -33,6 +34,8 @@ export interface TrackedFerry {
   etaTimestamp: number | null;
   hoursRemaining: number | null;
   confidence: number;
+  /** Whether the resolved destination matches a known scheduled route. */
+  routeStatus: RouteStatus;
   timestamp: number;
 }
 
@@ -58,6 +61,9 @@ export function toTrackedFerry(v: LiveVessel, now: number = Date.now()): Tracked
   const operatorId = matchItalianFerryOperator(v.name);
   const eta = estimateFerryEta(v, now);
   const port = eta ? PORT_BY_ID.get(eta.destinationPortId) : undefined;
+  // Snapshot has no origin yet (that needs port-call history), so validate on
+  // destination + operator. Upgrades to 'confirmed' once an origin is known.
+  const routeStatus = validateSailing({ destinationPortId: port?.id, operatorId }).status;
 
   return {
     mmsi: v.mmsi,
@@ -76,6 +82,7 @@ export function toTrackedFerry(v: LiveVessel, now: number = Date.now()): Tracked
     etaTimestamp: eta?.etaTimestamp ?? null,
     hoursRemaining: eta?.hoursRemaining ?? null,
     confidence: eta?.confidence ?? 0,
+    routeStatus,
     timestamp: v.timestamp,
   };
 }

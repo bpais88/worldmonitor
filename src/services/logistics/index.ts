@@ -6,6 +6,7 @@ export * from './geo';
 export * from './eta';
 export * from './ferry';
 export * from './ferry-tracker';
+export * from './route-validation';
 export * from './port-call';
 export * from './shipment-store';
 export * from './providers/types';

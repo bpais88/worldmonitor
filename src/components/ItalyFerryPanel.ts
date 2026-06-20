@@ -82,7 +82,10 @@ export class ItalyFerryPanel extends Panel {
     const sections = [...groups.entries()].map(([group, ferries]) => {
       const rows = ferries.map((f) => {
         const operator = f.operatorName ? escapeHtml(f.operatorName) : '—';
-        const dest = f.destinationName ? escapeHtml(f.destinationName) : 'unknown';
+        const destBadge = f.routeStatus === 'confirmed' ? ' <span class="ferry-route-ok" title="Scheduled route">✓</span>'
+          : f.routeStatus === 'unknown' && f.destinationName ? ' <span class="ferry-route-warn" title="Off-schedule / unverified route">!</span>'
+          : '';
+        const dest = f.destinationName ? `${escapeHtml(f.destinationName)}${destBadge}` : 'unknown';
         const speed = typeof f.speedKnots === 'number' ? `${f.speedKnots.toFixed(0)} kn` : '—';
         return `<tr>
           <td class="ferry-name">${escapeHtml(f.name)}</td>
