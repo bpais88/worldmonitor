@@ -1680,6 +1680,7 @@ const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
+const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 
 // Pluggable "why is it delayed?" explainers — add sources here over time.
 // Port congestion + cross-vessel read our own live data (no external call).
@@ -1697,7 +1698,20 @@ function getFerriesForCorrelation() {
   return out;
 }
 const crossVesselExplainer = makeCrossVesselExplainer(getFerriesForCorrelation);
-const DELAY_EXPLAINERS = [portCongestionExplainer, crossVesselExplainer, weatherExplainer, newsExplainer];
+// Meteoalarm: official EU warnings. Feed is fetched on a timer (one call for all
+// of Italy) and cached here; the explainer just reads the cache.
+let meteoalarmWarnings = [];
+const METEOALARM_REFRESH_MS = 30 * 60_000;
+async function refreshMeteoalarm() {
+  try { meteoalarmWarnings = await fetchMeteoalarmItaly(); }
+  catch (e) { console.warn('[Relay] meteoalarm fetch failed:', e.message); }
+}
+function startMeteoalarmLoop() {
+  void refreshMeteoalarm();
+  setInterval(() => { void refreshMeteoalarm(); }, METEOALARM_REFRESH_MS).unref?.();
+}
+const meteoalarmExplainer = makeMeteoalarmExplainer(() => meteoalarmWarnings);
+const DELAY_EXPLAINERS = [portCongestionExplainer, crossVesselExplainer, meteoalarmExplainer, weatherExplainer, newsExplainer];
 const reasonsByMmsi = new Map(); // mmsi -> { reasons, ts }
 const ENRICH_INTERVAL_MS = 2 * 60_000;
 const ENRICH_TTL_MS = 15 * 60_000;   // re-explain a flagged vessel at most this often
@@ -1726,6 +1740,7 @@ async function enrichFerryDelays(now = Date.now()) {
       destName: port ? port.name : undefined,
       destLat: port ? port.lat : undefined,
       destLon: port ? port.lon : undefined,
+      destRegion: port ? port.region : undefined,
       operatorName: resolveOperatorName(v.name || (stat && stat.name)),
       etaGrowthMin: drift.etaGrowthMin,
       stalled: drift.stalled,
@@ -4453,6 +4468,7 @@ server.listen(PORT, () => {
   startAviationSeedLoop();
   startFerryDelayLoop();
   startFerryEnrichLoop();
+  startMeteoalarmLoop();
 });
 
 wss.on('connection', (ws, req) => {
