@@ -11,12 +11,21 @@
       .ferry-demo-head { margin-bottom: 16px; }
       .ferry-demo-head h1 { font-size: 20px; margin: 0 0 4px; }
       .ferry-demo-head p { margin: 0; opacity: 0.7; font-size: 13px; }
-      .ferry-group { margin-bottom: 18px; }
-      .ferry-group-title { font-weight: 600; margin: 10px 0 6px; font-size: 14px; }
       .ferry-group-count { opacity: 0.6; font-weight: 400; }
-      table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; }
-      .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px; border-bottom: 1px solid rgba(127,127,127,0.18); }
+      table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+      .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px;
+        border-bottom: 1px solid rgba(127,127,127,0.18);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
       .ferry-table th { opacity: 0.6; font-weight: 500; }
+      /* Stable column widths so every group lines up */
+      .ferry-table th:nth-child(1), .ferry-table td:nth-child(1) { width: 26%; }
+      .ferry-table th:nth-child(2), .ferry-table td:nth-child(2) { width: 16%; }
+      .ferry-table th:nth-child(3), .ferry-table td:nth-child(3) { width: 14%; }
+      .ferry-table th:nth-child(4), .ferry-table td:nth-child(4) { width: 20%; }
+      .ferry-table th:nth-child(5), .ferry-table td:nth-child(5) { width: 11%; }
+      .ferry-table th:nth-child(6), .ferry-table td:nth-child(6) { width: 13%; }
+      .ferry-group-row td { font-weight: 600; font-size: 13px; padding-top: 18px;
+        border-bottom: 1px solid rgba(127,127,127,0.28); width: auto !important; }
       .ferry-name { font-weight: 600; }
       .ferry-table tbody tr { cursor: pointer; }
       .ferry-table tbody tr:hover { background: rgba(127,127,127,0.10); }

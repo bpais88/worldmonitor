@@ -77,7 +77,10 @@ export class ItalyFerryPanel extends Panel {
       groups.set(key, bucket);
     }
 
-    const sections = [...groups.entries()].map(([group, ferries]) => {
+    // One table with group header rows, so every column lines up across groups
+    // (separate per-group tables sized their columns independently → misaligned).
+    const body = [...groups.entries()].map(([group, ferries]) => {
+      const groupRow = `<tr class="ferry-group-row"><td colspan="6">${escapeHtml(group)} <span class="ferry-group-count">${ferries.length}</span></td></tr>`;
       const rows = ferries.map((f) => {
         const operator = f.operatorName ? escapeHtml(f.operatorName) : '—';
         const destBadge = f.routeStatus === 'confirmed' ? ' <span class="ferry-route-ok" title="Scheduled route">✓</span>'
@@ -93,20 +96,18 @@ export class ItalyFerryPanel extends Panel {
           <td class="ferry-eta">${escapeHtml(formatFerryEta(f))}</td>
         </tr>`;
       }).join('');
-
-      return `<div class="ferry-group">
-        <div class="ferry-group-title">${escapeHtml(group)} <span class="ferry-group-count">${ferries.length}</span></div>
-        <table class="ferry-table">
-          <thead><tr>
-            <th>Vessel</th><th>Operator</th><th>Status</th><th>Destination</th><th>Speed</th><th>ETA</th>
-          </tr></thead>
-          <tbody>${rows}</tbody>
-        </table>
-      </div>`;
+      return groupRow + rows;
     }).join('');
 
+    const table = `<table class="ferry-table">
+      <thead><tr>
+        <th>Vessel</th><th>Operator</th><th>Status</th><th>Destination</th><th>Speed</th><th>ETA</th>
+      </tr></thead>
+      <tbody>${body}</tbody>
+    </table>`;
+
     const board = this.content.querySelector('.ferry-board');
-    if (board) board.innerHTML = sections;
+    if (board) board.innerHTML = table;
     this.map?.setFerries(this.ferries);
   }
 
