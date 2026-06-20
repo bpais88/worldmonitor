@@ -67,4 +67,36 @@ describe('ferriesToGeoJSON', () => {
     assert.equal(p.speedText, '12 kn');
     assert.equal(p.statusLabel, 'At anchor');
   });
+
+  it('surfaces delay status: slipping, stalled, or empty', () => {
+    const slip = ferriesToGeoJSON([ferry({ delay: { slipping: true, etaGrowthMin: 25 } })]);
+    assert.equal(slip.features[0].properties.delayText, 'Delayed +25 min');
+    const stall = ferriesToGeoJSON([ferry({ delay: { stalled: true } })]);
+    assert.equal(stall.features[0].properties.delayText, 'Stalled');
+    const none = ferriesToGeoJSON([ferry()]);
+    assert.equal(none.features[0].properties.delayText, '');
+  });
+
+  it('surfaces the top delay reason as whyText (high-confidence weather)', () => {
+    const fc = ferriesToGeoJSON([ferry({
+      delay: {
+        slipping: true,
+        etaGrowthMin: 22,
+        reasons: [
+          { source: 'weather', kind: 'rough_seas', summary: 'Rough conditions (2.8 m seas)', confidence: 0.85 },
+          { source: 'news', kind: 'strike', summary: 'Possible strike', confidence: 0.4 },
+        ],
+      },
+    })]);
+    assert.equal(fc.features[0].properties.whyText, '🌊 Rough conditions (2.8 m seas)');
+  });
+
+  it('hedges a low-confidence (news) reason and shows no whyText without reasons', () => {
+    const news = ferriesToGeoJSON([ferry({
+      delay: { slipping: true, reasons: [{ source: 'news', kind: 'strike', summary: 'Ferry strike reported', confidence: 0.4 }] },
+    })]);
+    assert.equal(news.features[0].properties.whyText, '📰 Possibly: Ferry strike reported');
+    const noReasons = ferriesToGeoJSON([ferry({ delay: { slipping: true } })]);
+    assert.equal(noReasons.features[0].properties.whyText, '');
+  });
 });

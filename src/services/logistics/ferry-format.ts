@@ -38,3 +38,29 @@ export function formatFerrySize(ferry: TrackedFerry): string {
 export function formatFerryDraught(ferry: TrackedFerry): string {
   return ferry.draughtMeters ? `${ferry.draughtMeters.toFixed(1)} m draught` : '';
 }
+
+/** Delay label, e.g. "Delayed +25 min", "Stalled", or '' if on track. */
+export function formatFerryDelay(ferry: TrackedFerry): string {
+  const d = ferry.delay;
+  if (!d) return '';
+  if (d.stalled) return 'Stalled';
+  if (d.slipping) {
+    const g = typeof d.etaGrowthMin === 'number' && d.etaGrowthMin > 0 ? ` +${d.etaGrowthMin} min` : '';
+    return `Delayed${g}`;
+  }
+  return '';
+}
+
+const REASON_ICON: Record<string, string> = { weather: '🌊', news: '📰' };
+
+/** The likely-cause line for a delay, e.g. "🌊 Rough conditions…", or '' if none. */
+export function formatFerryWhy(ferry: TrackedFerry): string {
+  const reasons = ferry.delay?.reasons;
+  if (!reasons || reasons.length === 0) return '';
+  const top = reasons[0];
+  if (!top?.summary) return '';
+  const icon = REASON_ICON[top.source] ?? '•';
+  // Mark low-confidence (news) as tentative — never assert a false cause.
+  const hedge = top.confidence < 0.6 ? 'Possibly: ' : '';
+  return `${icon} ${hedge}${top.summary}`;
+}

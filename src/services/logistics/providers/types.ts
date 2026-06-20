@@ -8,11 +8,37 @@
 import type { VesselPosition } from '../types';
 import type { ShipCategory } from '../classify';
 
+/** A candidate explanation for a delay (weather, news, ...). */
+export interface DelayReason {
+  source: string;
+  kind: string;
+  summary: string;
+  confidence: number;
+  url?: string;
+  detail?: string;
+}
+
+/** Delay status from the relay's ETA-drift detection (Method B). */
+export interface VesselDelay {
+  /** Predicted arrival is sliding later vs the recent trend. */
+  slipping?: boolean;
+  /** Stopped mid-crossing (not in port). */
+  stalled?: boolean;
+  /** How many minutes the predicted arrival moved later over the window. */
+  etaGrowthMin?: number;
+  windowMin?: number;
+  samples?: number;
+  /** Ranked candidate reasons for the delay (highest confidence first). */
+  reasons?: DelayReason[];
+}
+
 /** A live vessel position enriched with its coarse category. */
 export interface LiveVessel extends VesselPosition {
   category: ShipCategory;
   /** AIS navigational status code (0=under way, 1=at anchor, 5=moored, ...). */
   navStatus?: number;
+  /** Delay status computed by the relay, if available. */
+  delay?: VesselDelay;
 }
 
 /** Viewport + filter for a vessel query. */
