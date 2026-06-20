@@ -1668,6 +1668,101 @@ function isLikelyMilitaryCandidate(meta) {
 // can be unit-tested without starting the relay server.
 const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-vessels-query.cjs');
 
+// --- Ferry delay detection (Method B): ETA-drift over time -----------------
+// Resolves each Italian-island-bound vessel's destination + ETA, snapshots the
+// ETA on a timer, and flags crossings whose predicted arrival is slipping (or
+// stalled mid-crossing) — without any external timetable. History persists to
+// Upstash so learning survives restarts; degrades to in-memory if Redis is off.
+const { resolveDestinationPort, etaFor } = require('./ferry-eta.cjs');
+const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
+
+const FERRY_DELAY_REDIS_KEY = `${RELAY_ENV_PREFIX}relay:ferry:eta-history:v1`;
+const FERRY_DELAY_INTERVAL_MS = 60_000;
+const FERRY_DELAY_PERSIST_MS = 5 * 60_000;
+const FERRY_DELAY_TTL_SECONDS = 24 * 60 * 60;
+const FERRY_HISTORY_STALE_MS = 6 * 60 * 60 * 1000;
+
+const etaHistory = new Map();  // mmsi -> snapshot[]
+const delayByMmsi = new Map(); // mmsi -> { slipping, stalled, etaGrowthMin, ... }
+let _ferryHistoryDirty = false;
+
+function updateFerryDelays(now = Date.now()) {
+  try {
+    for (const [mmsi, v] of vessels) {
+      const stat = vesselStatic.get(mmsi);
+      const port = resolveDestinationPort(stat && stat.destination);
+      if (!port) { etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue; }
+      const eta = etaFor({ lat: v.lat, lon: v.lon, speedKnots: v.speed }, port, now);
+      const snap = {
+        ts: now,
+        etaTs: eta ? eta.etaTs : null,
+        destPortId: port.portId,
+        speed: Number.isFinite(v.speed) ? v.speed : 0,
+      };
+      const buf = recordSnapshot(etaHistory.get(mmsi) || [], snap);
+      etaHistory.set(mmsi, buf);
+      const drift = detectDrift(buf);
+      if (drift && (drift.slipping || drift.stalled)) delayByMmsi.set(mmsi, drift);
+      else delayByMmsi.delete(mmsi);
+    }
+    // Prune histories for vessels that stopped reporting.
+    for (const [mmsi, buf] of etaHistory) {
+      const last = buf[buf.length - 1];
+      if (!last || now - last.ts > FERRY_HISTORY_STALE_MS) {
+        etaHistory.delete(mmsi);
+        delayByMmsi.delete(mmsi);
+      }
+    }
+    _ferryHistoryDirty = true;
+  } catch (e) {
+    console.warn('[Relay] ferry delay update failed:', e.message);
+  }
+}
+
+async function persistFerryHistory() {
+  if (!UPSTASH_ENABLED || !_ferryHistoryDirty) return;
+  try {
+    const obj = {};
+    for (const [mmsi, buf] of etaHistory) obj[mmsi] = buf;
+    const ok = await upstashSet(
+      FERRY_DELAY_REDIS_KEY,
+      { history: obj, persistedAt: new Date().toISOString() },
+      FERRY_DELAY_TTL_SECONDS,
+    );
+    if (ok) _ferryHistoryDirty = false;
+  } catch (e) {
+    console.warn('[Relay] ferry history persist failed:', e.message);
+  }
+}
+
+async function bootstrapFerryHistory() {
+  if (!UPSTASH_ENABLED) return;
+  try {
+    const cached = await upstashGet(FERRY_DELAY_REDIS_KEY);
+    if (cached && cached.history && typeof cached.history === 'object') {
+      const cutoff = Date.now() - FERRY_HISTORY_STALE_MS;
+      let n = 0;
+      for (const [mmsi, buf] of Object.entries(cached.history)) {
+        if (Array.isArray(buf) && buf.length) {
+          const fresh = buf.filter((s) => s && typeof s.ts === 'number' && s.ts > cutoff);
+          if (fresh.length) { etaHistory.set(mmsi, fresh); n++; }
+        }
+      }
+      console.log(`[Relay] Ferry ETA history restored: ${n} vessels`);
+    }
+  } catch (e) {
+    console.warn('[Relay] ferry history bootstrap failed:', e.message);
+  }
+}
+
+function startFerryDelayLoop() {
+  bootstrapFerryHistory().finally(() => {
+    updateFerryDelays();
+    setInterval(updateFerryDelays, FERRY_DELAY_INTERVAL_MS).unref?.();
+    setInterval(persistFerryHistory, FERRY_DELAY_PERSIST_MS).unref?.();
+  });
+}
+
 function getUpstreamQueueSize() {
   return upstreamQueue.length - upstreamQueueReadIndex;
 }
@@ -3742,6 +3837,12 @@ const server = http.createServer(async (req, res) => {
 
     const out = buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit });
 
+    // Attach delay status (Method B) for any returned vessel we're tracking.
+    for (const v of out) {
+      const d = delayByMmsi.get(v.mmsi);
+      if (d) v.delay = d;
+    }
+
     return sendCompressed(req, res, 200, {
       'Content-Type': 'application/json',
       'Cache-Control': 'public, max-age=5',
@@ -4276,6 +4377,7 @@ server.listen(PORT, () => {
   startUcdpSeedLoop();
   startMarketDataSeedLoop();
   startAviationSeedLoop();
+  startFerryDelayLoop();
 });
 
 wss.on('connection', (ws, req) => {
