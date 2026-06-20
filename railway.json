@@ -2,7 +2,14 @@
   "$schema": "https://railway.com/railway.schema.json",
   "build": {
     "builder": "NIXPACKS",
-    "buildCommand": "npm install --omit=dev --no-audit --no-fund"
+    "buildCommand": "npm install --omit=dev --no-audit --no-fund",
+    "watchPatterns": [
+      "scripts/**",
+      "src/config/italy-ferries.data.json",
+      "package.json",
+      "package-lock.json",
+      "railway.json"
+    ]
   },
   "deploy": {
     "startCommand": "node scripts/ais-relay.cjs",
