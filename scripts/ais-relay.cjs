@@ -1599,11 +1599,18 @@ const SNAPSHOT_INTERVAL_MS = Math.max(2000, Number(process.env.AIS_SNAPSHOT_INTE
 const CANDIDATE_RETENTION_MS = 2 * 60 * 60 * 1000; // 2 hours
 const MAX_DENSITY_ZONES = 200;
 const MAX_CANDIDATE_REPORTS = 1500;
+const MAX_VESSEL_STATIC = MAX_VESSELS;
+
+// Default + ceiling for the /ais/vessels viewport query.
+const DEFAULT_VESSELS_LIMIT = 2000;
+const MAX_VESSELS_LIMIT = 5000;
 
 const vessels = new Map();
 const vesselHistory = new Map();
 const densityGrid = new Map();
 const candidateReports = new Map();
+// Per-MMSI static data (destination, IMO, ship type) from ShipStaticData messages.
+const vesselStatic = new Map();
 
 let snapshotSequence = 0;
 let lastSnapshot = null;
@@ -1656,6 +1663,10 @@ function isLikelyMilitaryCandidate(meta) {
 
   return false;
 }
+
+// Pure query/filter helpers for /ais/vessels live in a separate module so they
+// can be unit-tested without starting the relay server.
+const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-vessels-query.cjs');
 
 function getUpstreamQueueSize() {
   return upstreamQueue.length - upstreamQueueReadIndex;
@@ -1754,6 +1765,8 @@ function processRawUpstreamMessage(raw) {
     const parsed = JSON.parse(raw);
     if (parsed?.MessageType === 'PositionReport') {
       processPositionReportForSnapshot(parsed);
+    } else if (parsed?.MessageType === 'ShipStaticData') {
+      processShipStaticData(parsed);
     }
   } catch {
     // Ignore malformed upstream payloads
@@ -1798,6 +1811,7 @@ function processPositionReportForSnapshot(data) {
     heading: pos.TrueHeading,
     speed: pos.Sog,
     course: pos.Cog,
+    navStatus: pos.NavigationalStatus,
   });
 
   const history = vesselHistory.get(mmsi) || [];
@@ -1837,6 +1851,50 @@ function processPositionReportForSnapshot(data) {
     });
   }
 }
+
+// Format the AIS crew-entered ETA (UTC, no year) as "MM-DD HH:MMZ", or '' when
+// unset (AIS uses Month 0 / Hour 24 / Minute 60 as "not available").
+function formatAisEta(eta) {
+  if (!eta) return '';
+  const { Month, Day, Hour, Minute } = eta;
+  if (!Month || Month > 12 || !Day || Day > 31 || Hour == null || Hour >= 24) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(Month)}-${pad(Day)} ${pad(Hour)}:${pad(Minute >= 60 ? 0 : (Minute || 0))}Z`;
+}
+
+// ShipStaticData (AIS message types 5/24) carries the voyage + identity fields
+// that PositionReport lacks: destination, IMO, reliable ship type, call sign,
+// crew ETA, draught, and hull dimensions (A/B/C/D in metres -> length/beam).
+function processShipStaticData(data) {
+  const meta = data?.MetaData;
+  const stat = data?.Message?.ShipStaticData;
+  if (!meta || !stat) return;
+
+  const mmsi = String(meta.MMSI || '');
+  if (!mmsi) return;
+
+  const shipType = Number.isFinite(stat.Type) ? stat.Type : undefined;
+  const dim = stat.Dimension || {};
+  const length = (Number(dim.A) || 0) + (Number(dim.B) || 0);
+  const beam = (Number(dim.C) || 0) + (Number(dim.D) || 0);
+  vesselStatic.set(mmsi, {
+    mmsi,
+    name: meta.ShipName || stat.Name || '',
+    shipType,
+    imo: stat.ImoNumber ? String(stat.ImoNumber) : '',
+    destination: (stat.Destination || '').trim(),
+    callSign: (stat.CallSign || '').trim(),
+    draught: Number.isFinite(stat.MaximumStaticDraught) && stat.MaximumStaticDraught > 0
+      ? stat.MaximumStaticDraught : undefined,
+    length: length > 0 ? length : undefined,
+    beam: beam > 0 ? beam : undefined,
+    etaAis: formatAisEta(stat.Eta),
+    timestamp: Date.now(),
+  });
+}
+
+// Throttle for cleanup triggered from the /ais/vessels read path (see handler).
+let lastVesselsCleanupAt = 0;
 
 function cleanupAggregates() {
   const now = Date.now();
@@ -1893,6 +1951,12 @@ function cleanupAggregates() {
   }
   // Hard cap: keep freshest candidate reports.
   evictMapByTimestamp(candidateReports, MAX_CANDIDATE_REPORTS, (report) => report.timestamp || 0);
+
+  // Drop static data for vessels we no longer track, then hard-cap.
+  for (const mmsi of vesselStatic.keys()) {
+    if (!vessels.has(mmsi)) vesselStatic.delete(mmsi);
+  }
+  evictMapByTimestamp(vesselStatic, MAX_VESSEL_STATIC, (s) => s.timestamp || 0);
 
   // Clean chokepoint buckets: remove stale vessels
   for (const [cpName, bucket] of chokepointBuckets) {
@@ -3509,6 +3573,7 @@ const ALLOWED_ORIGINS = [
   'https://worldmonitor.app',
   'https://tech.worldmonitor.app',
   'https://finance.worldmonitor.app',
+  'http://localhost:3000',   // Vite dev (configured port)
   'http://localhost:5173',   // Vite dev
   'http://localhost:5174',   // Vite dev alt port
   'http://localhost:4173',   // Vite preview
@@ -3651,6 +3716,43 @@ const server = http.createServer(async (req, res) => {
         'CDN-Cache-Control': 'public, max-age=10',
       }, JSON.stringify(payload));
     }
+  } else if (pathname === '/ais/vessels') {
+    // Individual vessel positions inside a viewport — powers commercial vessel
+    // (ferry/cargo/tanker) tracking. Viewport + type filtering keep payloads
+    // bounded instead of streaming all ~20k tracked vessels.
+    connectUpstream();
+    const url = new URL(req.url, `http://localhost:${PORT}`);
+
+    const bounds = parseBbox(url.searchParams.get('bbox'));
+    const wantTypes = parseTypes(url.searchParams.get('types'));
+    const limit = clampLimit(url.searchParams.get('limit'), {
+      def: DEFAULT_VESSELS_LIMIT,
+      max: MAX_VESSELS_LIMIT,
+    });
+
+    // Prune stale vessels on this read path too. /ais/snapshot prunes via
+    // buildSnapshot(), but a client that only hits /ais/vessels (the ferry page)
+    // would otherwise keep seeing vessels that stopped reporting. Throttled so
+    // frequent polling doesn't re-run the sweep every request.
+    const nowTs = Date.now();
+    if (nowTs - lastVesselsCleanupAt >= SNAPSHOT_INTERVAL_MS) {
+      cleanupAggregates();
+      lastVesselsCleanupAt = nowTs;
+    }
+
+    const out = buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit });
+
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=5',
+      'CDN-Cache-Control': 'public, max-age=10',
+    }, JSON.stringify({
+      vessels: out,
+      count: out.length,
+      tracked: vessels.size,
+      bbox: bounds,
+      generatedAt: Date.now(),
+    }));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;
@@ -4125,7 +4227,9 @@ function connectUpstream() {
     socket.send(JSON.stringify({
       APIKey: API_KEY,
       BoundingBoxes: [[[-90, -180], [90, 180]]],
-      FilterMessageTypes: ['PositionReport'],
+      // ShipStaticData carries destination, IMO and ship type — needed for
+      // commercial vessel tracking (the /ais/vessels endpoint).
+      FilterMessageTypes: ['PositionReport', 'ShipStaticData'],
     }));
   });
 

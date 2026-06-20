@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' http://localhost:3004 http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; font-src 'self' data: https:; img-src 'self' data: blob: https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com;" />
+    <title>Italy Ferry Tracker — World Monitor</title>
+    <script>(function(){try{var t=localStorage.getItem('worldmonitor-theme');if(t==='light')document.documentElement.dataset.theme='light';}catch(e){}})()</script>
+    <style>
+      .ferry-demo-wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
+      .ferry-demo-head { margin-bottom: 16px; }
+      .ferry-demo-head h1 { font-size: 20px; margin: 0 0 4px; }
+      .ferry-demo-head p { margin: 0; opacity: 0.7; font-size: 13px; }
+      .ferry-group-count { opacity: 0.6; font-weight: 400; }
+      table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+      .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px;
+        border-bottom: 1px solid rgba(127,127,127,0.18);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ferry-table th { opacity: 0.6; font-weight: 500; }
+      /* Stable column widths so every group lines up */
+      .ferry-table th:nth-child(1), .ferry-table td:nth-child(1) { width: 26%; }
+      .ferry-table th:nth-child(2), .ferry-table td:nth-child(2) { width: 16%; }
+      .ferry-table th:nth-child(3), .ferry-table td:nth-child(3) { width: 14%; }
+      .ferry-table th:nth-child(4), .ferry-table td:nth-child(4) { width: 20%; }
+      .ferry-table th:nth-child(5), .ferry-table td:nth-child(5) { width: 11%; }
+      .ferry-table th:nth-child(6), .ferry-table td:nth-child(6) { width: 13%; }
+      .ferry-group-row td { font-weight: 600; font-size: 13px; padding-top: 18px;
+        border-bottom: 1px solid rgba(127,127,127,0.28); width: auto !important; }
+      .ferry-name { font-weight: 600; }
+      .ferry-table tbody tr { cursor: pointer; }
+      .ferry-table tbody tr:hover { background: rgba(127,127,127,0.10); }
+      /* Map popup (override MapLibre's default white style) */
+      .maplibregl-popup-content { background: #1f2224 !important; color: #f1f3f4 !important;
+        border-radius: 8px; padding: 9px 13px; font-size: 12px; line-height: 1.45;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.55); }
+      .maplibregl-popup-tip { border-top-color: #1f2224 !important; border-bottom-color: #1f2224 !important;
+        border-left-color: #1f2224 !important; border-right-color: #1f2224 !important; }
+      .maplibregl-popup-close-button { color: #cfd3d6 !important; font-size: 18px; padding: 0 6px; line-height: 1; }
+      .maplibregl-popup-close-button:hover { background: rgba(255,255,255,0.08) !important; }
+      .ferry-popup-name { font-weight: 700; font-size: 13px; color: #ffffff; }
+      .ferry-popup-op { color: #b9bdc1; margin-bottom: 2px; }
+      .ferry-popup-row { display: flex; align-items: center; gap: 6px; }
+      .ferry-popup-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+      .ferry-popup-dim { color: #9aa0a6; font-size: 11px; margin-top: 2px; }
+      .ferry-status { padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+      .ferry-status-underway { background: rgba(56,189,138,0.18); color: #2fbf85; }
+      .ferry-status-anchor { background: rgba(245,179,66,0.18); color: #e0a032; }
+      .ferry-status-port { background: rgba(127,127,127,0.18); }
+      .ferry-route-ok { color: #2fbf85; }
+      .ferry-route-warn { color: #e0a032; font-weight: 700; }
+      .economic-empty, .error-message { padding: 24px; text-align: center; opacity: 0.7; }
+      .economic-footer { margin-top: 12px; font-size: 11px; opacity: 0.5; }
+      /* Ferry map (MapLibre) */
+      .ferry-map-host { height: 420px; width: 100%; border-radius: 8px; overflow: hidden;
+        border: 1px solid rgba(127,127,127,0.18); }
+      .ferry-map-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 18px;
+        font-size: 11px; opacity: 0.75; }
+      .ferry-map-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+        margin-right: 5px; vertical-align: middle; }
+    </style>
+  </head>
+  <body style="margin:0;background:var(--bg,#1a1c1e);color:var(--text,#e8eaed);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+    <div class="ferry-demo-wrap">
+      <div class="ferry-demo-head">
+        <h1>🇮🇹 Italy Ferry Tracker</h1>
+        <p>Live commercial ferries (mainland ⇄ islands) from AIS. Requires the relay running on <code>localhost:3004</code>.</p>
+      </div>
+      <div id="app"></div>
+    </div>
+    <script type="module" src="/src/ferry-main.ts"></script>
+  </body>
+</html>
