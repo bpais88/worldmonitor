@@ -76,6 +76,11 @@ function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit }) {
       category,
       imo: stat ? stat.imo : '',
       destination: stat ? stat.destination : '',
+      callSign: stat ? (stat.callSign || '') : '',
+      draught: stat ? stat.draught : undefined,
+      length: stat ? stat.length : undefined,
+      beam: stat ? stat.beam : undefined,
+      etaAis: stat ? (stat.etaAis || '') : '',
       timestamp: v.timestamp,
     });
     if (out.length >= limit) break;

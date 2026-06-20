@@ -27,7 +27,7 @@ function makeMaps() {
   ]);
   // Static data (ShipStaticData-derived): destination + IMO + ship type
   const vesselStatic = new Map([
-    ['247111111', { mmsi: '247111111', name: 'MOBY DADA', shipType: 60, imo: '9200096', destination: 'OLBIA', timestamp: 900 }],
+    ['247111111', { mmsi: '247111111', name: 'MOBY DADA', shipType: 60, imo: '9200096', destination: 'OLBIA', callSign: 'IBMD', draught: 6.4, length: 175, beam: 27, etaAis: '06-21 14:30Z', timestamp: 900 }],
     ['636000001', { mmsi: '636000001', name: 'EVER GIVEN', shipType: 70, imo: '9811000', destination: 'GENOVA', timestamp: 901 }],
   ]);
   return { vessels, vesselStatic };
@@ -90,6 +90,21 @@ test('static data merges destination + IMO, and supplies ship type', () => {
   assert.equal(moby.destination, 'OLBIA');
   assert.equal(moby.imo, '9200096');
   assert.equal(moby.navStatus, 0);
+  // New voyage/identity fields flow through from static data.
+  assert.equal(moby.callSign, 'IBMD');
+  assert.equal(moby.draught, 6.4);
+  assert.equal(moby.length, 175);
+  assert.equal(moby.beam, 27);
+  assert.equal(moby.etaAis, '06-21 14:30Z');
+});
+
+test('vessel with static data but no extra fields yields empty/undefined', () => {
+  const { vessels, vesselStatic } = makeMaps();
+  const out = buildVesselList(vessels, vesselStatic, { bounds: ITALY, wantTypes: null, limit: 100 });
+  const ever = out.find((v) => v.mmsi === '636000001');
+  assert.equal(ever.callSign, '');
+  assert.equal(ever.draught, undefined);
+  assert.equal(ever.etaAis, '');
 });
 
 test('limit caps the result count', () => {

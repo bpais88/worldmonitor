@@ -103,6 +103,38 @@ export const ITALY_FERRY_PORTS: FerryPort[] = [
   { id: 'tremiti', name: 'Tremiti', lat: 42.12, lon: 15.49, side: 'island', group: 'Adriatic', aisNames: ['TREMITI', 'SAN DOMINO'] },
 ];
 
+/**
+ * UN/LOCODE -> port id. Most ferries broadcast a LOCODE (e.g. "ITNAP") in the
+ * AIS destination field rather than a port name, so name-only matching misses
+ * them. Deliberately conservative: only codes verified against live traffic or
+ * unambiguous major ports are listed — a wrong code shows a wrong destination,
+ * which is worse than falling back to "unknown" / course inference.
+ */
+export const PORT_LOCODES: Record<string, string> = {
+  ITGOA: 'genoa',
+  ITCVV: 'civitavecchia',
+  ITLIV: 'livorno',
+  ITNAP: 'naples',
+  ITSAL: 'salerno',
+  ITOLB: 'olbia',
+  ITGAI: 'golfo_aranci',
+  ITCAG: 'cagliari',
+  ITPTO: 'porto_torres',
+  ITPMO: 'palermo',
+  ITCTA: 'catania',
+  ITMSN: 'messina',
+  ITTPS: 'trapani',
+  ITPFE: 'portoferraio',
+  ITMLZ: 'milazzo',
+  ITPRJ: 'capri',
+  ITISH: 'ischia',
+  ITPRO: 'procida',
+  ITPNZ: 'ponza',
+  ITLMP: 'lampedusa',
+  ITPIO: 'piombino',
+  ITLEV: 'levanzo',
+};
+
 export const ITALY_FERRY_OPERATORS: FerryOperator[] = [
   { id: 'tirrenia', name: 'Tirrenia / CIN', keywords: ['TIRRENIA'] },
   { id: 'gnv', name: 'Grandi Navi Veloci', keywords: ['GNV', 'GRANDI NAVI VELOCI'] },

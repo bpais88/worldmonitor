@@ -1852,8 +1852,19 @@ function processPositionReportForSnapshot(data) {
   }
 }
 
+// Format the AIS crew-entered ETA (UTC, no year) as "MM-DD HH:MMZ", or '' when
+// unset (AIS uses Month 0 / Hour 24 / Minute 60 as "not available").
+function formatAisEta(eta) {
+  if (!eta) return '';
+  const { Month, Day, Hour, Minute } = eta;
+  if (!Month || Month > 12 || !Day || Day > 31 || Hour == null || Hour >= 24) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${pad(Month)}-${pad(Day)} ${pad(Hour)}:${pad(Minute >= 60 ? 0 : (Minute || 0))}Z`;
+}
+
 // ShipStaticData (AIS message types 5/24) carries the voyage + identity fields
-// that PositionReport lacks: destination, IMO, reliable ship type, call sign.
+// that PositionReport lacks: destination, IMO, reliable ship type, call sign,
+// crew ETA, draught, and hull dimensions (A/B/C/D in metres -> length/beam).
 function processShipStaticData(data) {
   const meta = data?.MetaData;
   const stat = data?.Message?.ShipStaticData;
@@ -1863,6 +1874,9 @@ function processShipStaticData(data) {
   if (!mmsi) return;
 
   const shipType = Number.isFinite(stat.Type) ? stat.Type : undefined;
+  const dim = stat.Dimension || {};
+  const length = (Number(dim.A) || 0) + (Number(dim.B) || 0);
+  const beam = (Number(dim.C) || 0) + (Number(dim.D) || 0);
   vesselStatic.set(mmsi, {
     mmsi,
     name: meta.ShipName || stat.Name || '',
@@ -1870,9 +1884,17 @@ function processShipStaticData(data) {
     imo: stat.ImoNumber ? String(stat.ImoNumber) : '',
     destination: (stat.Destination || '').trim(),
     callSign: (stat.CallSign || '').trim(),
+    draught: Number.isFinite(stat.MaximumStaticDraught) && stat.MaximumStaticDraught > 0
+      ? stat.MaximumStaticDraught : undefined,
+    length: length > 0 ? length : undefined,
+    beam: beam > 0 ? beam : undefined,
+    etaAis: formatAisEta(stat.Eta),
     timestamp: Date.now(),
   });
 }
+
+// Throttle for cleanup triggered from the /ais/vessels read path (see handler).
+let lastVesselsCleanupAt = 0;
 
 function cleanupAggregates() {
   const now = Date.now();
@@ -3707,6 +3729,16 @@ const server = http.createServer(async (req, res) => {
       def: DEFAULT_VESSELS_LIMIT,
       max: MAX_VESSELS_LIMIT,
     });
+
+    // Prune stale vessels on this read path too. /ais/snapshot prunes via
+    // buildSnapshot(), but a client that only hits /ais/vessels (the ferry page)
+    // would otherwise keep seeing vessels that stopped reporting. Throttled so
+    // frequent polling doesn't re-run the sweep every request.
+    const nowTs = Date.now();
+    if (nowTs - lastVesselsCleanupAt >= SNAPSHOT_INTERVAL_MS) {
+      cleanupAggregates();
+      lastVesselsCleanupAt = nowTs;
+    }
 
     const out = buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit });
 

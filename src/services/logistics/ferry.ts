@@ -10,6 +10,7 @@ import type { VesselPosition, EtaEstimate } from './types';
 import {
   ITALY_FERRY_PORTS,
   ITALY_FERRY_OPERATORS,
+  PORT_LOCODES,
   type FerryPort,
 } from '../../config/italy-ferries';
 import { computeEta } from './eta';
@@ -39,13 +40,51 @@ export function isItalianFerry(vessel: Pick<VesselPosition, 'name' | 'shipType' 
 }
 
 const ISLAND_PORTS = ITALY_FERRY_PORTS.filter((p) => p.side === 'island');
+const PORT_BY_ID = new Map(ITALY_FERRY_PORTS.map((p) => [p.id, p] as const));
 
-/** Match the free-text AIS destination field to a known port. */
+// Tokens crews append for round trips ("e viceversa") — not destinations.
+const ROUNDTRIP_TOKENS = new Set(['VV', 'V', 'E', 'EVV', 'RT', 'AR', 'ANDATA', 'RITORNO']);
+
+/**
+ * Match the free-text AIS destination field to a known port.
+ *
+ * Handles the common real-world formats: a single port name ("OLBIA"), a
+ * UN/LOCODE ("ITNAP" or spaced "IT NAP"), and multi-leg / round-trip strings
+ * ("ITPOZ<>ITPRO", "ITFRD-ITISH-ITNAP", "ITNAP ITISH E VV"). The final/most-
+ * recent destination wins, so legs/codes are resolved from the end of the string.
+ */
 export function matchDestinationPort(aisDestination: string | undefined): FerryPort | undefined {
   if (!aisDestination) return undefined;
-  const upper = aisDestination.toUpperCase().replace(/[^A-Z ]/g, ' ');
+  const upper = aisDestination.toUpperCase();
+
+  // 1. LOCODE match. De-space first so "IT NAP" == "ITNAP", then take the code
+  //    that appears latest (the final leg of a multi-leg voyage string).
+  const compact = upper.replace(/[^A-Z0-9]/g, '');
+  let bestIdx = -1;
+  let bestPort: FerryPort | undefined;
+  for (const code of Object.keys(PORT_LOCODES)) {
+    const idx = compact.lastIndexOf(code);
+    if (idx > bestIdx) {
+      bestIdx = idx;
+      const portId = PORT_LOCODES[code];
+      bestPort = portId ? PORT_BY_ID.get(portId) : undefined;
+    }
+  }
+  if (bestPort) return bestPort;
+
+  // 2. Name match, per token, from the end (so "NAPOLI/CAPRI" -> Capri).
+  const tokens = upper.split(/[^A-Z0-9]+/).filter((t) => t.length >= 3 && !ROUNDTRIP_TOKENS.has(t));
+  for (let i = tokens.length - 1; i >= 0; i--) {
+    const token = tokens[i] as string;
+    for (const port of ITALY_FERRY_PORTS) {
+      if (port.aisNames.some((n) => token.includes(n))) return port;
+    }
+  }
+
+  // 3. Whole-string fallback for multi-word port names ("VILLA S GIOVANNI").
+  const spaced = upper.replace(/[^A-Z ]/g, ' ');
   for (const port of ITALY_FERRY_PORTS) {
-    if (port.aisNames.some((n) => upper.includes(n))) return port;
+    if (port.aisNames.some((n) => spaced.includes(n))) return port;
   }
   return undefined;
 }

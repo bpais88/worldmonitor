@@ -79,6 +79,25 @@ describe('destination resolution', () => {
     assert.equal(matchDestinationPort('NOWHERE'), undefined);
   });
 
+  it('decodes UN/LOCODE destinations', () => {
+    assert.equal(matchDestinationPort('ITNAP')?.id, 'naples');
+    assert.equal(matchDestinationPort('ITGAI')?.id, 'golfo_aranci');
+    assert.equal(matchDestinationPort('IT NAP')?.id, 'naples'); // spaced LOCODE
+    assert.equal(matchDestinationPort('ITPRJ')?.id, 'capri');
+  });
+
+  it('resolves multi-leg / round-trip strings to the final leg', () => {
+    assert.equal(matchDestinationPort('ITFRD-ITISH-ITNAP')?.id, 'naples');
+    assert.equal(matchDestinationPort('ITPOZ<>ITPRO')?.id, 'procida');
+    assert.equal(matchDestinationPort('NAPOLI/CAPRI')?.id, 'capri');
+    assert.equal(matchDestinationPort('ITNAP ITISH E VV')?.id, 'ischia');
+  });
+
+  it('returns undefined for ports outside the curated set', () => {
+    assert.equal(matchDestinationPort('FRAJA'), undefined);  // Ajaccio (France)
+    assert.equal(matchDestinationPort('ITTRS'), undefined);  // Trieste (not a ferry island port)
+  });
+
   it('infers destination from course toward a nearby island', () => {
     // Just north of Portoferraio (Elba), steaming due south.
     const v = vessel({ lat: 42.88, lon: 10.31, courseDeg: 180, speedKnots: 18 });
