@@ -72,6 +72,38 @@ Rule of thumb: **Claude Agent SDK for the loop + tools; LangGraph when control
 flow gets branchy; evaluate pi.dev (and others) as runtime/hosting, not as the
 reasoning engine.**
 
+### Vercel Eve vs. our hand-built agent (decision on record)
+
+Eve is Vercel's agent framework ("an agent is a directory" — markdown + TS tools
++ skills; multi-channel deploy incl. Slack/Discord/web/API/scheduled; durable
+workflows, human-in-the-loop, subagents, evals, AI Gateway). Key reframe: **our
+system is two layers, and Eve only competes with one.**
+
+- **Engine** (detect + 6-source explain, on the relay) — the domain IP. *No
+  framework provides this; it stays regardless.*
+- **Plumbing** (cron → gather → classify → deliver → memory) — the commodity
+  layer. This is the only part Eve replaces.
+
+| | Ours (built, Phase 0/1) | Eve |
+|---|---|---|
+| Scheduled run / Slack / memory | ✅ (Railway cron, Upstash) | ✅ built-in |
+| Multi-channel (Discord/web/API) | ❌ (Slack only) | ✅ |
+| Incident classification (ferry-specific) | ✅ ours | ❌ you still write it |
+| Durable exec / human-in-loop / subagents / evals | ❌ | ✅ |
+| Lock-in | Railway + Upstash (portable) | Vercel runtime |
+| Maintenance | ~150 lines | framework (v0/new) |
+
+**Verdict:** for the *monitoring agent alone*, Eve adds little — ours already
+does it and the hard part (classification + the why-engine) is ours either way.
+**Eve earns its keep for the *next* agents** — the conversational analyst
+(multi-channel web chat) and anything needing durability / human-in-the-loop /
+eval-driven iteration.
+
+**Decision:** ship the monitor on ours (done, no lock-in). Re-evaluate Eve (vs
+Claude Agent SDK) via `tech-scout` when building the **conversational analyst**
+or going multi-channel — checking GA status, Claude support via AI Gateway,
+ability to call the external Railway relay, pricing, and lock-in.
+
 ## Data sources still needed (ranked by leverage for agents)
 
 What would most increase agent capability, roughly highest-value first:
