@@ -1681,6 +1681,75 @@ const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
+const {
+  upsertVessel, registryFreight, pruneRegistry, serializeRegistry, deserializeRegistry,
+} = require('./vessel-registry.cjs');
+
+// --- Persistent vessel-identity registry (IMO -> classification) -----------
+// Vessel identity (type/operator/freight) is static per hull, so we remember it
+// once instead of re-deriving on every message and losing it on every restart.
+// Seeded with verified Equasis entries; accumulates observed vessels; persists
+// to Upstash so the fleet knowledge survives restarts.
+const vesselRegistry = new Map();
+const VESSEL_REGISTRY_KEY = `${RELAY_ENV_PREFIX}relay:vessel-registry:v1`;
+const VESSEL_REGISTRY_PERSIST_MS = 10 * 60_000;
+const VESSEL_REGISTRY_TTL_MS = 30 * 24 * 3600_000;
+let _vesselRegistryDirty = false;
+
+// Seed verified Equasis classifications (IMO -> {freight}) from the shared data.
+(() => {
+  try {
+    const reg = require('../src/config/italy-ferries.data.json').imoRegistry || {};
+    const now = Date.now();
+    for (const [imo, v] of Object.entries(reg)) {
+      if (v && typeof v.freight === 'boolean') {
+        upsertVessel(vesselRegistry, { imo, freight: v.freight, verified: true, name: v.name }, now);
+      }
+    }
+  } catch { /* seed best-effort */ }
+})();
+
+/**
+ * Freight verdict using the registry first (remembered/verified), else the live
+ * heuristic — and record the heuristic result so identity accumulates.
+ */
+function classifyFreight(shipType, name, imo) {
+  const remembered = registryFreight(vesselRegistry, imo);
+  if (remembered !== null) return remembered;
+  const heur = isFreightVessel(shipType, name, imo);
+  if (imo) {
+    upsertVessel(vesselRegistry, { imo, name, shipType, operatorName: resolveOperatorName(name), freight: heur }, Date.now());
+    _vesselRegistryDirty = true;
+  }
+  return heur;
+}
+
+async function persistVesselRegistry() {
+  if (!UPSTASH_ENABLED || !_vesselRegistryDirty) return;
+  try {
+    pruneRegistry(vesselRegistry, Date.now(), VESSEL_REGISTRY_TTL_MS);
+    const ok = await upstashSet(VESSEL_REGISTRY_KEY, serializeRegistry(vesselRegistry), Math.floor(VESSEL_REGISTRY_TTL_MS / 1000));
+    if (ok) _vesselRegistryDirty = false;
+  } catch (e) { console.warn('[Relay] vessel registry persist failed:', e.message); }
+}
+
+async function startVesselRegistryLoop() {
+  if (UPSTASH_ENABLED) {
+    try {
+      const cached = await upstashGet(VESSEL_REGISTRY_KEY);
+      if (cached && typeof cached === 'object') {
+        const restored = deserializeRegistry(cached);
+        let n = 0;
+        // Merge restored entries without clobbering the verified seed.
+        for (const [imo, e] of restored) {
+          if (!vesselRegistry.has(imo) || (!vesselRegistry.get(imo).verified && e)) { vesselRegistry.set(imo, e); n++; }
+        }
+        console.log(`[Relay] Vessel registry restored: ${n} vessels (total ${vesselRegistry.size})`);
+      }
+    } catch (e) { console.warn('[Relay] vessel registry bootstrap failed:', e.message); }
+  }
+  setInterval(() => { void persistVesselRegistry(); }, VESSEL_REGISTRY_PERSIST_MS).unref?.();
+}
 
 // Pluggable "why is it delayed?" explainers — add sources here over time.
 // Port congestion + cross-vessel read our own live data (no external call).
@@ -1693,7 +1762,7 @@ function getFerryVessels() {
     const stat = vesselStatic.get(mmsi);
     const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
     const name = v.name || (stat && stat.name) || '';
-    if (!isFreightVessel(st, name, stat && stat.imo)) continue;
+    if (!classifyFreight(st, name, stat && stat.imo)) continue;
     out.push({ mmsi, lat: v.lat, lon: v.lon, speed: v.speed, navStatus: v.navStatus, timestamp: v.timestamp, delayed: delayByMmsi.has(mmsi) });
   }
   return out;
@@ -1778,7 +1847,7 @@ function updateFerryDelays(now = Date.now()) {
     for (const [mmsi, v] of vessels) {
       const stat = vesselStatic.get(mmsi);
       // Only track freight vessels (cargo + RoPax-by-operator), not tourist craft.
-      if (!isFreightVessel(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name), stat && stat.imo)) {
+      if (!classifyFreight(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name), stat && stat.imo)) {
         etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue;
       }
       const port = resolveDestinationPort(stat && stat.destination);
@@ -2077,6 +2146,18 @@ function processShipStaticData(data) {
     etaAis: formatAisEta(stat.Eta),
     timestamp: Date.now(),
   });
+
+  // Accumulate vessel identity once per hull (keyed on IMO) — remembered + persisted.
+  const imo = stat.ImoNumber ? String(stat.ImoNumber) : '';
+  if (imo) {
+    const name = meta.ShipName || stat.Name || '';
+    upsertVessel(vesselRegistry, {
+      imo, name, shipType,
+      operatorName: resolveOperatorName(name),
+      freight: isFreightVessel(shipType, name, imo),
+    }, Date.now());
+    _vesselRegistryDirty = true;
+  }
 }
 
 // Throttle for cleanup triggered from the /ais/vessels read path (see handler).
@@ -3928,7 +4009,7 @@ const server = http.createServer(async (req, res) => {
 
     const freight = url.searchParams.get('freight') === '1';
     const out = buildVesselList(vessels, vesselStatic, {
-      bounds, wantTypes, limit, isFreight: freight ? isFreightVessel : undefined,
+      bounds, wantTypes, limit, isFreight: freight ? classifyFreight : undefined,
     });
 
     // Attach delay status (Method B) + any explainer reasons for the vessel.
@@ -4477,6 +4558,7 @@ server.listen(PORT, () => {
   startFerryDelayLoop();
   startFerryEnrichLoop();
   startMeteoalarmLoop();
+  startVesselRegistryLoop();
 });
 
 wss.on('connection', (ws, req) => {
