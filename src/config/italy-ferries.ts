@@ -60,6 +60,15 @@ export const ITALY_FERRY_PORTS: FerryPort[] = ferryData.ports as unknown as Ferr
  */
 export const PORT_LOCODES: Record<string, string> = ferryData.locodes;
 
+/**
+ * Verified per-hull vessel types from Equasis (IMO -> { freight }). Distinguishes
+ * "Passenger/Ro-Ro Cargo Ship" (freight) from "Passenger (Cruise) Ship" — the
+ * RoPax-vs-cruise split AIS can't make. Populated manually (Equasis has no bulk
+ * API); empty by default, overrides the operator heuristic when present.
+ */
+export const IMO_REGISTRY: Record<string, { freight: boolean }> =
+  (ferryData as { imoRegistry?: Record<string, { freight: boolean }> }).imoRegistry ?? {};
+
 export const ITALY_FERRY_OPERATORS: FerryOperator[] = ferryData.operators as unknown as FerryOperator[];
 
 export const ITALY_FERRY_ROUTES: FerryRoute[] = [

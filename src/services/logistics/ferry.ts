@@ -11,6 +11,7 @@ import {
   ITALY_FERRY_PORTS,
   ITALY_FERRY_OPERATORS,
   PORT_LOCODES,
+  IMO_REGISTRY,
   type FerryPort,
 } from '../../config/italy-ferries';
 import { computeEta } from './eta';
@@ -49,12 +50,17 @@ export function isFreightOperator(name: string | undefined): boolean {
 }
 
 /**
- * True if a vessel is freight/logistics (carries containers/trailers): all cargo
- * (type 70-79), plus passenger vessels (60-69) only when operated by a freight
- * RoPax line — excludes cruise ships + tourist ferries. Mirrors the relay's
- * isFreightVessel; see docs/AIS_VESSEL_CLASSIFICATION_RESEARCH.md.
+ * True if a vessel is freight/logistics (carries containers/trailers).
+ *
+ * Order: (1) a verified IMO registry entry (Equasis) wins; else (2) heuristic —
+ * all cargo (70-79) + passenger (60-69) from a freight RoPax line (excludes
+ * cruise/tourist). Mirrors the relay's isFreightVessel; see
+ * docs/AIS_VESSEL_CLASSIFICATION_RESEARCH.md.
  */
-export function isFreightVessel(vessel: Pick<VesselPosition, 'name' | 'shipType'>): boolean {
+export function isFreightVessel(vessel: Pick<VesselPosition, 'name' | 'shipType' | 'imo'>): boolean {
+  if (vessel.imo && Object.prototype.hasOwnProperty.call(IMO_REGISTRY, vessel.imo)) {
+    return !!IMO_REGISTRY[vessel.imo]!.freight;
+  }
   const t = vessel.shipType;
   if (typeof t === 'number' && t >= 70 && t <= 79) return true;
   if (isFerryShipType(t)) return isFreightOperator(vessel.name);

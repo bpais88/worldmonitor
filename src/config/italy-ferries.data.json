@@ -646,5 +646,6 @@
       ],
       "freight": true
     }
-  ]
+  ],
+  "imoRegistry": {}
 }

@@ -103,18 +103,35 @@ function isFreightOperator(vesselName) {
   return false;
 }
 
+// IMO -> { freight } registry, single-sourced from the JSON. Verified per-hull
+// types from Equasis ("Passenger/Ro-Ro Cargo Ship" vs "Passenger (Cruise) Ship")
+// override the heuristic. Test-swappable via __setImoRegistryForTests.
+let imoRegistry = data.imoRegistry || {};
+
 /**
- * Whether a vessel is freight/logistics (carries containers/trailers), per the
- * research-backed rule: all cargo/RoRo (type 70-79), plus passenger vessels
- * (60-69) only when operated by a freight RoPax line — which excludes cruise
- * ships and tourist ferries that also broadcast "passenger". AIS ship-type
- * alone can't separate RoPax from cruise, so we use the operator as the signal.
+ * Whether a vessel is freight/logistics (carries containers/trailers).
+ *
+ * Order: (1) if the IMO is in the verified registry (Equasis), trust it; else
+ * (2) research-backed heuristic — all cargo/RoRo (70-79), plus passenger (60-69)
+ * only when operated by a freight RoPax line (excludes cruise/tourist, which
+ * AIS ship-type can't separate). See docs/AIS_VESSEL_CLASSIFICATION_RESEARCH.md.
  */
-function isFreightVessel(shipType, vesselName) {
+function isFreightVessel(shipType, vesselName, imo) {
+  if (imo && Object.prototype.hasOwnProperty.call(imoRegistry, imo)) {
+    return !!imoRegistry[imo].freight;
+  }
   const t = Number(shipType);
   if (t >= 70 && t <= 79) return true;            // cargo / RoRo / container
   if (t >= 60 && t <= 69) return isFreightOperator(vesselName); // RoPax (not cruise/tourist)
   return false;                                    // tanker, HSC, passenger-tourist, other
 }
 
-module.exports = { resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, isFreightVessel };
+/** Test hook: swap the IMO registry (pass null to restore the real one). */
+function __setImoRegistryForTests(reg) {
+  imoRegistry = reg || data.imoRegistry || {};
+}
+
+module.exports = {
+  resolveDestinationPort, etaFor, haversineKm, resolveOperatorName,
+  isFreightVessel, __setImoRegistryForTests,
+};
