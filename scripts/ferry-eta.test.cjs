@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { resolveDestinationPort, etaFor, resolveOperatorName, isFreightVessel } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName, isFreightVessel, __setImoRegistryForTests } = require('./ferry-eta.cjs');
 
 test('resolves a plain LOCODE to its port', () => {
   const p = resolveDestinationPort('ITNAP');
@@ -80,4 +80,23 @@ test('isFreightVessel: cargo always; passenger only if a freight RoPax operator'
   // HSC hydrofoil + tanker — excluded.
   assert.equal(isFreightVessel(40, 'LIBERTY LINES JET'), false);
   assert.equal(isFreightVessel(80, 'SOME TANKER'), false);
+});
+
+test('isFreightVessel: IMO registry (Equasis) overrides the heuristic', () => {
+  __setImoRegistryForTests({
+    '9999001': { freight: true },   // a passenger vessel verified as RoPax
+    '9999002': { freight: false },  // a passenger vessel verified as a CRUISE ship
+  });
+  try {
+    // Heuristic alone would say false (passenger, no freight operator) -> registry says freight.
+    assert.equal(isFreightVessel(60, 'UNKNOWN LINE', '9999001'), true);
+    // Heuristic would also say false; registry confirms cruise -> stays false.
+    assert.equal(isFreightVessel(60, 'GNV CRUISE ONE', '9999002'), false); // registry beats operator match
+    // IMO not in registry -> falls back to heuristic (cargo => freight).
+    assert.equal(isFreightVessel(70, 'WHATEVER', '0000000'), true);
+    // No IMO -> heuristic.
+    assert.equal(isFreightVessel(60, 'GNV ALLEGRA'), true);
+  } finally {
+    __setImoRegistryForTests(null); // restore real registry
+  }
 });

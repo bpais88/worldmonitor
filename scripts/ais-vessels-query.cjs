@@ -64,8 +64,8 @@ function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit, isFr
     if (wantTypes && !wantTypes.has(category)) continue;
 
     const name = v.name || (stat && stat.name) || '';
-    // Freight filter (research-backed): cargo + RoPax-by-operator only.
-    if (isFreight && !isFreight(shipType, name)) continue;
+    // Freight filter (research-backed): IMO registry override, else cargo + RoPax-by-operator.
+    if (isFreight && !isFreight(shipType, name, stat && stat.imo)) continue;
 
     out.push({
       mmsi,

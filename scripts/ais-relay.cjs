@@ -1693,7 +1693,7 @@ function getFerryVessels() {
     const stat = vesselStatic.get(mmsi);
     const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
     const name = v.name || (stat && stat.name) || '';
-    if (!isFreightVessel(st, name)) continue;
+    if (!isFreightVessel(st, name, stat && stat.imo)) continue;
     out.push({ mmsi, lat: v.lat, lon: v.lon, speed: v.speed, navStatus: v.navStatus, timestamp: v.timestamp, delayed: delayByMmsi.has(mmsi) });
   }
   return out;
@@ -1778,7 +1778,7 @@ function updateFerryDelays(now = Date.now()) {
     for (const [mmsi, v] of vessels) {
       const stat = vesselStatic.get(mmsi);
       // Only track freight vessels (cargo + RoPax-by-operator), not tourist craft.
-      if (!isFreightVessel(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name))) {
+      if (!isFreightVessel(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name), stat && stat.imo)) {
         etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue;
       }
       const port = resolveDestinationPort(stat && stat.destination);
