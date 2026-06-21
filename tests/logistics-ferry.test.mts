@@ -86,6 +86,21 @@ describe('destination resolution', () => {
     assert.equal(matchDestinationPort('ITPRJ')?.id, 'capri');
   });
 
+  it('resolves major commercial freight ports (LOCODE + name)', () => {
+    assert.equal(matchDestinationPort('ITGIT')?.id, 'gioia_tauro');   // Italy's #1 container port
+    assert.equal(matchDestinationPort('ITSPE')?.id, 'la_spezia');
+    assert.equal(matchDestinationPort('ITTRS')?.id, 'trieste');
+    assert.equal(matchDestinationPort('GIOIA TAURO')?.id, 'gioia_tauro'); // name fallback
+    assert.equal(matchDestinationPort('LA SPEZIA')?.id, 'la_spezia');
+    assert.equal(matchDestinationPort('MONFALCONE')?.id, 'monfalcone'); // name-only (no LOCODE)
+  });
+
+  it('resolves freight ports to their Meteoalarm region', () => {
+    assert.equal(matchDestinationPort('ITGIT')?.region, 'Calabria');
+    assert.equal(matchDestinationPort('ITTRS')?.region, 'Friuli Venezia Giulia');
+    assert.equal(matchDestinationPort('ITRAN')?.region, 'Emilia e Romagna');
+  });
+
   it('resolves multi-leg / round-trip strings to the final leg', () => {
     assert.equal(matchDestinationPort('ITFRD-ITISH-ITNAP')?.id, 'naples');
     assert.equal(matchDestinationPort('ITPOZ<>ITPRO')?.id, 'procida');
@@ -95,7 +110,7 @@ describe('destination resolution', () => {
 
   it('returns undefined for ports outside the curated set', () => {
     assert.equal(matchDestinationPort('FRAJA'), undefined);  // Ajaccio (France)
-    assert.equal(matchDestinationPort('ITTRS'), undefined);  // Trieste (not a ferry island port)
+    assert.equal(matchDestinationPort('HRSPU'), undefined);  // Split (Croatia) — out of scope
   });
 
   it('infers destination from course toward a nearby island', () => {

@@ -25,6 +25,8 @@ export interface FerryPort {
   group?: string;
   /** Italian administrative region (matches Meteoalarm cap:areaDesc, e.g. "Campania"). */
   region?: string;
+  /** True for a commercial freight port (vs an island/tourist terminal). */
+  commercial?: boolean;
   /** Common AIS destination-field spellings (UPPERCASE) for text matching. */
   aisNames: string[];
 }
