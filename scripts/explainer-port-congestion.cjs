@@ -47,9 +47,9 @@ function assessPortCongestion(port, vessels, now = Date.now(), opts = {}) {
   return {
     source: 'port',
     kind: 'port_congestion',
-    summary: `${port.name || 'Destination'} port congested — ${count} vessels waiting`,
+    summary: `${port.name || 'Destination'} port congested — ${count} ferries waiting`,
     confidence: count >= 8 ? 0.75 : 0.6,
-    detail: `${count} vessels stopped within ${o.radiusKm} km of the port`,
+    detail: `${count} ferries stopped within ${o.radiusKm} km of the port`,
   };
 }
 

@@ -57,26 +57,26 @@ describe('toTrackedFerry', () => {
 });
 
 describe('buildFerryBoard', () => {
-  it('keeps Italian ferries and drops unrelated vessels', () => {
+  it('keeps freight vessels (cargo + RoPax operators), drops tourist/cruise', () => {
     const vessels: LiveVessel[] = [
-      vessel({ mmsi: '247111111', name: 'GNV ATLAS', speedKnots: 18, destination: 'PALERMO' }),
-      vessel({ mmsi: '636000000', name: 'EVER GIVEN', category: 'cargo', shipType: 70, speedKnots: 12 }),
-      vessel({ mmsi: '247222222', name: 'CAREMAR ISCHIA', speedKnots: 0, navStatus: 5 }),
+      vessel({ mmsi: '247111111', name: 'GNV ATLAS', speedKnots: 18, destination: 'PALERMO' }),       // RoPax freight operator
+      vessel({ mmsi: '636000000', name: 'EVER GIVEN', category: 'cargo', shipType: 70, speedKnots: 12 }), // cargo => freight
+      vessel({ mmsi: '247222222', name: 'CAREMAR ISCHIA', speedKnots: 0, navStatus: 5 }),              // tourist passenger
     ];
     const board = buildFerryBoard(vessels);
     const names = board.map((f) => f.name);
     assert.ok(names.includes('GNV ATLAS'));
-    assert.ok(names.includes('CAREMAR ISCHIA'));
-    assert.ok(!names.includes('EVER GIVEN'));
+    assert.ok(names.includes('EVER GIVEN'));        // cargo is freight
+    assert.ok(!names.includes('CAREMAR ISCHIA'));   // tourist excluded
   });
 
-  it('sorts under-way ferries ahead of in-port ones', () => {
+  it('sorts under-way freight vessels ahead of in-port ones', () => {
     const board = buildFerryBoard([
-      vessel({ mmsi: '247222222', name: 'PORT BOAT', navStatus: 5, speedKnots: 0 }),
-      vessel({ mmsi: '247111111', name: 'SEA BOAT', speedKnots: 18, destination: 'OLBIA', lat: 42.09, lon: 11.79 }),
+      vessel({ mmsi: '247222222', name: 'GNV PORT', navStatus: 5, speedKnots: 0 }),
+      vessel({ mmsi: '247111111', name: 'GNV SEA', speedKnots: 18, destination: 'OLBIA', lat: 42.09, lon: 11.79 }),
     ]);
-    assert.equal(board[0]!.name, 'SEA BOAT');
-    assert.equal(board[1]!.name, 'PORT BOAT');
+    assert.equal(board[0]!.name, 'GNV SEA');
+    assert.equal(board[1]!.name, 'GNV PORT');
   });
 });
 
@@ -89,7 +89,7 @@ describe('sortFerries', () => {
 });
 
 describe('getTrackedItalianFerries', () => {
-  it('queries the provider with the Italy bbox + passenger categories', async () => {
+  it('queries the provider with the Italy bbox + freight categories', async () => {
     let captured: unknown;
     const mockProvider: VesselDataProvider = {
       id: 'mock',
@@ -102,6 +102,7 @@ describe('getTrackedItalianFerries', () => {
     assert.equal(board.length, 1);
     assert.equal(board[0]!.destinationPortId, 'porto_torres');
     assert.deepEqual((captured as { bbox: number[] }).bbox, [35.0, 6.0, 46.5, 19.5]);
-    assert.deepEqual((captured as { categories: string[] }).categories, ['passenger', 'hsc']);
+    assert.deepEqual((captured as { categories: string[] }).categories, ['cargo', 'passenger']);
+    assert.equal((captured as { freight: boolean }).freight, true);
   });
 });
