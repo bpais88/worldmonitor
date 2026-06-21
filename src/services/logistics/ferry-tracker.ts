@@ -12,7 +12,7 @@ import {
   ITALY_FERRY_PORTS,
   ITALY_FERRY_OPERATORS,
 } from '../../config/italy-ferries';
-import { isItalianFerry, matchItalianFerryOperator, estimateFerryEta } from './ferry';
+import { isFreightVessel, matchItalianFerryOperator, estimateFerryEta } from './ferry';
 import { validateSailing, type RouteStatus } from './route-validation';
 
 export type FerryStatus = 'under_way' | 'at_anchor' | 'in_port';
@@ -127,10 +127,10 @@ export function sortFerries(a: TrackedFerry, b: TrackedFerry): number {
   return a.name.localeCompare(b.name);
 }
 
-/** Build the tracked-ferry board from a set of live vessels (pure). */
+/** Build the tracked freight-vessel board from a set of live vessels (pure). */
 export function buildFerryBoard(vessels: LiveVessel[], now: number = Date.now()): TrackedFerry[] {
   return vessels
-    .filter((v) => isItalianFerry(v))
+    .filter((v) => isFreightVessel(v))
     .map((v) => toTrackedFerry(v, now))
     .sort(sortFerries);
 }
@@ -142,7 +142,8 @@ export async function getTrackedItalianFerries(
 ): Promise<TrackedFerry[]> {
   const vessels = await provider.getVesselsInBounds({
     bbox: ITALY_BBOX,
-    categories: ['passenger', 'hsc'],
+    categories: ['cargo', 'passenger'],
+    freight: true,
     limit: 3000,
   });
   return buildFerryBoard(vessels, now);

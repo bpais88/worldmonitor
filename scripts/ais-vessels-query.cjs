@@ -51,7 +51,7 @@ function inBounds(v, bounds) {
 
 // Build the /ais/vessels response array from the live vessel + static maps.
 // Merges static data (destination, IMO, fallback ship type) per vessel.
-function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit }) {
+function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit, isFreight }) {
   const out = [];
   for (const [mmsi, v] of vessels) {
     if (bounds && !inBounds(v, bounds)) continue;
@@ -63,9 +63,13 @@ function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit }) {
     const category = shipTypeCategory(shipType);
     if (wantTypes && !wantTypes.has(category)) continue;
 
+    const name = v.name || (stat && stat.name) || '';
+    // Freight filter (research-backed): cargo + RoPax-by-operator only.
+    if (isFreight && !isFreight(shipType, name)) continue;
+
     out.push({
       mmsi,
-      name: v.name || (stat && stat.name) || '',
+      name,
       lat: v.lat,
       lon: v.lon,
       speed: v.speed,

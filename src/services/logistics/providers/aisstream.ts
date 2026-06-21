@@ -109,6 +109,7 @@ export function buildVesselsQueryString(query: VesselQuery): string {
   const params = new URLSearchParams();
   if (query.bbox) params.set('bbox', query.bbox.join(','));
   if (query.categories && query.categories.length > 0) params.set('types', query.categories.join(','));
+  if (query.freight) params.set('freight', '1');
   if (query.limit && Number.isFinite(query.limit)) params.set('limit', String(query.limit));
   const s = params.toString();
   return s ? `?${s}` : '';

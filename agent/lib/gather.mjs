@@ -19,7 +19,7 @@ function formatEta(hoursRemaining) {
 
 /** GET the relay vessels and return only flagged ones, as incidents. */
 export async function fetchIncidents(relayBase, sharedSecret, bbox = ITALY_BBOX) {
-  const url = `${relayBase.replace(/\/$/, '')}/ais/vessels?bbox=${bbox}&types=passenger,hsc&limit=3000`;
+  const url = `${relayBase.replace(/\/$/, '')}/ais/vessels?bbox=${bbox}&types=cargo,passenger&freight=1&limit=3000`;
   const res = await fetch(url, {
     headers: { Accept: 'application/json', ...(sharedSecret ? { 'x-relay-key': sharedSecret } : {}) },
   });

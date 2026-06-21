@@ -35,6 +35,8 @@ export interface FerryOperator {
   name: string;
   /** UPPERCASE substrings to match against an AIS ship name. */
   keywords: string[];
+  /** True for freight RoPax / RoRo lines (carry trucks/containers), not tourist. */
+  freight?: boolean;
 }
 
 /** A scheduled mainland -> island connection (operator optional). */

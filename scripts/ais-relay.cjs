@@ -1666,14 +1666,14 @@ function isLikelyMilitaryCandidate(meta) {
 
 // Pure query/filter helpers for /ais/vessels live in a separate module so they
 // can be unit-tested without starting the relay server.
-const { parseBbox, parseTypes, clampLimit, buildVesselList, shipTypeCategory } = require('./ais-vessels-query.cjs');
+const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-vessels-query.cjs');
 
 // --- Ferry delay detection (Method B): ETA-drift over time -----------------
 // Resolves each Italian-island-bound vessel's destination + ETA, snapshots the
 // ETA on a timer, and flags crossings whose predicted arrival is slipping (or
 // stalled mid-crossing) — without any external timetable. History persists to
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
-const { resolveDestinationPort, etaFor, resolveOperatorName } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName, isFreightVessel } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
@@ -1684,20 +1684,21 @@ const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-m
 
 // Pluggable "why is it delayed?" explainers — add sources here over time.
 // Port congestion + cross-vessel read our own live data (no external call).
-const portCongestionExplainer = makePortCongestionExplainer(() => Array.from(vessels.values()));
-// Ferry list (passenger/hsc) with current delayed flags, for cross-vessel correlation.
-function getFerriesForCorrelation() {
+const portCongestionExplainer = makePortCongestionExplainer(getFerryVessels);
+// Freight vessels (cargo + RoPax-by-operator) with delayed flags + the fields
+// the self-contained explainers (congestion, cross-vessel) need.
+function getFerryVessels() {
   const out = [];
   for (const [mmsi, v] of vessels) {
     const stat = vesselStatic.get(mmsi);
     const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
-    const cat = shipTypeCategory(st);
-    if (cat !== 'passenger' && cat !== 'hsc') continue;
-    out.push({ mmsi, lat: v.lat, lon: v.lon, delayed: delayByMmsi.has(mmsi) });
+    const name = v.name || (stat && stat.name) || '';
+    if (!isFreightVessel(st, name)) continue;
+    out.push({ mmsi, lat: v.lat, lon: v.lon, speed: v.speed, navStatus: v.navStatus, timestamp: v.timestamp, delayed: delayByMmsi.has(mmsi) });
   }
   return out;
 }
-const crossVesselExplainer = makeCrossVesselExplainer(getFerriesForCorrelation);
+const crossVesselExplainer = makeCrossVesselExplainer(getFerryVessels);
 // Meteoalarm: official EU warnings. Feed is fetched on a timer (one call for all
 // of Italy) and cached here; the explainer just reads the cache.
 let meteoalarmWarnings = [];
@@ -1776,6 +1777,10 @@ function updateFerryDelays(now = Date.now()) {
   try {
     for (const [mmsi, v] of vessels) {
       const stat = vesselStatic.get(mmsi);
+      // Only track freight vessels (cargo + RoPax-by-operator), not tourist craft.
+      if (!isFreightVessel(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name))) {
+        etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue;
+      }
       const port = resolveDestinationPort(stat && stat.destination);
       if (!port) { etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue; }
       const eta = etaFor({ lat: v.lat, lon: v.lon, speedKnots: v.speed }, port, now);
@@ -3921,7 +3926,10 @@ const server = http.createServer(async (req, res) => {
       lastVesselsCleanupAt = nowTs;
     }
 
-    const out = buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit });
+    const freight = url.searchParams.get('freight') === '1';
+    const out = buildVesselList(vessels, vesselStatic, {
+      bounds, wantTypes, limit, isFreight: freight ? isFreightVessel : undefined,
+    });
 
     // Attach delay status (Method B) + any explainer reasons for the vessel.
     for (const v of out) {

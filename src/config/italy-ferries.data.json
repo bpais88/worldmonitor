@@ -526,7 +526,8 @@
       "name": "Tirrenia / CIN",
       "keywords": [
         "TIRRENIA"
-      ]
+      ],
+      "freight": true
     },
     {
       "id": "gnv",
@@ -534,21 +535,24 @@
       "keywords": [
         "GNV",
         "GRANDI NAVI VELOCI"
-      ]
+      ],
+      "freight": true
     },
     {
       "id": "moby",
       "name": "Moby Lines",
       "keywords": [
         "MOBY"
-      ]
+      ],
+      "freight": true
     },
     {
       "id": "grimaldi",
       "name": "Grimaldi Lines",
       "keywords": [
         "GRIMALDI"
-      ]
+      ],
+      "freight": true
     },
     {
       "id": "corsica_sardinia",
@@ -556,21 +560,24 @@
       "keywords": [
         "CORSICA",
         "SARDINIA FERRIES"
-      ]
+      ],
+      "freight": true
     },
     {
       "id": "caremar",
       "name": "Caremar",
       "keywords": [
         "CAREMAR"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "siremar",
       "name": "Siremar",
       "keywords": [
         "SIREMAR"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "liberty_lines",
@@ -578,35 +585,40 @@
       "keywords": [
         "LIBERTY LINES",
         "USTICA LINES"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "snav",
       "name": "SNAV",
       "keywords": [
         "SNAV"
-      ]
+      ],
+      "freight": true
     },
     {
       "id": "toremar",
       "name": "Toremar",
       "keywords": [
         "TOREMAR"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "laziomar",
       "name": "Laziomar",
       "keywords": [
         "LAZIOMAR"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "alilauro",
       "name": "Alilauro",
       "keywords": [
         "ALILAURO"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "nlg",
@@ -614,14 +626,16 @@
       "keywords": [
         "NLG",
         "LIBERA DEL GOLFO"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "blunavy",
       "name": "Blu Navy",
       "keywords": [
         "BLU NAVY"
-      ]
+      ],
+      "freight": false
     },
     {
       "id": "caronte",
@@ -629,7 +643,8 @@
       "keywords": [
         "CARONTE",
         "BLU JET"
-      ]
+      ],
+      "freight": true
     }
   ]
 }

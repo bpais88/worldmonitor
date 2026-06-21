@@ -93,4 +93,28 @@ function resolveOperatorName(vesselName) {
   return '';
 }
 
-module.exports = { resolveDestinationPort, etaFor, haversineKm, resolveOperatorName };
+/** True if a vessel name belongs to a freight RoPax / RoRo operator. */
+function isFreightOperator(vesselName) {
+  if (!vesselName) return false;
+  const upper = String(vesselName).toUpperCase();
+  for (const op of data.operators || []) {
+    if (op.freight && (op.keywords || []).some((k) => upper.includes(k))) return true;
+  }
+  return false;
+}
+
+/**
+ * Whether a vessel is freight/logistics (carries containers/trailers), per the
+ * research-backed rule: all cargo/RoRo (type 70-79), plus passenger vessels
+ * (60-69) only when operated by a freight RoPax line — which excludes cruise
+ * ships and tourist ferries that also broadcast "passenger". AIS ship-type
+ * alone can't separate RoPax from cruise, so we use the operator as the signal.
+ */
+function isFreightVessel(shipType, vesselName) {
+  const t = Number(shipType);
+  if (t >= 70 && t <= 79) return true;            // cargo / RoRo / container
+  if (t >= 60 && t <= 69) return isFreightOperator(vesselName); // RoPax (not cruise/tourist)
+  return false;                                    // tanker, HSC, passenger-tourist, other
+}
+
+module.exports = { resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, isFreightVessel };

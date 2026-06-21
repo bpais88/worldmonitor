@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { resolveDestinationPort, etaFor, resolveOperatorName } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName, isFreightVessel } = require('./ferry-eta.cjs');
 
 test('resolves a plain LOCODE to its port', () => {
   const p = resolveDestinationPort('ITNAP');
@@ -64,4 +64,20 @@ test('resolveOperatorName matches a known operator from the vessel name', () => 
   assert.equal(resolveOperatorName('MOBY TOMMY'), 'Moby Lines');
   assert.equal(resolveOperatorName('UNKNOWN VESSEL'), '');
   assert.equal(resolveOperatorName(''), '');
+});
+
+test('isFreightVessel: cargo always; passenger only if a freight RoPax operator', () => {
+  // Cargo / RoRo (type 70-79) — always freight, operator irrelevant.
+  assert.equal(isFreightVessel(70, 'MSC GENOVA'), true);
+  assert.equal(isFreightVessel(79, ''), true);
+  // Passenger (60-69) operated by a freight RoPax line — freight.
+  assert.equal(isFreightVessel(60, 'GNV ALLEGRA'), true);
+  assert.equal(isFreightVessel(69, 'MOBY TOMMY'), true);
+  // Passenger but a CRUISE ship (not a freight operator) — excluded.
+  assert.equal(isFreightVessel(60, 'MSC SEAVIEW'), false);
+  // Passenger tourist ferry (Caremar) — excluded.
+  assert.equal(isFreightVessel(60, 'CAREMAR DRIADE'), false);
+  // HSC hydrofoil + tanker — excluded.
+  assert.equal(isFreightVessel(40, 'LIBERTY LINES JET'), false);
+  assert.equal(isFreightVessel(80, 'SOME TANKER'), false);
 });
