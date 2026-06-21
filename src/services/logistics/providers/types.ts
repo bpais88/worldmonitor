@@ -47,6 +47,8 @@ export interface VesselQuery {
   bbox?: [number, number, number, number];
   /** Restrict to these coarse categories (e.g. ['passenger']). */
   categories?: ShipCategory[];
+  /** Restrict to freight vessels (cargo + RoPax-by-operator) — relay-side filter. */
+  freight?: boolean;
   /** Max vessels to return. */
   limit?: number;
 }

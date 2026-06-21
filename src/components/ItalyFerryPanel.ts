@@ -28,7 +28,7 @@ export class ItalyFerryPanel extends Panel {
   private readonly ferryByMmsi = new Map<string, TrackedFerry>();
 
   constructor() {
-    super({ id: 'italy-ferries', title: 'Italy Ferries', showCount: true });
+    super({ id: 'italy-ferries', title: 'Italy Freight', showCount: true });
   }
 
   public start(): void {

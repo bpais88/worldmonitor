@@ -39,6 +39,28 @@ export function isItalianFerry(vessel: Pick<VesselPosition, 'name' | 'shipType' 
   return italianFlag && isFerryShipType(vessel.shipType);
 }
 
+/** True if a vessel name belongs to a freight RoPax / RoRo operator. */
+export function isFreightOperator(name: string | undefined): boolean {
+  if (!name) return false;
+  const id = matchItalianFerryOperator(name);
+  if (!id) return false;
+  const op = ITALY_FERRY_OPERATORS.find((o) => o.id === id);
+  return !!op?.freight;
+}
+
+/**
+ * True if a vessel is freight/logistics (carries containers/trailers): all cargo
+ * (type 70-79), plus passenger vessels (60-69) only when operated by a freight
+ * RoPax line — excludes cruise ships + tourist ferries. Mirrors the relay's
+ * isFreightVessel; see docs/AIS_VESSEL_CLASSIFICATION_RESEARCH.md.
+ */
+export function isFreightVessel(vessel: Pick<VesselPosition, 'name' | 'shipType'>): boolean {
+  const t = vessel.shipType;
+  if (typeof t === 'number' && t >= 70 && t <= 79) return true;
+  if (isFerryShipType(t)) return isFreightOperator(vessel.name);
+  return false;
+}
+
 const ISLAND_PORTS = ITALY_FERRY_PORTS.filter((p) => p.side === 'island');
 const PORT_BY_ID = new Map(ITALY_FERRY_PORTS.map((p) => [p.id, p] as const));
 
