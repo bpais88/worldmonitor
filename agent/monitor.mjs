@@ -15,6 +15,7 @@ import { postSlack } from './lib/deliver.mjs';
 import { makeStore } from './lib/memory.mjs';
 
 const DRY_RUN = process.argv.includes('--dry-run') || !process.env.SLACK_WEBHOOK_URL;
+const DASHBOARD_URL = process.env.DASHBOARD_URL || 'https://worldmonitor-rouge-delta.vercel.app/ferry.html';
 // Anti-flood: never send more than this many individual pings per tick (cold
 // start or a genuine mass event); the rest collapse into one summary line.
 const MAX_PINGS = Number(process.env.MONITOR_MAX_PINGS) || 6;
@@ -39,7 +40,7 @@ async function tick() {
   const overflow = ranked.length - shown.length;
 
   for (const p of shown) {
-    await postSlack(webhook, formatPing(p), { dryRun: DRY_RUN });
+    await postSlack(webhook, formatPing(p, { dashboardUrl: DASHBOARD_URL }), { dryRun: DRY_RUN });
   }
   if (overflow > 0) {
     await postSlack(webhook, `… and *${overflow}* more ferries newly delayed this cycle.`, { dryRun: DRY_RUN });

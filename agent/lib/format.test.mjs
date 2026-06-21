@@ -20,6 +20,16 @@ test('formatPing includes vessel, destination, delay and the top reason', () => 
   assert.match(s, /coastal warning/i);
 });
 
+test('formatPing includes the ETA when available', () => {
+  const s = formatPing({ incident: inc({ etaText: '1h 10m' }), kind: 'new' });
+  assert.match(s, /ETA 1h 10m/);
+});
+
+test('formatPing includes a dashboard link when given', () => {
+  const s = formatPing({ incident: inc() }, { dashboardUrl: 'https://example.app/ferry.html' });
+  assert.match(s, /https:\/\/example\.app\/ferry\.html/);
+});
+
 test('formatPing marks an escalation', () => {
   const s = formatPing({ incident: inc(), kind: 'escalated' });
   assert.match(s, /escalat/i);

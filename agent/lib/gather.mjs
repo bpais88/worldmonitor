@@ -4,9 +4,18 @@
 
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
-const { resolveDestinationPort } = require('../../scripts/ferry-eta.cjs');
+const { resolveDestinationPort, etaFor } = require('../../scripts/ferry-eta.cjs');
 
 const ITALY_BBOX = '35,6,46.5,19.5';
+
+/** Format hours-to-arrival like the UI: "44m" / "1h 10m", or null. */
+function formatEta(hoursRemaining) {
+  if (!Number.isFinite(hoursRemaining)) return null;
+  const totalMin = Math.round(hoursRemaining * 60);
+  const h = Math.floor(totalMin / 60);
+  const m = totalMin % 60;
+  return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
 
 /** GET the relay vessels and return only flagged ones, as incidents. */
 export async function fetchIncidents(relayBase, sharedSecret, bbox = ITALY_BBOX) {
@@ -21,6 +30,7 @@ export async function fetchIncidents(relayBase, sharedSecret, bbox = ITALY_BBOX)
     const d = v.delay;
     if (!d || (!d.slipping && !d.stalled)) continue;
     const port = resolveDestinationPort(v.destination);
+    const eta = port ? etaFor({ lat: v.lat, lon: v.lon, speedKnots: v.speed }, port) : null;
     out.push({
       mmsi: String(v.mmsi),
       name: (v.name || `MMSI ${v.mmsi}`).trim(),
@@ -28,6 +38,7 @@ export async function fetchIncidents(relayBase, sharedSecret, bbox = ITALY_BBOX)
       region: port ? port.region : null,
       stalled: !!d.stalled,
       etaGrowthMin: Number.isFinite(d.etaGrowthMin) ? d.etaGrowthMin : 0,
+      etaText: eta ? formatEta(eta.hoursRemaining) : null,
       reasons: Array.isArray(d.reasons) ? d.reasons : [],
     });
   }

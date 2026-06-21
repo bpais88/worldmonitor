@@ -20,12 +20,14 @@ function reasonLine(incident) {
 }
 
 /** One real-time ping line for an incident. */
-export function formatPing({ incident, kind }) {
+export function formatPing({ incident, kind }, opts = {}) {
   const head = kind === 'escalated' ? '↑ *Escalation*' : '🚨';
   const dest = incident.destName ? ` → ${incident.destName}` : '';
+  const eta = incident.etaText ? ` · ETA ${incident.etaText}` : '';
   const why = reasonLine(incident);
   const whyLine = why ? `\n    ${why}` : '';
-  return `${head} *${incident.name}*${dest} — ${delayPhrase(incident)}${whyLine}`;
+  const link = opts.dashboardUrl ? `\n    <${opts.dashboardUrl}|View on the board>` : '';
+  return `${head} *${incident.name}*${dest} — ${delayPhrase(incident)}${eta}${whyLine}${link}`;
 }
 
 /** A resolution note. */
