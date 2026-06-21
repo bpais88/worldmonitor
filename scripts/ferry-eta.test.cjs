@@ -30,7 +30,7 @@ test('falls back to a port name when no LOCODE matches', () => {
 
 test('returns null for out-of-scope / unknown destinations', () => {
   assert.equal(resolveDestinationPort('FRAJA'), null);  // Ajaccio, France
-  assert.equal(resolveDestinationPort('ITTRS'), null);  // Trieste, not a ferry-island port
+  assert.equal(resolveDestinationPort('HRSPU'), null);  // Split, Croatia — out of scope
   assert.equal(resolveDestinationPort(''), null);
   assert.equal(resolveDestinationPort(undefined), null);
 });

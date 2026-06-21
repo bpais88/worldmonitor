@@ -494,6 +494,180 @@
         "SAN DOMINO"
       ],
       "region": "Puglia"
+    },
+    {
+      "id": "gioia_tauro",
+      "name": "Gioia Tauro",
+      "lat": 38.43,
+      "lon": 15.9,
+      "region": "Calabria",
+      "aisNames": [
+        "GIOIA TAURO",
+        "GIOIATAURO",
+        "GIOIA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "la_spezia",
+      "name": "La Spezia",
+      "lat": 44.1,
+      "lon": 9.83,
+      "region": "Liguria",
+      "aisNames": [
+        "LA SPEZIA",
+        "SPEZIA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "trieste",
+      "name": "Trieste",
+      "lat": 45.64,
+      "lon": 13.76,
+      "region": "Friuli Venezia Giulia",
+      "aisNames": [
+        "TRIESTE"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "ravenna",
+      "name": "Ravenna",
+      "lat": 44.48,
+      "lon": 12.28,
+      "region": "Emilia e Romagna",
+      "aisNames": [
+        "RAVENNA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "vado_ligure",
+      "name": "Vado Ligure",
+      "lat": 44.27,
+      "lon": 8.44,
+      "region": "Liguria",
+      "aisNames": [
+        "VADO LIGURE",
+        "VADO"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "savona",
+      "name": "Savona",
+      "lat": 44.31,
+      "lon": 8.49,
+      "region": "Liguria",
+      "aisNames": [
+        "SAVONA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "taranto",
+      "name": "Taranto",
+      "lat": 40.47,
+      "lon": 17.22,
+      "region": "Puglia",
+      "aisNames": [
+        "TARANTO"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "bari",
+      "name": "Bari",
+      "lat": 41.14,
+      "lon": 16.87,
+      "region": "Puglia",
+      "aisNames": [
+        "BARI"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "brindisi",
+      "name": "Brindisi",
+      "lat": 40.65,
+      "lon": 17.99,
+      "region": "Puglia",
+      "aisNames": [
+        "BRINDISI"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "ancona",
+      "name": "Ancona",
+      "lat": 43.62,
+      "lon": 13.51,
+      "region": "Marche",
+      "aisNames": [
+        "ANCONA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "venezia",
+      "name": "Venezia",
+      "lat": 45.44,
+      "lon": 12.34,
+      "region": "Veneto",
+      "aisNames": [
+        "VENEZIA",
+        "VENICE"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "porto_marghera",
+      "name": "Porto Marghera",
+      "lat": 45.45,
+      "lon": 12.26,
+      "region": "Veneto",
+      "aisNames": [
+        "MARGHERA",
+        "PORTO MARGHERA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "monfalcone",
+      "name": "Monfalcone",
+      "lat": 45.8,
+      "lon": 13.55,
+      "region": "Friuli Venezia Giulia",
+      "aisNames": [
+        "MONFALCONE"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "augusta",
+      "name": "Augusta",
+      "lat": 37.2,
+      "lon": 15.22,
+      "region": "Sicilia",
+      "aisNames": [
+        "AUGUSTA"
+      ],
+      "side": "mainland",
+      "commercial": true
     }
   ],
   "locodes": {
@@ -518,7 +692,19 @@
     "ITPNZ": "ponza",
     "ITLMP": "lampedusa",
     "ITPIO": "piombino",
-    "ITLEV": "levanzo"
+    "ITLEV": "levanzo",
+    "ITSPE": "la_spezia",
+    "ITTRS": "trieste",
+    "ITGIT": "gioia_tauro",
+    "ITRAN": "ravenna",
+    "ITTAR": "taranto",
+    "ITAOI": "ancona",
+    "ITVCE": "venezia",
+    "ITBRI": "bari",
+    "ITBDS": "brindisi",
+    "ITSVN": "savona",
+    "ITAUG": "augusta",
+    "ITVDL": "vado_ligure"
   },
   "operators": [
     {
