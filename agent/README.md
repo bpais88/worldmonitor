@@ -35,14 +35,27 @@ node agent/monitor.mjs --dry-run
 **Cron caveat:** each cron run is a fresh process, so cross-run dedup *requires*
 Upstash. Without it the agent re-pings ongoing delays every tick.
 
-## Deploy as a Railway cron service
+## Deploy — GitHub Actions cron (live)
 
-1. In the existing Railway project, **add a new service** from the same repo.
-2. Start command: `node agent/monitor.mjs`  (no build/deps needed — pure Node +
-   the shared port JSON).
-3. Set it to run on a **cron schedule**, e.g. `*/10 * * * *`.
-4. Set env vars: `RELAY_URL`, `RELAY_SHARED_SECRET`, `SLACK_WEBHOOK_URL`,
-   `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`.
+The scheduled run is wired in `.github/workflows/ferry-monitor.yml` (every 10
+min + a manual "Run workflow" button). To go live, add in the GitHub repo
+(Settings → Secrets and variables → Actions):
 
-The agent is deploy-neutral to the web/relay: it lives in `agent/`, which is
-outside the relay's watch paths and the Vercel build.
+- **Variable** `RELAY_URL` = the Railway relay base URL.
+- **Secrets**: `RELAY_SHARED_SECRET`, `SLACK_WEBHOOK_URL`,
+  `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`.
+
+Until `SLACK_WEBHOOK_URL` is set the agent runs in dry-run (logs only, visible in
+the Actions run logs). Use the "Run workflow" button with *dry_run* checked to
+test safely.
+
+**Cron caveat:** each run is a fresh process, so cross-run dedup *requires*
+Upstash. Without it the agent re-pings ongoing delays every tick.
+
+### Alternative: Railway cron service
+`agent/railway.json` (cronSchedule `*/10`, start `node agent/monitor.mjs`) is
+provided if you prefer Railway; create a new service in the project, set its
+Config File Path to `agent/railway.json` (dashboard), and add the same env vars.
+
+The agent is deploy-neutral to the web/relay: it lives in `agent/`, outside the
+relay's watch paths and the Vercel build.

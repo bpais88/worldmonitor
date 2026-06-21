@@ -1,0 +1,50 @@
+name: Ferry freight monitor
+
+# Runs the monitoring agent every 10 minutes: gathers flagged freight vessels
+# from the relay, dedups vs Upstash memory, and posts Slack alerts.
+# Manual run via the "Run workflow" button (workflow_dispatch) for testing.
+#
+# Required repo secrets (Settings → Secrets and variables → Actions → Secrets):
+#   RELAY_SHARED_SECRET, SLACK_WEBHOOK_URL,
+#   UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+# Required repo variable (Settings → ... → Variables):
+#   RELAY_URL   e.g. https://worldmonitor-relay-production-e8ec.up.railway.app
+#
+# Until SLACK_WEBHOOK_URL is set the agent runs in dry-run (logs only).
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Log instead of posting to Slack'
+        type: boolean
+        default: false
+
+concurrency:
+  group: ferry-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - name: Run monitor tick
+        env:
+          RELAY_URL: ${{ vars.RELAY_URL }}
+          RELAY_SHARED_SECRET: ${{ secrets.RELAY_SHARED_SECRET }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}
+        run: |
+          if [ "${{ github.event.inputs.dry_run }}" = "true" ]; then
+            node agent/monitor.mjs --dry-run
+          else
+            node agent/monitor.mjs
+          fi
