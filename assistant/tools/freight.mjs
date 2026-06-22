@@ -36,20 +36,23 @@ export const freightTools = [
   {
     name: 'find_freight_vessels',
     description:
-      'List tracked Italian freight vessels (cargo + RoPax). Optionally filter by operator id and/or a free-text name match. Returns name, operator, category, destination, speed, and whether delayed. Use for "which Grimaldi ships are sailing", "find vessel NAME", "cargo bound for X".',
+      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, and whether delayed. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships".',
     input_schema: {
       type: 'object',
       properties: {
         operator: { type: 'string', enum: OPERATOR_IDS, description: 'operator id to filter by' },
         nameContains: { type: 'string', description: 'case-insensitive vessel-name substring' },
+        destinationContains: { type: 'string', description: 'match the AIS destination, a LOCODE substring (e.g. "ITNAP" for Naples)' },
+        delayedOnly: { type: 'boolean', description: 'only vessels currently flagged delayed' },
         limit: { type: 'integer', description: 'max vessels to return (default 50)' },
       },
       additionalProperties: false,
     },
-    handler: async ({ operator, nameContains, limit = 50 } = {}) => {
-      // The relay can't filter by name, so a name search must pull the full set
-      // and filter locally — otherwise a match past the first page is missed.
-      const fetchLimit = nameContains ? 3000 : Math.min(limit, 200);
+    handler: async ({ operator, nameContains, destinationContains, delayedOnly, limit = 50 } = {}) => {
+      // Any local filter must pull the full set first — otherwise a match past the
+      // first page is missed (the relay only filters by operator server-side).
+      const hasLocalFilter = !!(nameContains || destinationContains || delayedOnly);
+      const fetchLimit = hasLocalFilter ? 3000 : Math.min(limit, 200);
       const qs = new URLSearchParams({ types: 'cargo,passenger', freight: '1', limit: String(fetchLimit) });
       if (operator) qs.set('operator', operator);
       const j = await relayGet(`/ais/vessels?${qs}`);
@@ -57,6 +60,13 @@ export const freightTools = [
       if (nameContains) {
         const q = String(nameContains).toLowerCase();
         vs = vs.filter((v) => (v.name || '').toLowerCase().includes(q));
+      }
+      if (destinationContains) {
+        const d = String(destinationContains).toLowerCase();
+        vs = vs.filter((v) => (v.destination || '').toLowerCase().includes(d));
+      }
+      if (delayedOnly) {
+        vs = vs.filter((v) => v.delay && (v.delay.slipping || v.delay.stalled));
       }
       return {
         count: vs.length,
