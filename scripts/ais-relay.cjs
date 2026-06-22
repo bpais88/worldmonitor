@@ -1693,7 +1693,10 @@ const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { ITALY_TILES, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
-const { computeAllPortStatus } = require('./port-status.cjs');
+const { computeAllPortStatus, smoothPortStatus } = require('./port-status.cjs');
+// Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
+// congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
+const portStatusHistory = new Map();
 const ITALY_PORTS_BY_ID = require('../src/config/italy-ferries.data.json').ports;
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
@@ -4062,6 +4065,10 @@ const server = http.createServer(async (req, res) => {
     const ports = computeAllPortStatus(
       ITALY_PORTS_BY_ID, freightVessels, resolveDestinationPort, now, {}, (p) => p.commercial,
     );
+    // Median-smooth atPort over recent calls + recompute congestion, then re-sort.
+    smoothPortStatus(ports, portStatusHistory);
+    const rank = { congested: 2, busy: 1, clear: 0 };
+    ports.sort((a, b) => (rank[b.congestion] - rank[a.congestion]) || (b.atPort - a.atPort) || (b.inbound - a.inbound));
     return sendCompressed(req, res, 200, {
       'Content-Type': 'application/json',
       'Cache-Control': 'public, max-age=15',

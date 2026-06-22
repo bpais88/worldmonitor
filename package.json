@@ -9,6 +9,8 @@
     "version:sync": "node scripts/sync-desktop-version.mjs",
     "version:check": "node scripts/sync-desktop-version.mjs --check",
     "dev": "vite",
+    "assistant:cli": "node assistant/cli.mjs",
+    "assistant:slack": "node assistant/slack/server.mjs",
     "dev:tech": "cross-env VITE_VARIANT=tech vite",
     "dev:finance": "cross-env VITE_VARIANT=finance vite",
     "dev:happy": "cross-env VITE_VARIANT=happy vite",
@@ -73,6 +75,7 @@
     "vite-plugin-pwa": "^1.2.0"
   },
   "dependencies": {
+    "@anthropic-ai/sdk": "^0.105.0",
     "@deck.gl/aggregation-layers": "^9.2.6",
     "@deck.gl/core": "^9.2.6",
     "@deck.gl/geo-layers": "^9.2.6",

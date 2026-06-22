@@ -47,3 +47,7 @@ scripts/data/iran-events-latest.json
 
 # Local API keys (never commit)
 .marinesia-key
+.anthropic-key
+
+# Agent-generated reports
+reports/

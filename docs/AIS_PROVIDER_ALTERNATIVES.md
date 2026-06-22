@@ -34,6 +34,7 @@ consolidated, killing most transparent per-call pricing.)
 
 Our relay's ingest is the **only** part that's provider-specific. Everything
 downstream is provider-agnostic and stays as-is:
+
 - vessel-state map, classification (`classifyFreight`), the persistent registry,
   ETA (`ferry-eta.cjs`), all explainers, the monitor agent.
 

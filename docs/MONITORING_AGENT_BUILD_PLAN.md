@@ -38,6 +38,7 @@ and Upstash — **no relay changes required** (the relay already returns
 `delay.reasons` in `/ais/vessels`).
 
 ### Hybrid, not free-roaming (deliberate)
+
 The detect+explain work is already deterministic, so the agent is a **bounded**
 structured agent: deterministic gather → **one LLM reasoning/synthesis step** →
 deterministic deliver. This is cheaper and more predictable than a fully

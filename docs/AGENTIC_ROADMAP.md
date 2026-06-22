@@ -22,10 +22,12 @@ synthesis, deciding what matters, acting* — is what's below.
 ## Agent shapes
 
 ### 1. Always-on monitoring agent ("the watch officer") — highest fit
+
 Runs on a schedule (e.g. every 5–15 min). Calls detect+explain, decides what's
 *worth surfacing* (dedupe, severity, novelty), and writes a natural-language
 brief: *"3 Sardinia ferries delayed — official orange coastal warning in effect;
 not a strike. Bay of Naples normal."* Pushes to a channel (Telegram/email/in-app).
+
 - **Why it fits now**: sits directly on the deployed tools; the hard signal work
   is done. The agent adds judgment + phrasing + delivery.
 - **Agentic value**: triage ("is this worth a ping?"), synthesis across sources,
@@ -34,24 +36,30 @@ not a strike. Bay of Naples normal."* Pushes to a channel (Telegram/email/in-app
   small memory store (what's been alerted).
 
 ### 2. Conversational analyst ("ask the fleet") — lowest effort, great demo
+
 Plain-language Q&A over live data: *"Which ferries to Sardinia are delayed and
 why?" / "Show all Moby vessels at anchor."*
+
 - **Why it fits**: data is structured; mostly tool definitions + a chat surface.
 - **Agentic value**: turns the dataset into self-serve answers; no fixed UI.
 - **Effort**: low–medium.
 
 ### 3. Incident investigator (branchy, deeper) — LangGraph-shaped
+
 When a delay fires, a multi-step agent digs: pulls extra sources, cross-checks,
 escalates, and produces a confidence-rated incident report. Branches, retries,
 optional human-in-the-loop.
+
 - **Why it fits**: the explain engine gives first-pass reasons; this goes deeper
   on the interesting ones.
 - **Effort**: higher; only worth it once #1 exists and we want depth.
 
 ### 4. Freight/logistics product agent — ties to the portfolio
+
 Shipment-aware layer for getfreightbox / a fleet product: *"Your container is on
 MOBY X (now delayed 40 min, official weather warning) — ETA impact + reroute
 options."* Maps real-time maritime tracking onto cargo/shipment context.
+
 - **Why it fits**: highest commercial leverage; connects this capability to an
   existing product line.
 - **Effort**: larger; needs shipment/booking data + product integration.
@@ -75,6 +83,7 @@ reasoning engine.**
 ### Vercel Eve vs. our hand-built agent (decision on record)
 
 Eve is Vercel's agent framework ("an agent is a directory" — markdown + TS tools
+
 + skills; multi-channel deploy incl. Slack/Discord/web/API/scheduled; durable
 workflows, human-in-the-loop, subagents, evals, AI Gateway). Key reframe: **our
 system is two layers, and Eve only competes with one.**

@@ -90,4 +90,32 @@ function computeAllPortStatus(ports, vessels, resolveDest, now = Date.now(), opt
   return out;
 }
 
-module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, DEFAULTS };
+function median(nums) {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+
+/**
+ * Smooth each port's atPort over a rolling history (Map portId -> number[]) and
+ * recompute congestion from the median — so transient poll noise can't flip a
+ * port or jiggle the count. Mutates the ports (adds atPortRaw, overwrites atPort
+ * + congestion) and the history Map. `n` = window length.
+ */
+function smoothPortStatus(ports, history, n = 5, opts = {}) {
+  const o = { ...DEFAULTS, ...opts };
+  for (const p of ports) {
+    const h = history.get(p.portId) || [];
+    h.push(p.atPort);
+    while (h.length > n) h.shift();
+    history.set(p.portId, h);
+    const sm = median(h);
+    p.atPortRaw = p.atPort;
+    p.atPort = sm;
+    p.congestion = congestionLevel(sm, o);
+  }
+  return ports;
+}
+
+module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, DEFAULTS };

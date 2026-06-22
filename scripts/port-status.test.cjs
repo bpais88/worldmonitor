@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { computePortStatus, computeAllPortStatus, congestionLevel } = require('./port-status.cjs');
+const { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus } = require('./port-status.cjs');
 
 // Gioia Tauro terminal.
 const PORT = { portId: 'gioia_tauro', name: 'Gioia Tauro', lat: 38.43, lon: 15.9, region: 'Calabria' };
@@ -86,4 +86,25 @@ test('computeAllPortStatus filters, skips coord-less ports, and sorts by severit
   assert.equal(out[0].portId, 'gioia_tauro');  // most congested first
   assert.equal(out[0].congestion, 'congested');
   assert.equal(out[1].portId, 'quiet');
+});
+
+test('median handles odd/even/empty', () => {
+  assert.equal(median([5]), 5);
+  assert.equal(median([3, 1, 2]), 2);
+  assert.equal(median([1, 2, 3, 4]), 3); // rounded avg of middle two
+  assert.equal(median([]), 0);
+});
+
+test('smoothPortStatus medians atPort over history and recomputes congestion', () => {
+  const hist = new Map();
+  // A noisy port: spikes to 9 then back. Median should not flip to congested on one spike.
+  const feed = (atPort) => smoothPortStatus([{ portId: 'genoa', name: 'Genoa', atPort, congestion: 'x' }], hist, 5)[0];
+  feed(4); feed(4);
+  let p = feed(9);                 // history [4,4,9] -> median 4
+  assert.equal(p.atPort, 4);
+  assert.equal(p.congestion, 'busy');   // 4 -> busy, not congested from the spike
+  assert.equal(p.atPortRaw, 9);
+  feed(9); p = feed(9);            // history [4,4,9,9,9] -> median 9: sustained high finally registers
+  assert.equal(p.atPort, 9);
+  assert.equal(p.congestion, 'congested');
 });

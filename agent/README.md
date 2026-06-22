@@ -53,6 +53,7 @@ test safely.
 Upstash. Without it the agent re-pings ongoing delays every tick.
 
 ### Alternative: Railway cron service
+
 `agent/railway.json` (cronSchedule `*/10`, start `node agent/monitor.mjs`) is
 provided if you prefer Railway; create a new service in the project, set its
 Config File Path to `agent/railway.json` (dashboard), and add the same env vars.
