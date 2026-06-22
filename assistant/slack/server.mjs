@@ -52,7 +52,7 @@ const TOOLS = [...freightTools, ...actionTools, ...slackTools];
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // Slack renders mrkdwn, not full markdown — steer the agent away from tables.
-const SLACK_SYSTEM = `${DEFAULT_SYSTEM}\n\nYou are replying in Slack. Use Slack mrkdwn: *bold* (single asterisks), _italics_, and "• " bullets. Do NOT use markdown tables or ## headers. Keep replies tight.`;
+const SLACK_SYSTEM = `${DEFAULT_SYSTEM}\n\nYou are replying in Slack. Use Slack mrkdwn: *bold* (single asterisks), _italics_, and "• " bullets. Do NOT use markdown tables or ## headers. Keep replies tight.\n\nWhen an action tool returns {dryRun}, it has been PROPOSED and an Approve/Reject card is shown below your message. Tell the user you've proposed it and to click *Approve* to run it. Do NOT say "actions need to be enabled" — they just need to approve.`;
 
 const seenEvents = new Set(); // dedupe Slack retries by event_id
 function alreadySeen(id) {
