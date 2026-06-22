@@ -51,3 +51,7 @@ scripts/data/iran-events-latest.json
 
 # Agent-generated reports
 reports/
+.slack-bot-token
+.slack-signing-secret
+.upstash-url
+.upstash-token
