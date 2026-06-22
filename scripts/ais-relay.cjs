@@ -178,6 +178,28 @@ function upstashSet(key, value, ttlSeconds) {
   });
 }
 
+// Generic Upstash REST command (command-array form), for primitives beyond GET/SET
+// (e.g. INCRBY/EXPIRE/MGET used by the daily voyage counter). Returns .result or null.
+function upstashCmd(parts) {
+  return new Promise((resolve) => {
+    if (!UPSTASH_ENABLED) return resolve(null);
+    const url = new URL('/', UPSTASH_REDIS_REST_URL);
+    const body = JSON.stringify(parts);
+    const req = https.request(url, {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${UPSTASH_REDIS_REST_TOKEN}`, 'Content-Type': 'application/json' },
+      timeout: 5000,
+    }, (resp) => {
+      let data = '';
+      resp.on('data', (chunk) => { data += chunk; });
+      resp.on('end', () => { try { resolve(JSON.parse(data)?.result ?? null); } catch { resolve(null); } });
+    });
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => { req.destroy(); resolve(null); });
+    req.end(body);
+  });
+}
+
 let upstreamSocket = null;
 let upstreamPaused = false;
 let upstreamQueue = [];
@@ -1685,7 +1707,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // stalled mid-crossing) — without any external timetable. History persists to
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel } = require('./ferry-eta.cjs');
-const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
+const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
@@ -1850,20 +1872,38 @@ const etaHistory = new Map();  // mmsi -> snapshot[]
 const delayByMmsi = new Map(); // mmsi -> { slipping, stalled, etaGrowthMin, ... }
 // Live computed ETA + signed trend for EVERY tracked freight vessel (not only
 // delayed ones), so we can show "ETA ~04:00 (+20 min vs ~1h ago)" instead of the
-// stale captain-entered AIS ETA. { etaTs, etaDeltaMin, etaWindowMin }.
+// stale captain-entered AIS ETA. { etaTs, etaDeltaMin, etaWindowMin, etaVsDepartureMin, voyageAgeMin }.
 const etaInfoByMmsi = new Map();
+// Voyage anchors: mmsi -> { destPortId, startTs, departureEtaTs }. Tracks each trip
+// start-to-end so we can report drift vs the DEPARTURE ETA, and count trips/day.
+const voyageByMmsi = new Map();
 let _ferryHistoryDirty = false;
+
+// Durable per-day count of trips Marco began tracking (atomic INCR, ~120d TTL), so
+// "how many trips per day" is answerable later even across restarts.
+const VOYAGE_COUNT_PREFIX = `${RELAY_ENV_PREFIX}relay:voyages:count:`;
+const VOYAGE_COUNT_TTL = 120 * 24 * 60 * 60;
+const utcDay = (now) => new Date(now).toISOString().slice(0, 10);
+async function registerTrips(n, now = Date.now()) {
+  if (!UPSTASH_ENABLED || !n) return;
+  const k = VOYAGE_COUNT_PREFIX + utcDay(now);
+  try {
+    await upstashCmd(['INCRBY', k, String(n)]);
+    await upstashCmd(['EXPIRE', k, String(VOYAGE_COUNT_TTL)]);
+  } catch (e) { console.warn('[Relay] voyage count failed:', e.message); }
+}
 
 function updateFerryDelays(now = Date.now()) {
   try {
+    let newTrips = 0;
     for (const [mmsi, v] of vessels) {
       const stat = vesselStatic.get(mmsi);
       // Only track freight vessels (cargo + RoPax-by-operator), not tourist craft.
       if (!isFreightVessel(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name), stat && stat.imo)) {
-        etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); etaInfoByMmsi.delete(mmsi); continue;
+        etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); etaInfoByMmsi.delete(mmsi); voyageByMmsi.delete(mmsi); continue;
       }
       const port = resolveDestinationPort(stat && stat.destination);
-      if (!port) { etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); etaInfoByMmsi.delete(mmsi); continue; }
+      if (!port) { etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); etaInfoByMmsi.delete(mmsi); voyageByMmsi.delete(mmsi); continue; }
       const eta = etaFor({ lat: v.lat, lon: v.lon, speedKnots: v.speed }, port, now);
       const snap = {
         ts: now,
@@ -1876,12 +1916,28 @@ function updateFerryDelays(now = Date.now()) {
       const drift = detectDrift(buf);
       if (drift && (drift.slipping || drift.stalled)) delayByMmsi.set(mmsi, drift);
       else delayByMmsi.delete(mmsi);
+
+      // Voyage anchor: open on a new leg (counts as a registered trip), keep across
+      // the crossing so we can measure drift vs the DEPARTURE ETA.
+      const prevVoyage = voyageByMmsi.get(mmsi);
+      const voyage = updateVoyage(prevVoyage, { destPortId: port.portId, etaTs: eta ? eta.etaTs : null, now });
+      if (voyage) {
+        if (!prevVoyage || prevVoyage.destPortId !== voyage.destPortId) newTrips += 1;
+        voyageByMmsi.set(mmsi, voyage);
+      } else {
+        voyageByMmsi.delete(mmsi);
+      }
+
       // Live ETA + signed trend for ALL freight (drift carries the trend even when
       // not slipping). etaTs is null when stopped/at port (no bogus ETA).
       const info = { etaTs: eta ? eta.etaTs : null };
       if (drift && Number.isFinite(drift.etaGrowthMin) && drift.windowMin > 0) {
         info.etaDeltaMin = drift.etaGrowthMin;
         info.etaWindowMin = drift.windowMin;
+      }
+      if (eta && voyage && Number.isFinite(voyage.departureEtaTs)) {
+        info.etaVsDepartureMin = Math.round((eta.etaTs - voyage.departureEtaTs) / 60_000);
+        info.voyageAgeMin = Math.round((now - voyage.startTs) / 60_000);
       }
       etaInfoByMmsi.set(mmsi, info);
     }
@@ -1892,8 +1948,10 @@ function updateFerryDelays(now = Date.now()) {
         etaHistory.delete(mmsi);
         delayByMmsi.delete(mmsi);
         etaInfoByMmsi.delete(mmsi);
+        voyageByMmsi.delete(mmsi);
       }
     }
+    if (newTrips) void registerTrips(newTrips, now);
     _ferryHistoryDirty = true;
   } catch (e) {
     console.warn('[Relay] ferry delay update failed:', e.message);
@@ -1905,9 +1963,11 @@ async function persistFerryHistory() {
   try {
     const obj = {};
     for (const [mmsi, buf] of etaHistory) obj[mmsi] = buf;
+    const voyages = {};
+    for (const [mmsi, vy] of voyageByMmsi) voyages[mmsi] = vy;
     const ok = await upstashSet(
       FERRY_DELAY_REDIS_KEY,
-      { history: obj, persistedAt: new Date().toISOString() },
+      { history: obj, voyages, persistedAt: new Date().toISOString() },
       FERRY_DELAY_TTL_SECONDS,
     );
     if (ok) _ferryHistoryDirty = false;
@@ -1929,7 +1989,16 @@ async function bootstrapFerryHistory() {
           if (fresh.length) { etaHistory.set(mmsi, fresh); n++; }
         }
       }
-      console.log(`[Relay] Ferry ETA history restored: ${n} vessels`);
+      // Restore voyage anchors too, so "vs departure" survives a restart and we
+      // don't re-count an in-flight trip as new. Drop anchors older than 12h (stale).
+      let nv = 0;
+      const voyageCutoff = Date.now() - 12 * 60 * 60 * 1000;
+      if (cached.voyages && typeof cached.voyages === 'object') {
+        for (const [mmsi, vy] of Object.entries(cached.voyages)) {
+          if (vy && Number.isFinite(vy.startTs) && vy.startTs > voyageCutoff) { voyageByMmsi.set(mmsi, vy); nv++; }
+        }
+      }
+      console.log(`[Relay] Ferry ETA history restored: ${n} vessels, ${nv} voyages`);
     }
   } catch (e) {
     console.warn('[Relay] ferry history bootstrap failed:', e.message);
@@ -4093,6 +4162,25 @@ const server = http.createServer(async (req, res) => {
       'Cache-Control': 'public, max-age=15',
       'CDN-Cache-Control': 'public, max-age=30',
     }, JSON.stringify({ ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now }));
+  } else if (pathname === '/ais/voyages/daily') {
+    // Trips Marco registered per day (durable counters). ?days=N (default 14, max 120).
+    const now = Date.now();
+    const days = Math.min(Math.max(parseInt(url.searchParams.get('days'), 10) || 14, 1), 120);
+    const dates = [];
+    for (let i = 0; i < days; i++) dates.push(utcDay(now - i * 86_400_000));
+    const keys = dates.map((d) => VOYAGE_COUNT_PREFIX + d);
+    let counts = [];
+    if (UPSTASH_ENABLED && keys.length) {
+      const res2 = await upstashCmd(['MGET', ...keys]);
+      counts = Array.isArray(res2) ? res2 : [];
+    }
+    const daily = dates.map((date, i) => ({ date, trips: Number(counts[i]) || 0 }));
+    const total = daily.reduce((s, d) => s + d.trips, 0);
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=60',
+      'CDN-Cache-Control': 'public, max-age=120',
+    }, JSON.stringify({ daily, totalTrips: total, days, generatedAt: now }));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;

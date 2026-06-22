@@ -27,3 +27,12 @@ test('running ahead: negative signed trend is preserved', () => {
   assert.equal(r.etaTrendMin, -10);      // − = ahead of earlier estimate
   assert.equal(r.etaTrendWindowMin, 45);
 });
+
+test('vs-departure drift + voyage age surfaced when present', () => {
+  const r = etaView({
+    etaTs: Date.parse('2026-06-22T23:40:00Z'),
+    etaVsDepartureMin: 40, voyageAgeMin: 240,
+  }, NOW);
+  assert.equal(r.etaVsDepartureMin, 40);  // +40 min later than the departure ETA
+  assert.equal(r.voyageAgeMin, 240);      // 4h into the trip
+});

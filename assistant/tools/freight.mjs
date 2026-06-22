@@ -20,8 +20,12 @@ export function etaView(v, now = Date.now()) {
     etaInHours: Math.round((v.etaTs - now) / 360000) / 10,
   };
   if (Number.isFinite(v.etaDeltaMin)) {
-    out.etaTrendMin = v.etaDeltaMin;          // signed: + later, − earlier
+    out.etaTrendMin = v.etaDeltaMin;          // signed: + later, − earlier (recent window)
     out.etaTrendWindowMin = v.etaWindowMin;   // measured over this many minutes
+  }
+  if (Number.isFinite(v.etaVsDepartureMin)) {
+    out.etaVsDepartureMin = v.etaVsDepartureMin; // signed drift vs the trip's departure ETA
+    out.voyageAgeMin = v.voyageAgeMin;           // how long the trip has been under way
   }
   return out;
 }
@@ -56,7 +60,7 @@ export const freightTools = [
   {
     name: 'find_freight_vessels',
     description:
-      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved since earlier this trip (+ = running later, − = ahead of earlier estimate) over "etaTrendWindowMin" minutes. No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
+      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
     input_schema: {
       type: 'object',
       properties: {
@@ -119,7 +123,7 @@ export const freightTools = [
   {
     name: 'get_vessel',
     description:
-      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, live ETA, and delay + cause if any. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is the signed change since earlier this trip (+ later, − ahead) over "etaTrendWindowMin" min. No eta field = stopped/at port. Use for "tell me about VESSEL", "where is X", "when does X arrive", "is X delayed".',
+      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, live ETA, and delay + cause if any. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is the signed change since earlier this trip (+ later, − ahead) over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" min. No eta field = stopped/at port. Use for "tell me about VESSEL", "where is X", "when does X arrive", "is X delayed".',
     input_schema: {
       type: 'object',
       properties: { query: { type: 'string', description: 'vessel name (substring), IMO, or MMSI' } },
@@ -188,6 +192,20 @@ export const freightTools = [
         atPortCount: p.atPort, vesselsAtPort: atPort,
         inboundCount: inbound.length, vesselsInbound: inbound,
       };
+    },
+  },
+  {
+    name: 'get_voyage_stats',
+    description:
+      'How many freight trips Marco registered per day (a trip = a vessel heading to a tracked port, counted when first seen on that leg). Returns a per-day breakdown and the total. Use for "how many trips today/this week", "how many voyages did you track", "trip volume". Counts are UTC days and may be slightly inflated by AIS destination noise.',
+    input_schema: {
+      type: 'object',
+      properties: { days: { type: 'integer', description: 'how many days back to include (default 14, max 120)' } },
+      additionalProperties: false,
+    },
+    handler: async ({ days = 14 } = {}) => {
+      const j = await relayGet(`/ais/voyages/daily?days=${Math.min(Math.max(days, 1), 120)}`);
+      return { totalTrips: j.totalTrips, days: j.days, daily: j.daily };
     },
   },
 ];
