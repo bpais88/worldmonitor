@@ -82,3 +82,5 @@ That's it — Claude sees the new capability automatically. Tomorrow's tools
 
 - `ANTHROPIC_API_KEY` — the agent's model (Sonnet 4.6 by default; set `ASSISTANT_MODEL` to override).
 - `RELAY_URL` + `RELAY_SHARED_SECRET` — to reach the freight data.
+- `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` — *(optional)* persist memory + watches across restarts; without them the store falls back to in-memory (lost on redeploy).
+- `WATCH_TICK_MS` — *(optional)* proactive watch evaluation interval (default 5 min).

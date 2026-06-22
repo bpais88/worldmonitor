@@ -44,6 +44,7 @@ export async function runAgent({
   apiKey = ANTHROPIC_API_KEY,
   model = ASSISTANT_MODEL,
   policy = DEFAULT_POLICY,
+  context = {},
   onToolCall,
 } = {}) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
@@ -81,7 +82,7 @@ export async function runAgent({
         onToolCall?.(tu.name, input, decision.mode);
         if (decision.mode === 'execute') {
           try {
-            out = await tool.handler(input);
+            out = await tool.handler(input, context); // uniform context; tools that don't need it ignore it
           } catch (e) {
             out = { error: e.message };
           }

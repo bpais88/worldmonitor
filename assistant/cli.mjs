@@ -7,6 +7,7 @@ import { runAgent } from './agent.mjs';
 import { freightTools } from './tools/freight.mjs';
 import { actionTools } from './tools/actions.mjs';
 import { weatherTools } from './tools/weather.mjs';
+import { watchTools } from './tools/watches.mjs';
 import { DEFAULT_POLICY } from './guardrails.mjs';
 
 const args = process.argv.slice(2);
@@ -25,7 +26,7 @@ console.error(`  [mode: ${mode}]`);
 
 const { text, calls, audit } = await runAgent({
   userText: question,
-  tools: [...freightTools, ...weatherTools, ...actionTools],
+  tools: [...freightTools, ...weatherTools, ...watchTools, ...actionTools],
   policy,
   onToolCall: (name, input, m) => console.error(`  · ${name}(${JSON.stringify(input || {})}) → ${m}`),
 });

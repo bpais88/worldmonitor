@@ -14,10 +14,13 @@ import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { actionTools } from '../tools/actions.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { watchTools } from '../tools/watches.mjs';
 import { verifySlackSignature } from './verify.mjs';
 import { policyForUser, parseActionUsers } from './permissions.mjs';
 import { threadKey, getHistory, appendTurn } from './memory.mjs';
 import { putPending, peekPending, takePending } from './pending.mjs';
+import { relayGet } from '../relay.mjs';
+import { listWatches, evaluateWatches } from '../watches.mjs';
 
 const PORT = process.env.PORT || 3010;
 const BOT_TOKEN = process.env.SLACK_BOT_TOKEN || '';
@@ -49,7 +52,7 @@ const slackTools = [
   },
 ];
 
-const TOOLS = [...freightTools, ...weatherTools, ...actionTools, ...slackTools];
+const TOOLS = [...freightTools, ...weatherTools, ...watchTools, ...actionTools, ...slackTools];
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // Slack renders mrkdwn, not full markdown — steer the agent away from tables.
@@ -134,10 +137,17 @@ async function handleEvent(ev) {
   const policy = { ...policyForUser(ev.user, { actionUsers: ACTION_USERS, allowDryRunForAll: true }), execute: false };
 
   try {
-    const { text, audit } = await runAgent({ userText, history: getHistory(key), tools: TOOLS, system: SLACK_SYSTEM, policy });
+    const { text, audit } = await runAgent({
+      userText,
+      history: await getHistory(key),
+      tools: TOOLS,
+      system: SLACK_SYSTEM,
+      policy,
+      context: { channel, thread: threadTs, user: ev.user, postMessage },
+    });
     const reply = text || '(no answer)';
     await postMessage(channel, threadTs, reply);
-    appendTurn(key, userText, reply);
+    await appendTurn(key, userText, reply);
 
     // For each proposed (dry-run) action, post an Approve/Reject card.
     for (const a of audit.filter((x) => x.mode === 'dryrun')) {
@@ -237,7 +247,30 @@ const server = http.createServer(async (req, res) => {
   res.writeHead(404); res.end();
 });
 
+// ---- Proactive watch ticker ----------------------------------------------
+// Every tick: evaluate active watches against live ports/vessels and post to
+// each watch's channel ONLY on a state change (evaluateWatches dedupes via
+// persisted lastState). Skips entirely when there are no watches.
+const WATCH_TICK_MS = Number(process.env.WATCH_TICK_MS) || 5 * 60_000;
+async function tickWatches() {
+  try {
+    const watches = await listWatches();
+    if (!watches.length) return;
+    const [portsRes, vesselsRes] = await Promise.all([
+      relayGet('/ais/ports'),
+      relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000'),
+    ]);
+    const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
+    for (const a of alerts) await postMessage(a.watch.channel, a.watch.thread, a.message);
+    if (alerts.length) console.log(`[slack] watch tick: ${alerts.length} alert(s) posted`);
+  } catch (e) {
+    console.warn('[slack] watch tick error:', e.message);
+  }
+}
+
 server.listen(PORT, () => {
   console.log(`[slack] assistant on :${PORT} · action allowlist: ${ACTION_USERS.size} user(s)` +
     `${BOT_TOKEN ? '' : ' · WARN no SLACK_BOT_TOKEN'}${SIGNING_SECRET ? '' : ' · WARN no SLACK_SIGNING_SECRET'}`);
+  setInterval(() => { void tickWatches(); }, WATCH_TICK_MS).unref?.();
+  console.log(`[slack] watch ticker every ${WATCH_TICK_MS / 1000}s`);
 });

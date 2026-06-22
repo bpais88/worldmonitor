@@ -1,36 +1,25 @@
-// Per-thread conversation memory (in-memory). Stores SIMPLIFIED text turns
-// (user question + final assistant answer) keyed by channel:thread — not the raw
-// tool-cycle messages, so re-feeding history can never leave a dangling tool_use
-// without its tool_result. Good enough for follow-ups; swap for Upstash later.
+// Per-thread conversation memory, persisted via store.mjs (Upstash or in-memory
+// fallback). Stores SIMPLIFIED text turns (user question + final answer) keyed by
+// channel:thread — not raw tool-cycle messages, so re-feeding history can never
+// leave a dangling tool_use without its tool_result. Keys expire after the TTL.
+import { kvGet, kvSet } from '../store.mjs';
 
-const store = new Map(); // key -> { turns: [{role, content}], ts }
-const TTL_MS = 60 * 60 * 1000; // forget a thread after 1h idle
-const MAX_TURNS = 8;           // keep the last 8 Q&A pairs
+const TTL_SEC = 60 * 60; // forget a thread after 1h idle
+const MAX_TURNS = 8;     // keep the last 8 Q&A pairs
 
 export function threadKey(channel, thread) {
-  return `${channel}:${thread}`;
+  return `mem:${channel}:${thread}`;
 }
 
-export function getHistory(key) {
-  const e = store.get(key);
-  if (!e || Date.now() - e.ts > TTL_MS) {
-    store.delete(key);
-    return [];
-  }
-  return e.turns;
+export async function getHistory(key) {
+  const e = await kvGet(key);
+  if (!e || (Number.isFinite(e.ts) && Date.now() - e.ts > TTL_SEC * 1000)) return [];
+  return e.turns || [];
 }
 
-// Drop threads idle past the TTL. Lazy per-key eviction (in getHistory) never
-// reclaims threads that are never messaged again, so sweep on each write.
-function sweep(now) {
-  for (const [k, e] of store) if (now - e.ts > TTL_MS) store.delete(k);
-}
-
-export function appendTurn(key, userText, assistantText) {
-  const now = Date.now();
-  sweep(now);
-  const turns = getHistory(key)
+export async function appendTurn(key, userText, assistantText) {
+  const turns = (await getHistory(key))
     .concat([{ role: 'user', content: userText }, { role: 'assistant', content: assistantText }])
     .slice(-MAX_TURNS * 2);
-  store.set(key, { turns, ts: now });
+  await kvSet(key, { turns, ts: Date.now() }, TTL_SEC);
 }
