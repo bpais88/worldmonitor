@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
 const {
-  marinesiaTypeToShipType, normalizeMarinesiaVessel, makeGrid, fetchTile, ITALY_TILES,
+  marinesiaTypeToShipType, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile, ITALY_TILES,
 } = require('./marinesia.cjs');
 
 test('marinesiaTypeToShipType maps strings to the right AIS band', () => {
@@ -92,6 +92,34 @@ test('fetchTile returns the data array on success (injected fetch)', async () =>
   });
   const out = await fetchTile(ITALY_TILES[0], 'k', fakeFetch);
   assert.equal(out.length, 2);
+});
+
+test('mergeVesselStatic keeps prior fields where the new row omits them', () => {
+  const prev = { mmsi: '1', name: 'EUROCARGO RAVENNA', shipType: 70, imo: '9471056', destination: 'ITCAG', callSign: 'IBXY', draught: 7.5, length: 200, beam: 26, etaAis: '06-22 10:30', timestamp: 100 };
+  // A later Marinesia poll where dest/imo dropped out and type went unknown.
+  const v = { mmsi: '1', name: 'EUROCARGO RAVENNA', shipType: undefined, imo: '', destination: '', draught: 7.5, length: 200, beam: 26, etaAis: '', timestamp: 200 };
+  const m = mergeVesselStatic(prev, v, 999);
+  assert.equal(m.destination, 'ITCAG');   // preserved
+  assert.equal(m.imo, '9471056');         // preserved
+  assert.equal(m.shipType, 70);           // preserved
+  assert.equal(m.callSign, 'IBXY');       // Marinesia has none -> kept
+  assert.equal(m.etaAis, '06-22 10:30');  // preserved
+  assert.equal(m.timestamp, 200);         // new wins
+});
+
+test('mergeVesselStatic lets newer defined values override', () => {
+  const prev = { mmsi: '1', destination: 'ITCAG', imo: '9471056', shipType: 70 };
+  const v = { mmsi: '1', destination: 'ITGOA', imo: '9471056', shipType: 70, timestamp: 5 };
+  const m = mergeVesselStatic(prev, v);
+  assert.equal(m.destination, 'ITGOA');   // updated
+});
+
+test('mergeVesselStatic works with no prior record', () => {
+  const v = { mmsi: '1', name: 'X', shipType: 70, imo: '', destination: 'ITNAP', timestamp: 5 };
+  const m = mergeVesselStatic(undefined, v);
+  assert.equal(m.destination, 'ITNAP');
+  assert.equal(m.imo, '');
+  assert.equal(m.callSign, '');
 });
 
 test('fetchTile throws on an API error envelope', async () => {
