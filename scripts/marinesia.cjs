@@ -85,32 +85,45 @@ function normalizeMarinesiaVessel(raw, now = Date.now()) {
 // preserved when the new row omits it — so a poll missing those never erases
 // richer aisstream- or earlier-poll-derived data.
 //
-// VOYAGE DATA (destination/ETA) is dynamic and CLEARABLE: a non-empty incoming
-// value always applies, but an EMPTY value only clears the prior one when the
-// incoming record is at least as new — so a stale Marinesia row (its `ts` can lag
-// a fresher aisstream static write) can't wipe a newer destination and drop the
-// vessel's ETA history. Marinesia always includes `dest`, so '' means "no
-// destination", not "omitted".
+// VOYAGE DATA (destination/ETA) is dynamic and CLEARABLE. It's treated as one
+// atomic snapshot taken from whichever record carries the newest VOYAGE
+// timestamp (`voyageTs`) — NOT the general freshness timestamp. Tracking voyage
+// time separately matters because the two providers stamp on different clocks
+// (aisstream uses receipt Date.now(); Marinesia carries the AIS report `ts`,
+// which lags), so a record's general timestamp can be newer than the voyage
+// value it holds. Gating on voyageTs means: the newest voyage snapshot wins,
+// including clears, and an older row (empty OR non-empty) never overrides a newer
+// one — so a cleared/changed ferry can't get stuck on a stale destination.
+// (Records written by the aisstream static path have no voyageTs; we fall back
+// to their general timestamp, which is its receipt time — a fine proxy.)
 function mergeVesselStatic(prev, v, now = Date.now()) {
   const p = prev || {};
   const keep = (next, old) => (next != null && next !== '' ? next : old);
   const vTs = Number.isFinite(v.timestamp) ? v.timestamp : now;
-  const prevTs = Number.isFinite(p.timestamp) ? p.timestamp : -Infinity;
-  const atLeastAsNew = vTs >= prevTs;
-  // Non-empty wins; empty clears only when not older than the stored record.
-  const mergeVoyage = (next, old) => (next ? next : (atLeastAsNew ? '' : (old || '')));
+  const prevVoyageTs = Number.isFinite(p.voyageTs) ? p.voyageTs
+    : (Number.isFinite(p.timestamp) ? p.timestamp : -Infinity);
+
+  // Take the incoming voyage snapshot only if it's at least as new as the stored
+  // one; otherwise keep the prior voyage state (and its timestamp).
+  const voyageWins = vTs >= prevVoyageTs;
+  const destination = voyageWins ? (v.destination || '') : (p.destination || '');
+  const etaAis = voyageWins ? (v.etaAis || '') : (p.etaAis || '');
+  const voyageTs = voyageWins ? vTs : prevVoyageTs;
+
   return {
     mmsi: v.mmsi,
     name: keep(v.name, p.name) || '',
     shipType: v.shipType != null ? v.shipType : p.shipType,
     imo: keep(v.imo, p.imo) || '',
-    destination: mergeVoyage(v.destination, p.destination),
+    destination,
     callSign: p.callSign || '',
     draught: v.draught != null ? v.draught : p.draught,
     length: v.length != null ? v.length : p.length,
     beam: v.beam != null ? v.beam : p.beam,
-    etaAis: mergeVoyage(v.etaAis, p.etaAis),
-    // Keep timestamp monotonic so an older row can't make the record look stale.
+    etaAis,
+    voyageTs,
+    // General freshness timestamp stays monotonic (used for pruning), independent
+    // of which voyage snapshot won.
     timestamp: Math.max(vTs, Number.isFinite(p.timestamp) ? p.timestamp : vTs),
   };
 }
