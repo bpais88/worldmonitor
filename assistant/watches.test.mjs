@@ -17,6 +17,18 @@ test('port watch: silent baseline, alerts on transition, no repeat', async () =>
   await cancelWatch(w.id);
 });
 
+test('port watch condition "clears" fires only on clearing, not on busy', async () => {
+  const w = await createWatch({ type: 'port_congestion', target: 'Genoa', condition: 'clears', channel: 'C', thread: 'T' });
+  await evaluateWatches({ ports: genoa('clear'), vessels: [] }); // baseline
+  // becomes congested -> must NOT alert (we only want "clears")
+  assert.equal((await evaluateWatches({ ports: genoa('congested'), vessels: [] })).length, 0);
+  // clears -> alert
+  const a = await evaluateWatches({ ports: genoa('clear'), vessels: [] });
+  assert.equal(a.length, 1);
+  assert.match(a[0].message, /cleared/);
+  await cancelWatch(w.id);
+});
+
 test('vessel watch alerts when the vessel becomes delayed', async () => {
   const w = await createWatch({ type: 'vessel_delay', target: 'MOBY FANTASY', channel: 'C', thread: 'T' });
   await evaluateWatches({ ports: [], vessels: [{ name: 'MOBY FANTASY' }] }); // baseline: ok

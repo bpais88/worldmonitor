@@ -8,9 +8,9 @@ const INDEX = 'watches';
 const key = (id) => `watch:${id}`;
 let counter = 0;
 
-export async function createWatch({ type, target, channel, thread, createdBy }, now = Date.now()) {
+export async function createWatch({ type, target, channel, thread, createdBy, condition = 'any' }, now = Date.now()) {
   const id = `w_${now.toString(36)}_${(counter++).toString(36)}`;
-  const watch = { id, type, target, channel, thread, createdBy, lastState: null, createdTs: now };
+  const watch = { id, type, target, channel, thread, createdBy, condition, lastState: null, createdTs: now };
   await kvSet(key(id), watch);
   await setAdd(INDEX, id);
   return watch;
@@ -57,10 +57,13 @@ export async function evaluateWatches({ ports = [], vessels = [] }) {
       const p = matchPort(ports, w.target);
       state = p ? p.congestion : 'unknown';
       if (p && w.lastState !== null && state !== w.lastState) {
-        if (state === 'busy' || state === 'congested') {
-          message = `🔴 *${p.name}* is now *${state}* — ${p.atPort} freight vessels at port, ${p.inbound} inbound.`;
-        } else if (state === 'clear' && (w.lastState === 'busy' || w.lastState === 'congested')) {
+        const cond = w.condition || 'any'; // 'clears' | 'busy' | 'any'
+        const becameBusy = state === 'busy' || state === 'congested';
+        const becameClear = state === 'clear' && (w.lastState === 'busy' || w.lastState === 'congested');
+        if (becameClear && (cond === 'clears' || cond === 'any')) {
           message = `🟢 *${p.name}* has cleared (was ${w.lastState}).`;
+        } else if (becameBusy && (cond === 'busy' || cond === 'any')) {
+          message = `🔴 *${p.name}* is now *${state}* — ${p.atPort} freight vessels at port, ${p.inbound} inbound.`;
         }
       }
     } else if (w.type === 'vessel_delay') {

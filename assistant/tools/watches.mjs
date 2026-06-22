@@ -7,20 +7,21 @@ export const watchTools = [
   {
     name: 'create_watch',
     description:
-      'Create a proactive watch that alerts THIS channel when a condition CHANGES. type "port_congestion" (target = a port name) alerts when that port turns busy/congested or clears; type "vessel_delay" (target = a vessel name) alerts when that vessel becomes delayed. Use for "alert me when Genoa is congested", "ping me if MOBY FANTASY is delayed".',
+      'Create a proactive watch that alerts THIS channel when a condition occurs. type "port_congestion" (target = port name) with condition: "clears" (alert only when it becomes clear), "busy" (only when it turns busy/congested), or "any" (any change). type "vessel_delay" (target = vessel name) alerts when that vessel becomes delayed. Map the user\'s wording: "when X clears" → condition "clears"; "when X is busy/congested" → "busy"; otherwise "any".',
     input_schema: {
       type: 'object',
       properties: {
         type: { type: 'string', enum: ['port_congestion', 'vessel_delay'] },
         target: { type: 'string', description: 'port name (for port_congestion) or vessel name (for vessel_delay)' },
+        condition: { type: 'string', enum: ['clears', 'busy', 'any'], description: 'port_congestion only; which transition to alert on (default any)' },
       },
       required: ['type', 'target'],
       additionalProperties: false,
     },
-    handler: async ({ type, target }, ctx = {}) => {
+    handler: async ({ type, target, condition = 'any' }, ctx = {}) => {
       if (!ctx.channel) return { error: 'no channel context to attach the watch to' };
-      const w = await createWatch({ type, target, channel: ctx.channel, thread: ctx.thread, createdBy: ctx.user });
-      return { created: true, id: w.id, type: w.type, target: w.target };
+      const w = await createWatch({ type, target, condition, channel: ctx.channel, thread: ctx.thread, createdBy: ctx.user });
+      return { created: true, id: w.id, type: w.type, target: w.target, condition: w.condition };
     },
   },
   {

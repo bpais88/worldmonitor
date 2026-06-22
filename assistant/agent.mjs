@@ -12,7 +12,12 @@ export const DEFAULT_SYSTEM =
   'the provided tools and their returned data; if the data does not cover something, ' +
   'say so plainly rather than guessing. Be concise and concrete — cite vessel names, ' +
   'ports, and numbers. For a "report", lead with the headline signals (congested ' +
-  'ports, delayed vessels + their causes). The data is live AIS.\n\n' +
+  'ports, delayed vessels + their causes).\n\n' +
+  'The data is a LIVE AIS snapshot that shifts between readings (vessels are polled ' +
+  'continuously). When you state counts or congestion, append "(as of HH:MM UTC)" ' +
+  'using the current time given below. If the user questions consistency or says the ' +
+  'numbers changed, explain plainly that the feed is live and moves between readings ' +
+  '— that is expected, not an error or confusion on your part.\n\n' +
   'Some tools take ACTIONS (saving files, posting to Slack). If an action tool ' +
   'returns {blocked}, tell the user it needs actions enabled and DO NOT retry it. ' +
   'If it returns {dryRun}, tell the user exactly what you would do and that it was ' +
@@ -57,9 +62,11 @@ export async function runAgent({
   const calls = [];
   const audit = [];                 // every action tool call: {tool, input, mode, executed}
   const state = { actionsExecuted: 0 };
+  // Give the model "now" so it can stamp live figures (the data shifts between polls).
+  const sys = `${system}\n\nCurrent UTC time: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}.`;
 
   for (let step = 0; step < MAX_STEPS; step++) {
-    const resp = await client.messages.create({ model, max_tokens: 1024, system, tools: toolDefs, messages: convo });
+    const resp = await client.messages.create({ model, max_tokens: 1024, system: sys, tools: toolDefs, messages: convo });
     convo.push({ role: 'assistant', content: resp.content });
 
     const toolUses = resp.content.filter((c) => c.type === 'tool_use');
