@@ -25,7 +25,40 @@ user text ─► runAgent(tools) ─► Claude picks tool(s) ─► handler() �
 - `tools/freight.mjs` — the first tools (ports, vessels, delays), wrapping the relay.
 - `relay.mjs` / `config.mjs` — authenticated relay GET + env config.
 - `cli.mjs` — local harness.
-- *(next)* `slack.mjs` — Slack app: @mention → runAgent → reply in thread.
+- `guardrails.mjs` — read/action classification + policy (blocked → dry-run → execute).
+- `tools/actions.mjs` — action tools (save report, Slack alert), gated by guardrails.
+- `slack/` — the Slack surface (events server, signature verify, per-user permissions, per-thread memory, approval buttons).
+
+## Guardrails (read vs act)
+
+Every tool is `read` (auto-runs) or `action` (gated). Policy escalation:
+`default = blocked` → `--allow-actions = dry-run` → `--allow-actions --execute = run`
+(capped by `maxActions`, audited). From Slack, actions are **always proposed**, never auto-run (see below).
+
+## Slack surface + per-user approval
+
+`node assistant/slack/server.mjs` runs a service that: verifies Slack's request
+signature, @mention/DM → runs the agent → replies in-thread (with per-thread
+memory for follow-ups). **Actions require human approval:** the agent proposes an
+action, the bot posts *Approve / Reject* buttons, and the tool runs only when a
+**allowlisted** user approves (Viktor-style per-action human-in-the-loop).
+
+### Slack app setup
+1. api.slack.com/apps → Create App (from scratch) → pick workspace.
+2. **OAuth & Permissions** → Bot scopes: `app_mentions:read`, `chat:write`, `im:history`, `im:read`. Install → copy the **Bot User OAuth Token** (`xoxb-…`).
+3. **Basic Information** → copy the **Signing Secret**.
+4. **Event Subscriptions** → on; Request URL `https://<host>/slack/events`; subscribe to `app_mention` + `message.im`.
+5. **Interactivity & Shortcuts** → on; Request URL `https://<host>/slack/interactions` (the Approve/Reject buttons).
+6. Invite the bot to a channel; @mention it.
+
+### Env
+- `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
+- `SLACK_ACTION_USERS` — comma-separated Slack user ids allowed to approve/run actions
+- `SLACK_BOT_USER_ID` (optional, to ignore the bot's own messages)
+- `ANTHROPIC_API_KEY`, `RELAY_URL`, `RELAY_SHARED_SECRET`, `PORT` (default 3010)
+
+Needs a public URL — deploy the service (e.g. a second Railway service) or tunnel
+(`ngrok http 3010`) for local testing.
 
 ## Add a tool (the whole point)
 
