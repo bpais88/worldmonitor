@@ -126,9 +126,11 @@ async function handleEvent(ev) {
   const threadTs = ev.thread_ts || ev.ts;
   const key = threadKey(channel, threadTs);
 
-  // Slack always PROPOSES actions (execute:false); approval runs them via button.
-  const base = policyForUser(ev.user, { actionUsers: ACTION_USERS });
-  const policy = { ...base, execute: false };
+  // Slack always PROPOSES actions (never auto-executes): allowDryRunForAll lets
+  // ANY requester's action become a proposal card, and execute:false ensures even
+  // allowlisted users go through the button. Execution is re-gated to ACTION_USERS
+  // in handleInteraction, so a teammate can ask and an authorized user approves.
+  const policy = { ...policyForUser(ev.user, { actionUsers: ACTION_USERS, allowDryRunForAll: true }), execute: false };
 
   try {
     const { text, audit } = await runAgent({ userText, history: getHistory(key), tools: TOOLS, system: SLACK_SYSTEM, policy });

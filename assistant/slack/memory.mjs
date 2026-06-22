@@ -20,9 +20,17 @@ export function getHistory(key) {
   return e.turns;
 }
 
+// Drop threads idle past the TTL. Lazy per-key eviction (in getHistory) never
+// reclaims threads that are never messaged again, so sweep on each write.
+function sweep(now) {
+  for (const [k, e] of store) if (now - e.ts > TTL_MS) store.delete(k);
+}
+
 export function appendTurn(key, userText, assistantText) {
+  const now = Date.now();
+  sweep(now);
   const turns = getHistory(key)
     .concat([{ role: 'user', content: userText }, { role: 'assistant', content: assistantText }])
     .slice(-MAX_TURNS * 2);
-  store.set(key, { turns, ts: Date.now() });
+  store.set(key, { turns, ts: now });
 }

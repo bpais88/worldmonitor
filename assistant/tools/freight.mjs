@@ -36,7 +36,10 @@ export const freightTools = [
       additionalProperties: false,
     },
     handler: async ({ operator, nameContains, limit = 50 } = {}) => {
-      const qs = new URLSearchParams({ types: 'cargo,passenger', freight: '1', limit: String(Math.min(limit, 200)) });
+      // The relay can't filter by name, so a name search must pull the full set
+      // and filter locally — otherwise a match past the first page is missed.
+      const fetchLimit = nameContains ? 3000 : Math.min(limit, 200);
+      const qs = new URLSearchParams({ types: 'cargo,passenger', freight: '1', limit: String(fetchLimit) });
       if (operator) qs.set('operator', operator);
       const j = await relayGet(`/ais/vessels?${qs}`);
       let vs = j.vessels || [];

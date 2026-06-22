@@ -31,27 +31,6 @@ export const actionTools = [
       return { saved: full, bytes: Buffer.byteLength(String(markdown)) };
     },
   },
-  {
-    name: 'send_slack_alert',
-    kind: 'action',
-    description:
-      'Post a short alert message to the team Slack channel. Use only when explicitly asked to notify/alert the team. Outward-facing — requires actions to be enabled.',
-    input_schema: {
-      type: 'object',
-      properties: { text: { type: 'string', description: 'the message to post' } },
-      required: ['text'],
-      additionalProperties: false,
-    },
-    handler: async ({ text }) => {
-      const url = process.env.SLACK_WEBHOOK_URL || '';
-      if (!url) return { error: 'SLACK_WEBHOOK_URL is not configured — cannot post to Slack' };
-      const res = await fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ text }),
-      });
-      if (!res.ok) return { error: `Slack post failed: HTTP ${res.status}` };
-      return { posted: true };
-    },
-  },
+  // Slack posting lives in the Slack surface (post_report_to_channel) where the
+  // live channel context + bot token are available — not as a webhook tool here.
 ];

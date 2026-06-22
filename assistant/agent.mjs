@@ -20,6 +20,17 @@ export const DEFAULT_SYSTEM =
 
 const MAX_STEPS = 6;
 
+// Reuse one client per API key (avoids re-constructing on every Slack message).
+let _client = null;
+let _clientKey = null;
+function getClient(apiKey) {
+  if (!_client || _clientKey !== apiKey) {
+    _client = new Anthropic({ apiKey });
+    _clientKey = apiKey;
+  }
+  return _client;
+}
+
 /**
  * Run one agent turn. `tools` is an array of { name, description, input_schema,
  * handler(input)->any }. `history` is prior Anthropic messages (for threads).
@@ -38,7 +49,7 @@ export async function runAgent({
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
   if (!Array.isArray(tools) || tools.length === 0) throw new Error('no tools provided');
 
-  const client = new Anthropic({ apiKey });
+  const client = getClient(apiKey);
   const toolDefs = tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.input_schema }));
   const byName = new Map(tools.map((t) => [t.name, t]));
   const convo = [...history, { role: 'user', content: userText }];
