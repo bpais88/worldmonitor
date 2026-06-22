@@ -128,10 +128,25 @@ test('mergeVesselStatic does NOT let an OLDER empty voyage field clear a newer o
   assert.equal(m.timestamp, 200);           // monotonic — not regressed to 100
 });
 
-test('mergeVesselStatic: a newer NON-empty destination always overrides regardless', () => {
-  const prev = { mmsi: '1', destination: 'ITNAP', timestamp: 200 };
-  const v = { mmsi: '1', destination: 'ITGOA', timestamp: 100 }; // older but has a real value
-  assert.equal(mergeVesselStatic(prev, v).destination, 'ITGOA');
+test('mergeVesselStatic: the newest voyage snapshot wins; older never overrides', () => {
+  // Newer non-empty overrides.
+  assert.equal(mergeVesselStatic({ mmsi: '1', destination: 'ITNAP', timestamp: 100 },
+    { mmsi: '1', destination: 'ITGOA', timestamp: 200 }).destination, 'ITGOA');
+  // Older non-empty does NOT override a newer voyage value.
+  assert.equal(mergeVesselStatic({ mmsi: '1', destination: 'ITNAP', timestamp: 200 },
+    { mmsi: '1', destination: 'ITGOA', timestamp: 100 }).destination, 'ITNAP');
+});
+
+test('mergeVesselStatic: voyageTs (not general timestamp) governs clears', () => {
+  // General timestamp (200, e.g. an aisstream receipt) is newer than the voyage
+  // value's own time (voyageTs 150).
+  const prev = { mmsi: '1', destination: 'ITGOA', voyageTs: 150, timestamp: 200 };
+  // A clear that is newer than the voyage value (170) but older than 200.
+  const v = { mmsi: '1', destination: '', timestamp: 170 };
+  const m = mergeVesselStatic(prev, v);
+  assert.equal(m.destination, '');   // cleared — gated on voyageTs(150), not timestamp(200)
+  assert.equal(m.voyageTs, 170);
+  assert.equal(m.timestamp, 200);    // freshness stays monotonic
 });
 
 test('mergeVesselStatic lets newer defined values override', () => {
