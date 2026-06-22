@@ -23,14 +23,25 @@ const _heapStats = v8.getHeapStatistics();
 console.log(`[Relay] Heap limit: ${(_heapStats.heap_size_limit / 1024 / 1024).toFixed(0)}MB`);
 
 const AISSTREAM_URL = 'wss://stream.aisstream.io/v0/stream';
-const API_KEY = process.env.AISSTREAM_API_KEY || process.env.VITE_AISSTREAM_API_KEY;
+const { parseAisKeys, nextKeyIndex } = require('./ais-keys.cjs');
+// aisstream throttles per ACCOUNT: a throttled key connects + authenticates but
+// gets zero frames. A key from a second account sidesteps it, so we keep a pool
+// and rotate (see the no-data watchdog in connectUpstream). Add a fallback via
+// AISSTREAM_API_KEY_FALLBACK or a comma-separated AISSTREAM_API_KEY.
+const AIS_KEYS = parseAisKeys(process.env);
+let aisKeyIndex = 0;
+const currentApiKey = () => AIS_KEYS[aisKeyIndex] || '';
+// How long a fresh connection may stay silent before we treat the key as
+// throttled and rotate to the next one. (safeInt is hoisted, defined below.)
+const AIS_KEY_PROBE_MS = safeInt(process.env.AIS_KEY_PROBE_MS, 30_000, 5_000);
 const PORT = process.env.PORT || 3004;
 
-if (!API_KEY) {
+if (AIS_KEYS.length === 0) {
   console.error('[Relay] Error: AISSTREAM_API_KEY environment variable not set');
   console.error('[Relay] Get a free key at https://aisstream.io');
   process.exit(1);
 }
+console.log(`[Relay] AIS key pool: ${AIS_KEYS.length} key(s); no-data rotate after ${AIS_KEY_PROBE_MS / 1000}s`);
 
 const MAX_WS_CLIENTS = 10; // Cap WS clients — app uses HTTP snapshots, not WS
 const UPSTREAM_QUEUE_HIGH_WATER = Math.max(500, Number(process.env.AIS_UPSTREAM_QUEUE_HIGH_WATER || 4000));
@@ -3823,6 +3834,7 @@ const server = http.createServer(async (req, res) => {
       droppedMessages,
       connected: upstreamSocket?.readyState === WebSocket.OPEN,
       upstreamPaused,
+      aisKey: { active: aisKeyIndex + 1, pool: AIS_KEYS.length },
       vessels: vessels.size,
       densityZones: Array.from(densityGrid.values()).filter(c => c.vessels.size >= 2).length,
       telegram: {
@@ -4368,11 +4380,28 @@ function connectUpstream() {
   if (upstreamSocket?.readyState === WebSocket.OPEN ||
       upstreamSocket?.readyState === WebSocket.CONNECTING) return;
 
-  console.log('[Relay] Connecting to aisstream.io...');
+  console.log(`[Relay] Connecting to aisstream.io (key #${aisKeyIndex + 1}/${AIS_KEYS.length})...`);
   const socket = new WebSocket(AISSTREAM_URL);
   upstreamSocket = socket;
   clearUpstreamQueue();
   upstreamPaused = false;
+
+  // No-data watchdog: a throttled aisstream account connects + authenticates but
+  // delivers zero frames. If nothing arrives within the probe window, rotate to
+  // the next key in the pool and reconnect (the close handler does the reconnect).
+  let gotData = false;
+  let keyProbeTimer = setTimeout(() => {
+    if (upstreamSocket !== socket || gotData) return;
+    if (AIS_KEYS.length > 1) {
+      aisKeyIndex = nextKeyIndex(aisKeyIndex, AIS_KEYS.length);
+      console.warn(`[Relay] No AIS data ${AIS_KEY_PROBE_MS / 1000}s after connecting — key looks throttled, rotating to key #${aisKeyIndex + 1}/${AIS_KEYS.length}`);
+    } else {
+      console.warn(`[Relay] No AIS data ${AIS_KEY_PROBE_MS / 1000}s after connecting (single key) — reconnecting`);
+    }
+    try { socket.close(); } catch {}
+  }, AIS_KEY_PROBE_MS);
+  keyProbeTimer.unref?.();
+  const clearKeyProbe = () => { if (keyProbeTimer) { clearTimeout(keyProbeTimer); keyProbeTimer = null; } };
 
   const scheduleUpstreamDrain = () => {
     if (upstreamDrainScheduled) return;
@@ -4423,7 +4452,7 @@ function connectUpstream() {
     }
     console.log('[Relay] Connected to aisstream.io');
     socket.send(JSON.stringify({
-      APIKey: API_KEY,
+      APIKey: currentApiKey(),
       BoundingBoxes: [[[-90, -180], [90, 180]]],
       // ShipStaticData carries destination, IMO and ship type — needed for
       // commercial vessel tracking (the /ais/vessels endpoint).
@@ -4433,6 +4462,7 @@ function connectUpstream() {
 
   socket.on('message', (data) => {
     if (upstreamSocket !== socket) return;
+    if (!gotData) { gotData = true; clearKeyProbe(); } // healthy key — cancel rotation
 
     const raw = data instanceof Buffer ? data : Buffer.from(data);
     if (getUpstreamQueueSize() >= UPSTREAM_QUEUE_HARD_CAP) {
@@ -4451,6 +4481,7 @@ function connectUpstream() {
   });
 
   socket.on('close', () => {
+    clearKeyProbe();
     if (upstreamSocket === socket) {
       upstreamSocket = null;
       clearUpstreamQueue();
