@@ -8,9 +8,9 @@ const INDEX = 'watches';
 const key = (id) => `watch:${id}`;
 let counter = 0;
 
-export async function createWatch({ type, target, channel, thread, createdBy, condition = 'any' }, now = Date.now()) {
+export async function createWatch({ type, target, channel, thread, createdBy, team, condition = 'any' }, now = Date.now()) {
   const id = `w_${now.toString(36)}_${(counter++).toString(36)}`;
-  const watch = { id, type, target, channel, thread, createdBy, condition, lastState: null, createdTs: now };
+  const watch = { id, type, target, channel, thread, createdBy, team, condition, lastState: null, createdTs: now };
   await kvSet(key(id), watch);
   await setAdd(INDEX, id);
   return watch;

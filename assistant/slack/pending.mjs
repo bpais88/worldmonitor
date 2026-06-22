@@ -1,34 +1,30 @@
 // Pending action store for the approval flow. When the agent proposes an action,
 // we stash {tool, input, ...} here and post Approve/Reject buttons; the button's
-// value carries the id. On approval we pop it and run the handler. In-memory with
-// a TTL so stale proposals can't be approved hours later.
+// value carries the id. On approval we pop it and run the handler.
+//
+// Persisted via store.mjs (Upstash or in-memory fallback) with a TTL, so a proposal
+// survives a redeploy and can be approved from any replica. Ids are random (not a
+// process counter) so they don't collide across instances.
+import crypto from 'node:crypto';
+import { kvGet, kvSet, kvDel } from '../store.mjs';
 
-const store = new Map(); // id -> { tool, input, requestedBy, channel, thread, ts }
-const TTL_MS = 30 * 60 * 1000;
-let counter = 0;
+const TTL_SEC = 30 * 60;
+const key = (id) => `pending:${id}`;
 
-function gc(now) {
-  for (const [k, v] of store) if (now - v.ts > TTL_MS) store.delete(k);
-}
-
-export function putPending(action, now = Date.now()) {
-  gc(now);
-  const id = `act_${now.toString(36)}_${(counter++).toString(36)}`;
-  store.set(id, { ...action, ts: now });
+export async function putPending(action) {
+  const id = `act_${crypto.randomBytes(8).toString('hex')}`;
+  await kvSet(key(id), action, TTL_SEC);
   return id;
 }
 
 /** Read without removing (button handler validates before executing). */
-export function peekPending(id, now = Date.now()) {
-  const v = store.get(id);
-  if (!v) return null;
-  if (now - v.ts > TTL_MS) { store.delete(id); return null; }
-  return v;
+export async function peekPending(id) {
+  return id ? kvGet(key(id)) : null;
 }
 
 /** Read and remove (call once an action is resolved). */
-export function takePending(id, now = Date.now()) {
-  const v = peekPending(id, now);
-  if (v) store.delete(id);
+export async function takePending(id) {
+  const v = await peekPending(id);
+  if (v) await kvDel(key(id));
   return v;
 }

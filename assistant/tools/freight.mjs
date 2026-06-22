@@ -9,6 +9,23 @@ import ferryEta from '../../scripts/ferry-eta.cjs';
 const { resolveDestinationPort } = ferryEta;
 const OPERATOR_IDS = ['tirrenia', 'gnv', 'moby', 'grimaldi', 'corsica_sardinia', 'snav', 'caronte'];
 
+// Live-ETA view for a vessel: prefer the relay's freshly-computed ETA (distance ÷
+// speed, recomputed each poll) over the stale captain-entered AIS ETA, and never
+// surface an ETA when the vessel is stopped/at port. etaTrendMin is the signed
+// change vs earlier in this leg (+ = arriving later/slipping, − = ahead).
+export function etaView(v, now = Date.now()) {
+  if (!Number.isFinite(v.etaTs)) return {}; // stopped / at port / no destination → no ETA
+  const out = {
+    eta: new Date(v.etaTs).toISOString().slice(0, 16).replace('T', ' ') + 'Z',
+    etaInHours: Math.round((v.etaTs - now) / 360000) / 10,
+  };
+  if (Number.isFinite(v.etaDeltaMin)) {
+    out.etaTrendMin = v.etaDeltaMin;          // signed: + later, − earlier
+    out.etaTrendWindowMin = v.etaWindowMin;   // measured over this many minutes
+  }
+  return out;
+}
+
 // Great-circle distance in km (for "vessels near a port").
 function haversineKm(a, b) {
   if (![a.lat, a.lon, b.lat, b.lon].every(Number.isFinite)) return Infinity;
@@ -39,7 +56,7 @@ export const freightTools = [
   {
     name: 'find_freight_vessels',
     description:
-      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, and whether delayed. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships".',
+      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved since earlier this trip (+ = running later, − = ahead of earlier estimate) over "etaTrendWindowMin" minutes. No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
     input_schema: {
       type: 'object',
       properties: {
@@ -75,7 +92,7 @@ export const freightTools = [
         count: vs.length,
         vessels: vs.slice(0, limit).map((v) => ({
           name: v.name, operator: v.operatorName || null, category: v.category,
-          destination: v.destination || null, speedKnots: v.speed,
+          destination: v.destination || null, speedKnots: v.speed, ...etaView(v),
           delayed: !!(v.delay && (v.delay.slipping || v.delay.stalled)),
         })),
       };
@@ -102,7 +119,7 @@ export const freightTools = [
   {
     name: 'get_vessel',
     description:
-      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, ETA, and delay + cause if any. Use for "tell me about VESSEL", "where is X", "is X delayed".',
+      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, live ETA, and delay + cause if any. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is the signed change since earlier this trip (+ later, − ahead) over "etaTrendWindowMin" min. No eta field = stopped/at port. Use for "tell me about VESSEL", "where is X", "when does X arrive", "is X delayed".',
     input_schema: {
       type: 'object',
       properties: { query: { type: 'string', description: 'vessel name (substring), IMO, or MMSI' } },
@@ -122,7 +139,7 @@ export const freightTools = [
           name: v.name, mmsi: v.mmsi, imo: v.imo || null, operator: v.operatorName || null,
           category: v.category, destination: v.destination || null, speedKnots: v.speed,
           navStatus: v.navStatus, lengthM: v.length, beamM: v.beam, draughtM: v.draught,
-          etaAis: v.etaAis || null, delayed: !!(v.delay && (v.delay.slipping || v.delay.stalled)),
+          ...etaView(v), delayed: !!(v.delay && (v.delay.slipping || v.delay.stalled)),
           delayReasons: v.delay && v.delay.reasons ? v.delay.reasons.map((r) => r.summary) : [],
         })),
       };
@@ -162,7 +179,7 @@ export const freightTools = [
         if (!v.destination) continue;
         const dest = resolveDestinationPort(v.destination);
         if (dest && dest.portId === p.portId) {
-          inbound.push({ name: v.name, operator: v.operatorName || null, speedKnots: v.speed, etaAis: v.etaAis || null });
+          inbound.push({ name: v.name, operator: v.operatorName || null, speedKnots: v.speed, ...etaView(v) });
         }
       }
       return {

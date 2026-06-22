@@ -61,18 +61,20 @@ export async function runAgent({
   const convo = [...history, { role: 'user', content: userText }];
   const calls = [];
   const audit = [];                 // every action tool call: {tool, input, mode, executed}
+  const usage = { input: 0, output: 0 }; // accumulated token usage across steps
   const state = { actionsExecuted: 0 };
   // Give the model "now" so it can stamp live figures (the data shifts between polls).
   const sys = `${system}\n\nCurrent UTC time: ${new Date().toISOString().slice(0, 16).replace('T', ' ')}.`;
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const resp = await client.messages.create({ model, max_tokens: 1024, system: sys, tools: toolDefs, messages: convo });
+    if (resp.usage) { usage.input += resp.usage.input_tokens || 0; usage.output += resp.usage.output_tokens || 0; }
     convo.push({ role: 'assistant', content: resp.content });
 
     const toolUses = resp.content.filter((c) => c.type === 'tool_use');
     if (toolUses.length === 0) {
       const text = resp.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
-      return { text, calls, audit, convo };
+      return { text, calls, audit, convo, usage };
     }
 
     const results = [];
@@ -112,5 +114,5 @@ export async function runAgent({
     convo.push({ role: 'user', content: results });
   }
 
-  return { text: '(reached the tool-step limit without a final answer)', calls, audit, convo };
+  return { text: '(reached the tool-step limit without a final answer)', calls, audit, convo, usage };
 }
