@@ -23,7 +23,32 @@ const BOT_TOKEN = process.env.SLACK_BOT_TOKEN || '';
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
 const BOT_USER_ID = process.env.SLACK_BOT_USER_ID || '';
 const ACTION_USERS = parseActionUsers(process.env.SLACK_ACTION_USERS);
-const TOOLS = [...freightTools, ...actionTools];
+
+// Slack-only action tool: post a report/message into the CURRENT channel. The
+// handler receives the live Slack context (channel/thread + a postMessage fn) at
+// execution time — so it delivers something the team can actually see, unlike the
+// disk-writing demo tool. Gated by the same approval flow.
+const slackTools = [
+  {
+    name: 'post_report_to_channel',
+    kind: 'action',
+    description:
+      'Post a report or summary as a message into the current Slack channel so the team sees it. Use when asked to post/share/send/publish a report or summary to the channel. Write the content in Slack mrkdwn.',
+    input_schema: {
+      type: 'object',
+      properties: { text: { type: 'string', description: 'the message/report in Slack mrkdwn' } },
+      required: ['text'],
+      additionalProperties: false,
+    },
+    handler: async ({ text }, ctx = {}) => {
+      if (!ctx.postMessage || !ctx.channel) return { error: 'no Slack channel context' };
+      await ctx.postMessage(ctx.channel, ctx.thread, text);
+      return { posted: true, chars: String(text).length };
+    },
+  },
+];
+
+const TOOLS = [...freightTools, ...actionTools, ...slackTools];
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // Slack renders mrkdwn, not full markdown — steer the agent away from tables.
@@ -146,7 +171,8 @@ async function handleInteraction(payload) {
   const tool = toolByName.get(pend.tool);
   if (!tool) return updateMessage(channel, ts, `⚠️ Unknown tool \`${pend.tool}\`.`);
   try {
-    const result = await tool.handler(pend.input || {});
+    // Give action tools the live Slack context (channel/thread + a postMessage fn).
+    const result = await tool.handler(pend.input || {}, { channel: pend.channel, thread: pend.thread, postMessage });
     const summary = result && result.error ? `error: ${result.error}` : JSON.stringify(result).slice(0, 200);
     await updateMessage(channel, ts, `✅ Approved by <@${clicker}> — \`${pend.tool}\` done.\n${summary}`);
   } catch (e) {
