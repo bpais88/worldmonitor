@@ -3,7 +3,10 @@
 // agent, add more tool objects (here or in new files) and include them in the
 // array passed to runAgent — the agent loop never changes.
 import { relayGet } from '../relay.mjs';
+// Reuse the relay's exact LOCODE→port resolver (no duplication) to name inbound vessels.
+import ferryEta from '../../scripts/ferry-eta.cjs';
 
+const { resolveDestinationPort } = ferryEta;
 const OPERATOR_IDS = ['tirrenia', 'gnv', 'moby', 'grimaldi', 'corsica_sardinia', 'snav', 'caronte'];
 
 // Great-circle distance in km (for "vessels near a port").
@@ -128,7 +131,7 @@ export const freightTools = [
   {
     name: 'get_port',
     description:
-      'Deep dive on one commercial freight port: its congestion level + inbound count, plus the freight vessels physically AT the port right now (within ~8 km, with names/speed/status). Use for "what is happening at Genoa", "which ships are at Ravenna".',
+      'Deep dive on one commercial freight port: congestion level, the freight vessels physically AT the port (within ~8 km), and the vessels INBOUND (under way with this port as their resolved destination), each with names/speed. Use for "what is happening at Genoa", "which ships are at / heading to Ravenna".',
     input_schema: {
       type: 'object',
       properties: { port: { type: 'string', description: 'port name or id, e.g. "Genoa"' } },
@@ -142,13 +145,31 @@ export const freightTools = [
         (x) => x.name.toLowerCase() === q || String(x.portId).toLowerCase() === q || x.name.toLowerCase().includes(q),
       );
       if (!p) return { found: false, port };
-      const atPort = (vesselsRes.vessels || [])
-        .filter((v) => haversineKm(v, p) <= 8)
-        .map((v) => ({ name: v.name, operator: v.operatorName || null, speedKnots: v.speed, navStatus: v.navStatus }));
+      const vessels = vesselsRes.vessels || [];
+      const atPortMmsi = new Set();
+      const atPort = [];
+      for (const v of vessels) {
+        if (haversineKm(v, p) <= 8) {
+          atPortMmsi.add(v.mmsi);
+          atPort.push({ name: v.name, operator: v.operatorName || null, speedKnots: v.speed, navStatus: v.navStatus });
+        }
+      }
+      // Inbound: under way, destination resolves to this port, and not already at it.
+      const inbound = [];
+      for (const v of vessels) {
+        if (atPortMmsi.has(v.mmsi)) continue;
+        if (!(Number.isFinite(v.speed) && v.speed > 1)) continue;
+        if (!v.destination) continue;
+        const dest = resolveDestinationPort(v.destination);
+        if (dest && dest.portId === p.portId) {
+          inbound.push({ name: v.name, operator: v.operatorName || null, speedKnots: v.speed, etaAis: v.etaAis || null });
+        }
+      }
       return {
         found: true,
         port: p.name, region: p.region, congestion: p.congestion,
-        atPortCount: p.atPort, inboundCount: p.inbound, vesselsAtPort: atPort,
+        atPortCount: p.atPort, vesselsAtPort: atPort,
+        inboundCount: inbound.length, vesselsInbound: inbound,
       };
     },
   },
