@@ -6,6 +6,17 @@ import { relayGet } from '../relay.mjs';
 
 const OPERATOR_IDS = ['tirrenia', 'gnv', 'moby', 'grimaldi', 'corsica_sardinia', 'snav', 'caronte'];
 
+// Great-circle distance in km (for "vessels near a port").
+function haversineKm(a, b) {
+  if (![a.lat, a.lon, b.lat, b.lon].every(Number.isFinite)) return Infinity;
+  const R = 6371, toRad = (d) => (d * Math.PI) / 180;
+  const dLat = toRad(b.lat - a.lat), dLon = toRad(b.lon - a.lon);
+  const s = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(a.lat)) * Math.cos(toRad(b.lat)) * Math.sin(dLon / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(s));
+}
+
+const ALL_FREIGHT = '/ais/vessels?types=cargo,passenger&freight=1&limit=3000';
+
 export const freightTools = [
   {
     name: 'get_port_congestion',
@@ -72,6 +83,62 @@ export const freightTools = [
           etaGrowthMin: v.delay.etaGrowthMin, stalled: !!v.delay.stalled,
           reasons: (v.delay.reasons || []).map((r) => r.summary),
         })),
+      };
+    },
+  },
+  {
+    name: 'get_vessel',
+    description:
+      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, ETA, and delay + cause if any. Use for "tell me about VESSEL", "where is X", "is X delayed".',
+    input_schema: {
+      type: 'object',
+      properties: { query: { type: 'string', description: 'vessel name (substring), IMO, or MMSI' } },
+      required: ['query'],
+      additionalProperties: false,
+    },
+    handler: async ({ query }) => {
+      const j = await relayGet(ALL_FREIGHT);
+      const q = String(query).toLowerCase();
+      const matches = (j.vessels || []).filter(
+        (v) => (v.name || '').toLowerCase().includes(q) || String(v.imo || '') === query || String(v.mmsi || '') === query,
+      );
+      if (!matches.length) return { found: false, query };
+      return {
+        found: true,
+        matches: matches.slice(0, 5).map((v) => ({
+          name: v.name, mmsi: v.mmsi, imo: v.imo || null, operator: v.operatorName || null,
+          category: v.category, destination: v.destination || null, speedKnots: v.speed,
+          navStatus: v.navStatus, lengthM: v.length, beamM: v.beam, draughtM: v.draught,
+          etaAis: v.etaAis || null, delayed: !!(v.delay && (v.delay.slipping || v.delay.stalled)),
+          delayReasons: v.delay && v.delay.reasons ? v.delay.reasons.map((r) => r.summary) : [],
+        })),
+      };
+    },
+  },
+  {
+    name: 'get_port',
+    description:
+      'Deep dive on one commercial freight port: its congestion level + inbound count, plus the freight vessels physically AT the port right now (within ~8 km, with names/speed/status). Use for "what is happening at Genoa", "which ships are at Ravenna".',
+    input_schema: {
+      type: 'object',
+      properties: { port: { type: 'string', description: 'port name or id, e.g. "Genoa"' } },
+      required: ['port'],
+      additionalProperties: false,
+    },
+    handler: async ({ port }) => {
+      const [portsRes, vesselsRes] = await Promise.all([relayGet('/ais/ports'), relayGet(ALL_FREIGHT)]);
+      const q = String(port).toLowerCase();
+      const p = (portsRes.ports || []).find(
+        (x) => x.name.toLowerCase() === q || String(x.portId).toLowerCase() === q || x.name.toLowerCase().includes(q),
+      );
+      if (!p) return { found: false, port };
+      const atPort = (vesselsRes.vessels || [])
+        .filter((v) => haversineKm(v, p) <= 8)
+        .map((v) => ({ name: v.name, operator: v.operatorName || null, speedKnots: v.speed, navStatus: v.navStatus }));
+      return {
+        found: true,
+        port: p.name, region: p.region, congestion: p.congestion,
+        atPortCount: p.atPort, inboundCount: p.inbound, vesselsAtPort: atPort,
       };
     },
   },

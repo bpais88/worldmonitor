@@ -13,6 +13,7 @@ import http from 'node:http';
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { actionTools } from '../tools/actions.mjs';
+import { weatherTools } from '../tools/weather.mjs';
 import { verifySlackSignature } from './verify.mjs';
 import { policyForUser, parseActionUsers } from './permissions.mjs';
 import { threadKey, getHistory, appendTurn } from './memory.mjs';
@@ -48,7 +49,7 @@ const slackTools = [
   },
 ];
 
-const TOOLS = [...freightTools, ...actionTools, ...slackTools];
+const TOOLS = [...freightTools, ...weatherTools, ...actionTools, ...slackTools];
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // Slack renders mrkdwn, not full markdown — steer the agent away from tables.
