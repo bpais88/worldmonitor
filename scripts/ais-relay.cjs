@@ -1693,6 +1693,8 @@ const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { ITALY_TILES, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+const { computeAllPortStatus } = require('./port-status.cjs');
+const ITALY_PORTS_BY_ID = require('../src/config/italy-ferries.data.json').ports;
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
 // Alternative upstream to aisstream's WebSocket: the free aisstream stream has
@@ -4039,6 +4041,30 @@ const server = http.createServer(async (req, res) => {
       bbox: bounds,
       generatedAt: Date.now(),
     }));
+  } else if (pathname === '/ais/ports') {
+    // Per-port freight congestion: our curated commercial ports x live freight
+    // vessels -> { atPort (waiting/berthed), inbound (en route), congestion }.
+    connectUpstream();
+    const now = Date.now();
+    const freightVessels = [];
+    for (const [mmsi, v] of vessels) {
+      const stat = vesselStatic.get(mmsi);
+      const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
+      const name = v.name || (stat && stat.name) || '';
+      if (!isFreightVessel(st, name, stat && stat.imo)) continue;
+      freightVessels.push({
+        mmsi, lat: v.lat, lon: v.lon, speed: v.speed, navStatus: v.navStatus,
+        timestamp: v.timestamp, destination: stat && stat.destination,
+      });
+    }
+    const ports = computeAllPortStatus(
+      ITALY_PORTS_BY_ID, freightVessels, resolveDestinationPort, now, {}, (p) => p.commercial,
+    );
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=15',
+      'CDN-Cache-Control': 'public, max-age=30',
+    }, JSON.stringify({ ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now }));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;
