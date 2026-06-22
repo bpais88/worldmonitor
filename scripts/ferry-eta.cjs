@@ -85,12 +85,18 @@ function etaFor(vessel, port, now = Date.now()) {
 
 /** Match a vessel name to a known Italian ferry operator's display name, or ''. */
 function resolveOperatorName(vesselName) {
-  if (!vesselName) return '';
+  const op = resolveOperator(vesselName);
+  return op ? op.name : '';
+}
+
+/** Match a vessel name to a known operator, returning { id, name } or null. */
+function resolveOperator(vesselName) {
+  if (!vesselName) return null;
   const upper = String(vesselName).toUpperCase();
   for (const op of data.operators || []) {
-    if ((op.keywords || []).some((k) => upper.includes(k))) return op.name;
+    if ((op.keywords || []).some((k) => upper.includes(k))) return { id: op.id, name: op.name };
   }
-  return '';
+  return null;
 }
 
 /** True if a vessel name belongs to a freight RoPax / RoRo operator. */
@@ -132,6 +138,6 @@ function __setImoRegistryForTests(reg) {
 }
 
 module.exports = {
-  resolveDestinationPort, etaFor, haversineKm, resolveOperatorName,
+  resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, resolveOperator,
   isFreightVessel, __setImoRegistryForTests,
 };

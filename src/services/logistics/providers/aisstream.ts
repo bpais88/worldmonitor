@@ -39,6 +39,8 @@ export interface RawRelayVessel {
   navStatus?: number;
   shipType?: number;
   category?: string;
+  operatorId?: string;
+  operatorName?: string;
   imo?: string;
   destination?: string;
   callSign?: string;
@@ -80,6 +82,8 @@ export function toLiveVessel(raw: RawRelayVessel): LiveVessel | null {
     beamMeters: Number.isFinite(raw.beam) && (raw.beam as number) > 0 ? raw.beam : undefined,
     etaAis: raw.etaAis || undefined,
     category: normalizeCategory(raw.category, shipType),
+    operatorId: raw.operatorId || undefined,
+    operatorName: raw.operatorName || undefined,
     navStatus: Number.isFinite(raw.navStatus) ? raw.navStatus : undefined,
     delay: raw.delay && (raw.delay.slipping || raw.delay.stalled) ? {
       slipping: !!raw.delay.slipping,

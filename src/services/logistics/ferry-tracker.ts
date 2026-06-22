@@ -75,7 +75,10 @@ const STATUS_RANK: Record<FerryStatus, number> = { under_way: 0, at_anchor: 1, i
 
 /** Convert one live vessel into a TrackedFerry (destination + ETA resolved). */
 export function toTrackedFerry(v: LiveVessel, now: number = Date.now()): TrackedFerry {
-  const operatorId = matchItalianFerryOperator(v.name);
+  // Operator id/name from the relay (authoritative) when present; else derive
+  // from the name as a fallback so older relay builds still work.
+  const operatorId = v.operatorId || matchItalianFerryOperator(v.name);
+  const operatorName = v.operatorName || (operatorId ? OPERATOR_BY_ID.get(operatorId)?.name : undefined);
   const eta = estimateFerryEta(v, now);
   const port = eta ? PORT_BY_ID.get(eta.destinationPortId) : undefined;
   // Snapshot has no origin yet (that needs port-call history), so validate on
@@ -86,7 +89,7 @@ export function toTrackedFerry(v: LiveVessel, now: number = Date.now()): Tracked
     mmsi: v.mmsi,
     name: v.name || `MMSI ${v.mmsi}`,
     operatorId,
-    operatorName: operatorId ? OPERATOR_BY_ID.get(operatorId)?.name : undefined,
+    operatorName,
     lat: v.lat,
     lon: v.lon,
     speedKnots: v.speedKnots,

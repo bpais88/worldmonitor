@@ -1684,7 +1684,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // ETA on a timer, and flags crossings whose predicted arrival is slipping (or
 // stalled mid-crossing) — without any external timetable. History persists to
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
-const { resolveDestinationPort, etaFor, resolveOperatorName, isFreightVessel } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
@@ -4017,8 +4017,10 @@ const server = http.createServer(async (req, res) => {
     }
 
     const freight = url.searchParams.get('freight') === '1';
+    const wantOperator = (url.searchParams.get('operator') || '').trim().toLowerCase() || undefined;
     const out = buildVesselList(vessels, vesselStatic, {
       bounds, wantTypes, limit, isFreight: freight ? isFreightVessel : undefined,
+      resolveOperator, wantOperator,
     });
 
     // Attach delay status (Method B) + any explainer reasons for the vessel.

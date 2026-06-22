@@ -51,7 +51,10 @@ function inBounds(v, bounds) {
 
 // Build the /ais/vessels response array from the live vessel + static maps.
 // Merges static data (destination, IMO, fallback ship type) per vessel.
-function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit, isFreight }) {
+// `resolveOperator(name)` (optional) attaches the authoritative operator id/name
+// so the API is the single source of truth. `wantOperator` (optional, lowercase
+// operator id) restricts the result to one operator server-side.
+function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit, isFreight, resolveOperator, wantOperator }) {
   const out = [];
   for (const [mmsi, v] of vessels) {
     if (bounds && !inBounds(v, bounds)) continue;
@@ -67,6 +70,9 @@ function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit, isFr
     // Freight filter (research-backed): IMO registry override, else cargo + RoPax-by-operator.
     if (isFreight && !isFreight(shipType, name, stat && stat.imo)) continue;
 
+    const operator = resolveOperator ? resolveOperator(name) : null;
+    if (wantOperator && (!operator || operator.id !== wantOperator)) continue;
+
     out.push({
       mmsi,
       name,
@@ -78,6 +84,8 @@ function buildVesselList(vessels, vesselStatic, { bounds, wantTypes, limit, isFr
       navStatus: v.navStatus,
       shipType,
       category,
+      operatorId: operator ? operator.id : '',
+      operatorName: operator ? operator.name : '',
       imo: stat ? stat.imo : '',
       destination: stat ? stat.destination : '',
       callSign: stat ? (stat.callSign || '') : '',

@@ -37,6 +37,9 @@ export interface LiveVessel extends VesselPosition {
   category: ShipCategory;
   /** AIS navigational status code (0=under way, 1=at anchor, 5=moored, ...). */
   navStatus?: number;
+  /** Authoritative operator id/name resolved by the relay (single source of truth). */
+  operatorId?: string;
+  operatorName?: string;
   /** Delay status computed by the relay, if available. */
   delay?: VesselDelay;
 }

@@ -12,6 +12,7 @@ const {
   clampLimit,
   buildVesselList,
 } = require('./ais-vessels-query.cjs');
+const { resolveOperator } = require('./ferry-eta.cjs');
 
 // Realistic vessel records as stored by the relay (PositionReport-derived).
 function makeMaps() {
@@ -120,4 +121,23 @@ test('vessel without static data still returns with empty destination/imo', () =
   assert.equal(jet.destination, '');
   assert.equal(jet.imo, '');
   assert.equal(jet.category, 'hsc');
+});
+
+test('resolveOperator attaches authoritative operatorId/operatorName', () => {
+  const { vessels, vesselStatic } = makeMaps();
+  const out = buildVesselList(vessels, vesselStatic, { bounds: ITALY, wantTypes: null, limit: 100, resolveOperator });
+  const moby = out.find((v) => v.mmsi === '247111111');
+  assert.equal(moby.operatorId, 'moby');
+  assert.equal(moby.operatorName, 'Moby Lines');
+  // Non-operator cargo gets empty operator fields, not undefined.
+  const ever = out.find((v) => v.mmsi === '636000001');
+  assert.equal(ever.operatorId, '');
+  assert.equal(ever.operatorName, '');
+});
+
+test('wantOperator restricts the result to one operator (server-side filter)', () => {
+  const { vessels, vesselStatic } = makeMaps();
+  const out = buildVesselList(vessels, vesselStatic, { bounds: ITALY, wantTypes: null, limit: 100, resolveOperator, wantOperator: 'moby' });
+  assert.equal(out.length, 1);
+  assert.equal(out[0].mmsi, '247111111');
 });
