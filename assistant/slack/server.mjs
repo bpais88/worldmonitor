@@ -30,9 +30,10 @@ import { relayGet } from '../relay.mjs';
 import { listWatches, evaluateWatches } from '../watches.mjs';
 import { authorizeUrl, exchangeCode, newState, consumeState } from './oauth.mjs';
 import {
-  getInstallation, saveInstallation, getConfig, setConfig, addActionUser, listInstallations,
+  getInstallation, saveInstallation, getConfig, setConfig, addActionUser, listInstallations, removeInstallation,
 } from './installations.mjs';
 import { MARCO_PERSONA, onboardingText } from './onboarding.mjs';
+import { recordUsage } from '../usage.mjs';
 
 const PORT = process.env.PORT || 3010;
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
@@ -153,6 +154,15 @@ async function handleEvent(payload) {
   const ev = payload.event;
   if (!ev) return;
   const teamId = payload.team_id || ev.team || payload.team?.id || '';
+
+  // Uninstall / token revocation: drop the workspace so we stop using a dead token.
+  // (No token needed to handle this — and it may already be gone.)
+  if (ev.type === 'app_uninstalled' || ev.type === 'tokens_revoked') {
+    await removeInstallation(teamId);
+    console.log(`[slack] ${ev.type}: removed workspace ${teamId}`);
+    return;
+  }
+
   const inst = await getInstallation(teamId);
   const botToken = inst?.botToken || BOT_TOKEN;
   const botUserId = inst?.botUserId || BOT_USER_ID;
@@ -189,7 +199,7 @@ async function handleEvent(payload) {
   console.log(`[slack] msg @${ev.user} in ${teamId}/${channel}: "${userText.slice(0, 100)}"`);
 
   try {
-    const { text, audit, calls } = await runAgent({
+    const { text, audit, calls, usage } = await runAgent({
       userText,
       history: await getHistory(key),
       tools: TOOLS,
@@ -197,15 +207,18 @@ async function handleEvent(payload) {
       policy,
       context: { channel, thread: threadTs, user: ev.user, team: teamId, postMessage: post },
     });
+    // Observe-only token metering (no cap yet) — per workspace, per day.
+    const day = await recordUsage(teamId, usage);
     const proposed = audit.filter((x) => x.mode === 'dryrun').length;
-    console.log(`[slack]   → tools: ${calls.join(', ') || 'none'}${proposed ? ` · ${proposed} proposed` : ''} · replied ${text.length} chars`);
+    console.log(`[slack]   → tools: ${calls.join(', ') || 'none'}${proposed ? ` · ${proposed} proposed` : ''} · ${usage.input}+${usage.output} tok · replied ${text.length} chars` +
+      (day ? ` · today ${day.messages} msg / ${day.input + day.output} tok` : ''));
     const reply = text || '(no answer)';
     await post(channel, threadTs, reply);
     await appendTurn(key, userText, reply);
 
     // For each proposed (dry-run) action, post an Approve/Reject card.
     for (const a of audit.filter((x) => x.mode === 'dryrun')) {
-      const id = putPending({ tool: a.tool, input: a.input, requestedBy: ev.user, team: teamId, channel, thread: threadTs });
+      const id = await putPending({ tool: a.tool, input: a.input, requestedBy: ev.user, team: teamId, channel, thread: threadTs });
       await post(channel, threadTs, `Proposed action: ${a.tool}`, approvalBlocks(id, a.tool, a.input));
     }
   } catch (e) {
@@ -228,12 +241,12 @@ async function handleInteraction(payload) {
   const botToken = inst?.botToken || BOT_TOKEN;
   if (!botToken) return;
   const { post, update } = apiFor(botToken);
-  const pend = peekPending(id);
+  const pend = await peekPending(id);
 
   if (!pend) return update(channel, ts, '⌛ This proposed action expired.');
 
   if (action.action_id === 'reject_action') {
-    takePending(id);
+    await takePending(id);
     return update(channel, ts, `❌ Rejected by <@${clicker}> — \`${pend.tool}\` not run.`);
   }
 
@@ -242,7 +255,7 @@ async function handleInteraction(payload) {
   if (!resolveActionUsers(inst, cfg).has(clicker)) {
     return postEphemeral(payload.response_url, "You're not authorized to approve actions.");
   }
-  takePending(id);
+  await takePending(id);
   const tool = toolByName.get(pend.tool);
   if (!tool) return update(channel, ts, `⚠️ Unknown tool \`${pend.tool}\`.`);
   try {
@@ -269,9 +282,9 @@ function htmlPage(res, status, body) {
     `<body style="font-family:system-ui,-apple-system,sans-serif;max-width:560px;margin:12vh auto;padding:0 24px;text-align:center;color:#111">${body}</body>`);
 }
 
-function handleInstall(req, res) {
+async function handleInstall(req, res) {
   if (!CLIENT_ID) return htmlPage(res, 500, '<h1>Marco</h1><p>Install not configured (missing SLACK_CLIENT_ID).</p>');
-  const url = authorizeUrl({ clientId: CLIENT_ID, redirectUri: redirectUri(req), state: newState() });
+  const url = authorizeUrl({ clientId: CLIENT_ID, redirectUri: redirectUri(req), state: await newState() });
   res.writeHead(302, { Location: url });
   res.end();
 }
@@ -279,7 +292,7 @@ function handleInstall(req, res) {
 async function handleOAuthCallback(req, res, query) {
   const { code, state, error } = query;
   if (error) return htmlPage(res, 400, `<h1>Install cancelled</h1><p>${error}</p>`);
-  if (!code || !consumeState(state)) return htmlPage(res, 400, '<h1>Install failed</h1><p>Invalid or expired request. Please try again.</p>');
+  if (!code || !(await consumeState(state))) return htmlPage(res, 400, '<h1>Install failed</h1><p>Invalid or expired request. Please try again.</p>');
   try {
     const inst = await exchangeCode({ clientId: CLIENT_ID, clientSecret: CLIENT_SECRET, code, redirectUri: redirectUri(req) });
     await saveInstallation(inst);

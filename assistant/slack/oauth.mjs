@@ -3,6 +3,7 @@
 // workspace's bot token. Keeping these pure (authorizeUrl) / thin (exchangeCode)
 // makes the install route in server.mjs small and testable.
 import crypto from 'node:crypto';
+import { kvGet, kvSet, kvDel } from '../store.mjs';
 
 // Minimal scopes Marco needs: hear @mentions + DMs, reply, open DMs (onboarding),
 // read user/team names. Add scopes here as tools grow (one re-install picks them up).
@@ -46,20 +47,22 @@ export async function exchangeCode({ clientId, clientSecret, code, redirectUri, 
   };
 }
 
-// Short-lived CSRF state tokens for the OAuth round-trip (single-instance memory).
-const states = new Map(); // state -> expiry ms
-const STATE_TTL_MS = 10 * 60 * 1000;
+// Short-lived single-use CSRF state for the OAuth round-trip. Stored in the shared
+// KV (not process memory) so the /install and /callback halves can land on
+// different Railway replicas.
+const STATE_TTL_SEC = 10 * 60;
+const stateKey = (s) => `oauthstate:${s}`;
 
-export function newState(now = Date.now()) {
-  for (const [s, exp] of states) if (exp < now) states.delete(s);
+export async function newState() {
   const state = crypto.randomBytes(16).toString('hex');
-  states.set(state, now + STATE_TTL_MS);
+  await kvSet(stateKey(state), 1, STATE_TTL_SEC);
   return state;
 }
 
-export function consumeState(state, now = Date.now()) {
-  const exp = states.get(state);
-  if (!exp) return false;
-  states.delete(state);
-  return exp >= now;
+export async function consumeState(state) {
+  if (!state) return false;
+  const v = await kvGet(stateKey(state)); // null once expired (Redis EX)
+  if (v == null) return false;
+  await kvDel(stateKey(state));
+  return true;
 }

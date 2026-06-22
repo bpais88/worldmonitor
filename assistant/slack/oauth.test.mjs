@@ -16,12 +16,11 @@ test('authorizeUrl requires clientId', () => {
   assert.throws(() => authorizeUrl({ redirectUri: 'https://x/cb', state: 's' }), /clientId required/);
 });
 
-test('state is single-use and expires', () => {
-  const s = newState();
-  assert.equal(consumeState(s), true);
-  assert.equal(consumeState(s), false); // already consumed
-  const s2 = newState(1000);
-  assert.equal(consumeState(s2, 1000 + 11 * 60 * 1000), false); // expired
+test('state is single-use', async () => {
+  const s = await newState();
+  assert.equal(await consumeState(s), true);
+  assert.equal(await consumeState(s), false); // already consumed
+  assert.equal(await consumeState('never-issued'), false);
 });
 
 test('exchangeCode normalizes the oauth.v2.access response', async () => {

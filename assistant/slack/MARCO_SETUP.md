@@ -20,7 +20,9 @@ no OAuth install record, the server falls back to the legacy `SLACK_BOT_TOKEN`.
 
 **Event Subscriptions**
 - Request URL: `https://italy-freight-assistant-production.up.railway.app/slack/events`
-- Subscribe to **bot events**: `app_mention`, `message.im`, `app_home_opened`
+- Subscribe to **bot events**: `app_mention`, `message.im`, `app_home_opened`,
+  `app_uninstalled`, `tokens_revoked` (the last two let Marco drop a workspace's
+  stored token when it removes him, instead of retrying a dead token)
 
 **Interactivity & Shortcuts**
 - Request URL: `https://italy-freight-assistant-production.up.railway.app/slack/interactions`
