@@ -31,6 +31,8 @@ export class ItalyFerryPanel extends Panel {
   private ferries: TrackedFerry[] = [];
   private ports: PortStatus[] = [];
   private mode: BoardMode = 'vessels';
+  private operatorFilter: string | null = null; // operatorId, or null = all
+  private searchText = '';
   private timer: ReturnType<typeof setInterval> | null = null;
   private map: ItalyFerryMap | null = null;
   private mapMounted = false;
@@ -90,18 +92,61 @@ export class ItalyFerryPanel extends Panel {
   private renderBoard(): void {
     const board = this.content.querySelector('.ferry-board');
     if (!board) return;
+    // The operator filter bar belongs to the vessels view only.
+    const filterBar = this.content.querySelector<HTMLElement>('.ferry-filter');
+    if (filterBar) filterBar.style.display = this.mode === 'ports' ? 'none' : '';
+
     if (this.mode === 'ports') { board.innerHTML = this.portsTableHtml(); return; }
+
+    this.refreshChips();
+    const shown = this.filteredFerries();
+    this.setCount(shown.length);
     if (this.ferries.length === 0) {
       board.innerHTML = '<div class="economic-empty">No Italian freight vessels currently in view.</div>';
       return;
     }
-    board.innerHTML = this.vesselsTableHtml();
+    if (shown.length === 0) {
+      board.innerHTML = '<div class="economic-empty">No vessels match this filter.</div>';
+      return;
+    }
+    board.innerHTML = this.vesselsTableHtml(shown);
   }
 
-  private vesselsTableHtml(): string {
+  /** Apply the operator chip + free-text search filters to the ferry list. */
+  private filteredFerries(): TrackedFerry[] {
+    const q = this.searchText.trim().toLowerCase();
+    return this.ferries.filter((f) => {
+      if (this.operatorFilter && f.operatorId !== this.operatorFilter) return false;
+      if (q) {
+        const hay = `${f.name} ${f.operatorName ?? ''}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }
+
+  /** Rebuild operator chips from the operators currently present in the data. */
+  private refreshChips(): void {
+    const host = this.content.querySelector<HTMLElement>('.ferry-chips');
+    if (!host) return;
+    const byId = new Map<string, string>();
+    for (const f of this.ferries) {
+      if (f.operatorId && f.operatorName) byId.set(f.operatorId, f.operatorName);
+    }
+    const ops = [...byId.entries()].sort((a, b) => a[1].localeCompare(b[1]));
+    const chip = (id: string | null, label: string, count: number) => {
+      const active = (this.operatorFilter ?? null) === id ? ' is-active' : '';
+      return `<button type="button" class="ferry-chip${active}" data-op="${id ?? ''}">${escapeHtml(label)}${count >= 0 ? ` <span class="ferry-chip-n">${count}</span>` : ''}</button>`;
+    };
+    const chips = [chip(null, 'All', this.ferries.length)]
+      .concat(ops.map(([id, name]) => chip(id, name, this.ferries.filter((f) => f.operatorId === id).length)));
+    host.innerHTML = chips.join('');
+  }
+
+  private vesselsTableHtml(list: TrackedFerry[]): string {
     // Group by destination island group (fallback bucket for unresolved).
     const groups = new Map<string, TrackedFerry[]>();
-    for (const f of this.ferries) {
+    for (const f of list) {
       const key = f.destinationGroup || (f.destinationName ? 'Other destinations' : 'Destination unknown');
       const bucket = groups.get(key) ?? [];
       bucket.push(f);
@@ -177,6 +222,10 @@ export class ItalyFerryPanel extends Panel {
         <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
         <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
       </div>
+      <div class="ferry-filter">
+        <input type="search" class="ferry-search" placeholder="Search vessel or operator…" aria-label="Search vessel or operator" />
+        <div class="ferry-chips"></div>
+      </div>
       <div class="ferry-board"></div>
       <div class="economic-footer">
         <span class="economic-source">Source: AIS · ~ = inferred from course · ports = our curated freight ports</span>
@@ -200,6 +249,21 @@ export class ItalyFerryPanel extends Panel {
       }
     });
     this.updateToggleActive();
+
+    // Operator filter: free-text search (input persists, so focus/value survive
+    // board re-renders) + operator chips (delegated click).
+    const search = this.content.querySelector<HTMLInputElement>('.ferry-search');
+    search?.addEventListener('input', () => {
+      this.searchText = search.value;
+      this.renderBoard();
+    });
+    const chips = this.content.querySelector<HTMLElement>('.ferry-chips');
+    chips?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('button[data-op]');
+      if (!btn) return;
+      this.operatorFilter = btn.dataset.op ? btn.dataset.op : null;
+      this.renderBoard();
+    });
 
     // Click a vessel row to fly to it on the map (delegated, survives innerHTML swaps).
     const board = this.content.querySelector<HTMLElement>('.ferry-board');
