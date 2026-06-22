@@ -4165,6 +4165,7 @@ const server = http.createServer(async (req, res) => {
   } else if (pathname === '/ais/voyages/daily') {
     // Trips Marco registered per day (durable counters). ?days=N (default 14, max 120).
     const now = Date.now();
+    const url = new URL(req.url, `http://localhost:${PORT}`);
     const days = Math.min(Math.max(parseInt(url.searchParams.get('days'), 10) || 14, 1), 120);
     const dates = [];
     for (let i = 0; i < days; i++) dates.push(utcDay(now - i * 86_400_000));
