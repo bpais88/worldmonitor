@@ -1692,7 +1692,7 @@ const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
-const { ITALY_TILES, normalizeMarinesiaVessel, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+const { ITALY_TILES, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
 // Alternative upstream to aisstream's WebSocket: the free aisstream stream has
@@ -1717,13 +1717,12 @@ function applyMarinesiaVessel(v, now) {
       mmsi: v.mmsi, name: v.name, lat: v.lat, lon: v.lon, timestamp: v.timestamp || now,
       shipType: v.shipType, heading: v.heading, speed: v.speed, course: v.course, navStatus: v.navStatus,
     });
+    // Feed the same snapshot aggregates the world-map density/disruption layer reads.
+    updatePositionAggregates(v.mmsi, v.lat, v.lon, now);
   }
-  // Identity/voyage record (mirror of processShipStaticData's shape).
-  vesselStatic.set(v.mmsi, {
-    mmsi: v.mmsi, name: v.name, shipType: v.shipType, imo: v.imo,
-    destination: v.destination, callSign: '', draught: v.draught,
-    length: v.length, beam: v.beam, etaAis: v.etaAis, timestamp: v.timestamp || now,
-  });
+  // Identity/voyage record — merge over any existing (aisstream- or earlier-poll-
+  // derived) record so a row missing dest/imo/type doesn't erase richer data.
+  vesselStatic.set(v.mmsi, mergeVesselStatic(vesselStatic.get(v.mmsi), v, now));
   marinesiaUpserts++;
 }
 
@@ -2046,6 +2045,35 @@ function processRawUpstreamMessage(raw) {
   }
 }
 
+// Shared position-aggregate update for the snapshot layer (density grid, refresh
+// history, chokepoint membership) — used by BOTH the aisstream position path and
+// the Marinesia poll so the world-map density/disruption signals reflect either
+// source. (Military-candidate detection stays aisstream-only; it needs AIS meta.)
+function updatePositionAggregates(mmsi, lat, lon, now) {
+  const history = vesselHistory.get(mmsi) || [];
+  history.push(now);
+  if (history.length > 10) history.shift();
+  vesselHistory.set(mmsi, history);
+
+  const gridKey = getGridKey(lat, lon);
+  let cell = densityGrid.get(gridKey);
+  if (!cell) {
+    cell = {
+      lat: Math.floor(lat / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2,
+      lon: Math.floor(lon / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2,
+      vessels: new Set(),
+      lastUpdate: now,
+      previousCount: 0,
+    };
+    densityGrid.set(gridKey, cell);
+  }
+  cell.vessels.add(mmsi);
+  cell.lastUpdate = now;
+
+  // Maintain exact chokepoint membership so moving vessels don't get "stuck" in old buckets.
+  updateVesselChokepoints(mmsi, lat, lon);
+}
+
 function processPositionReportForSnapshot(data) {
   const meta = data?.MetaData;
   const pos = data?.Message?.PositionReport;
@@ -2073,28 +2101,7 @@ function processPositionReportForSnapshot(data) {
     navStatus: pos.NavigationalStatus,
   });
 
-  const history = vesselHistory.get(mmsi) || [];
-  history.push(now);
-  if (history.length > 10) history.shift();
-  vesselHistory.set(mmsi, history);
-
-  const gridKey = getGridKey(lat, lon);
-  let cell = densityGrid.get(gridKey);
-  if (!cell) {
-    cell = {
-      lat: Math.floor(lat / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2,
-      lon: Math.floor(lon / GRID_SIZE) * GRID_SIZE + GRID_SIZE / 2,
-      vessels: new Set(),
-      lastUpdate: now,
-      previousCount: 0,
-    };
-    densityGrid.set(gridKey, cell);
-  }
-  cell.vessels.add(mmsi);
-  cell.lastUpdate = now;
-
-  // Maintain exact chokepoint membership so moving vessels don't get "stuck" in old buckets.
-  updateVesselChokepoints(mmsi, lat, lon);
+  updatePositionAggregates(mmsi, lat, lon, now);
 
   if (isLikelyMilitaryCandidate(meta)) {
     candidateReports.set(mmsi, {

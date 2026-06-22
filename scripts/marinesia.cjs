@@ -79,6 +79,28 @@ function normalizeMarinesiaVessel(raw, now = Date.now()) {
   };
 }
 
+// Merge a normalized Marinesia vessel over an existing vesselStatic record,
+// keeping prior (aisstream- or earlier-poll-derived) values where Marinesia
+// omits a field — so a poll missing dest/imo/type never erases richer data.
+// Marinesia carries no call sign, so that field is preserved from prev only.
+function mergeVesselStatic(prev, v, now = Date.now()) {
+  const p = prev || {};
+  const keep = (next, old) => (next != null && next !== '' ? next : old);
+  return {
+    mmsi: v.mmsi,
+    name: keep(v.name, p.name) || '',
+    shipType: v.shipType != null ? v.shipType : p.shipType,
+    imo: keep(v.imo, p.imo) || '',
+    destination: keep(v.destination, p.destination) || '',
+    callSign: p.callSign || '',
+    draught: v.draught != null ? v.draught : p.draught,
+    length: v.length != null ? v.length : p.length,
+    beam: v.beam != null ? v.beam : p.beam,
+    etaAis: keep(v.etaAis, p.etaAis) || '',
+    timestamp: v.timestamp || now,
+  };
+}
+
 // Italian waters: Ligurian/Tyrrhenian/Adriatic/Ionian + Sicily channel.
 const ITALY_BBOX = { lat_min: 36, lat_max: 46, long_min: 6, long_max: 19 };
 
@@ -123,5 +145,5 @@ async function fetchTile(tile, key, fetchImpl = fetch) {
 
 module.exports = {
   AREA_URL, VESSEL_CAP, ITALY_BBOX, ITALY_TILES,
-  marinesiaTypeToShipType, normalizeMarinesiaVessel, makeGrid, fetchTile,
+  marinesiaTypeToShipType, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile,
 };
