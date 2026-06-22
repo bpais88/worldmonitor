@@ -31,6 +31,7 @@ together.
    **Copy member ID** (looks like `U0123ABCD`). ✅ *(id #3)*
 
 ### Send me these three (without pasting in chat)
+
 Run in your terminal:
 ```
 ! printf 'xoxb-...' > /Users/brunopais/worldmonitor/.slack-bot-token
@@ -62,10 +63,12 @@ I'll give you the service URL, e.g. `https://italy-freight-assistant.up.railway.
 ---
 
 ## Try it
+
 - *"@bot which ports are congested?"* → it answers in-thread.
 - *"@bot save a congestion report"* → it proposes the action with **Approve / Reject**;
   only allowlisted users (your member ID) can approve.
 
 ## Notes
+
 - Non-allowlisted users get **read-only** answers (no action buttons fire for them).
 - The bot only sees channels it's invited to, threads it's mentioned in, and DMs.

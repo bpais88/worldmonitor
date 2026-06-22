@@ -44,6 +44,7 @@ action, the bot posts *Approve / Reject* buttons, and the tool runs only when a
 **allowlisted** user approves (Viktor-style per-action human-in-the-loop).
 
 ### Slack app setup
+
 1. api.slack.com/apps → Create App (from scratch) → pick workspace.
 2. **OAuth & Permissions** → Bot scopes: `app_mentions:read`, `chat:write`, `im:history`, `im:read`. Install → copy the **Bot User OAuth Token** (`xoxb-…`).
 3. **Basic Information** → copy the **Signing Secret**.
@@ -52,6 +53,7 @@ action, the bot posts *Approve / Reject* buttons, and the tool runs only when a
 6. Invite the bot to a channel; @mention it.
 
 ### Env
+
 - `SLACK_BOT_TOKEN`, `SLACK_SIGNING_SECRET`
 - `SLACK_ACTION_USERS` — comma-separated Slack user ids allowed to approve/run actions
 - `SLACK_BOT_USER_ID` (optional, to ignore the bot's own messages)
@@ -77,5 +79,6 @@ That's it — Claude sees the new capability automatically. Tomorrow's tools
 (Stripe, Notion, a database, anything) plug in the same way.
 
 ## Required env
+
 - `ANTHROPIC_API_KEY` — the agent's model (Sonnet 4.6 by default; set `ASSISTANT_MODEL` to override).
 - `RELAY_URL` + `RELAY_SHARED_SECRET` — to reach the freight data.

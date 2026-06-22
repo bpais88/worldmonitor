@@ -68,6 +68,7 @@ classes it a passenger ship (0-3 against).
 ## How this shaped our shipped rule (validated)
 
 `isFreightVessel(shipType, name)`:
+
 - **cargo (70-79)** → freight (container / RoRo / bulk), always.
 - **passenger (60-69)** → freight only if a **freight RoPax operator** (GNV,
   Moby, Tirrenia, Grimaldi, Corsica Sardinia, Caronte, SNAV) — excludes cruise
