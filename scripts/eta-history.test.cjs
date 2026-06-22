@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { recordSnapshot, detectDrift } = require('./eta-history.cjs');
+const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
 
 const MIN = 60_000;
 // Build a buffer of snapshots spaced `stepMin` apart, ending at t0.
@@ -97,4 +97,32 @@ test('does NOT flag stalled when stopped with no destination (in port)', () => {
     { etaOffsetMin: null, dest: '', speed: 0 }, { etaOffsetMin: null, dest: '', speed: 0 }, { etaOffsetMin: null, dest: '', speed: 0 },
   ]);
   assert.equal(detectDrift(buf), null);
+});
+
+test('updateVoyage: opens a trip, keeps it, and resets on destination change', () => {
+  // No destination → no voyage.
+  assert.equal(updateVoyage(null, { destPortId: '', etaTs: null, now: T0 }), null);
+  // First sight with a destination → opens an anchor stamped now.
+  const v1 = updateVoyage(null, { destPortId: 'olbia', etaTs: T0 + 5 * 3_600_000, now: T0 });
+  assert.equal(v1.destPortId, 'olbia');
+  assert.equal(v1.startTs, T0);
+  assert.equal(v1.departureEtaTs, T0 + 5 * 3_600_000);
+  // Same destination later → SAME anchor (startTs unchanged → "vs departure" holds).
+  const v2 = updateVoyage(v1, { destPortId: 'olbia', etaTs: T0 + 6 * 3_600_000, now: T0 + 3_600_000 });
+  assert.equal(v2.startTs, T0);
+  assert.equal(v2.departureEtaTs, v1.departureEtaTs);
+  // Destination change → NEW trip (new startTs).
+  const v3 = updateVoyage(v2, { destPortId: 'genoa', etaTs: T0 + 8 * 3_600_000, now: T0 + 4 * 3_600_000 });
+  assert.equal(v3.destPortId, 'genoa');
+  assert.equal(v3.startTs, T0 + 4 * 3_600_000);
+});
+
+test('updateVoyage: backfills departure ETA once the vessel starts moving', () => {
+  // Opened while stopped at the dock (no ETA yet).
+  const v1 = updateVoyage(null, { destPortId: 'capri', etaTs: null, now: T0 });
+  assert.equal(v1.departureEtaTs, null);
+  // First real ETA backfills the departure baseline (startTs stays).
+  const v2 = updateVoyage(v1, { destPortId: 'capri', etaTs: T0 + 2 * 3_600_000, now: T0 + 600_000 });
+  assert.equal(v2.startTs, T0);
+  assert.equal(v2.departureEtaTs, T0 + 2 * 3_600_000);
 });

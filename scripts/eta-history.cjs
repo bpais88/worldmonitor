@@ -94,4 +94,27 @@ function detectDrift(buffer, opts = {}) {
   return { slipping, stalled, etaGrowthMin, windowMin, samples };
 }
 
-module.exports = { recordSnapshot, detectDrift, DEFAULTS };
+/**
+ * Voyage anchor: track a trip from start to end so we can report drift vs the
+ * DEPARTURE ETA (not just the rolling window). Pure — the relay holds the map and
+ * persists it; this just decides the next anchor state.
+ *
+ * An anchor is { destPortId, startTs, departureEtaTs }:
+ *   - opens on a new leg (no prior anchor, or destination changed = new trip),
+ *   - survives the whole crossing (not subject to the 2h snapshot cap),
+ *   - backfills departureEtaTs the first time the vessel has a real ETA (it may
+ *     have been stopped at the dock when the trip "opened").
+ * Returns null when there's no destination (no trip to anchor).
+ */
+function updateVoyage(prev, { destPortId, etaTs, now }) {
+  if (!destPortId) return null;
+  if (!prev || prev.destPortId !== destPortId) {
+    return { destPortId, startTs: now, departureEtaTs: Number.isFinite(etaTs) ? etaTs : null };
+  }
+  if (prev.departureEtaTs == null && Number.isFinite(etaTs)) {
+    return { ...prev, departureEtaTs: etaTs };
+  }
+  return prev;
+}
+
+module.exports = { recordSnapshot, detectDrift, updateVoyage, DEFAULTS };
