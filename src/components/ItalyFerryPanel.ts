@@ -212,12 +212,6 @@ export class ItalyFerryPanel extends Panel {
   private ensureScaffold(): void {
     if (this.mapMounted) return;
     this.content.innerHTML = `
-      <div class="ferry-map-host"></div>
-      <div class="ferry-map-legend">
-        <span><i style="background:#2fbf85"></i>Under way (arrow = heading)</span>
-        <span><i style="background:#e0a032"></i>At anchor</span>
-        <span><i style="background:#9aa0a6"></i>In port</span>
-      </div>
       <div class="ferry-toggle" role="tablist">
         <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
         <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
@@ -225,6 +219,12 @@ export class ItalyFerryPanel extends Panel {
       <div class="ferry-filter">
         <input type="search" class="ferry-search" placeholder="Search vessel or operator…" aria-label="Search vessel or operator" />
         <div class="ferry-chips"></div>
+      </div>
+      <div class="ferry-map-host"></div>
+      <div class="ferry-map-legend">
+        <span><i style="background:#2fbf85"></i>Under way (arrow = heading)</span>
+        <span><i style="background:#e0a032"></i>At anchor</span>
+        <span><i style="background:#9aa0a6"></i>In port</span>
       </div>
       <div class="ferry-board"></div>
       <div class="economic-footer">
