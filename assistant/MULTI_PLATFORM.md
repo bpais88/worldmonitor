@@ -24,6 +24,7 @@ PLATFORM-NEUTRAL CORE (reuse as-is)
 ```
 
 An adapter does exactly three things:
+
 1. **Receive** platform events and normalize to a common shape:
    `{ tenantId, channelId, threadId, userId, text }`
 2. **Run** the shared agent with that context (`runAgent({ ..., context })`).
@@ -76,6 +77,7 @@ Today `installations.mjs` stores a Slack-specific `botToken`. Generalize the rec
 
 Then add a single `send(install, { channelId, threadId, text, blocks })` that
 branches on `install.platform`:
+
 - Slack → `chat.postMessage` with `deliver` as the bearer token (current code).
 - Teams → Bot Framework `continueConversation(deliver)` then `sendActivity`.
 

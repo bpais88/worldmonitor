@@ -13,29 +13,35 @@ no OAuth install record, the server falls back to the legacy `SLACK_BOT_TOKEN`.
 ## 1. Slack app config (api.slack.com/apps → your app)
 
 **OAuth & Permissions**
+
 - **Redirect URLs** → add:
   `https://italy-freight-assistant-production.up.railway.app/slack/oauth/callback`
 - **Bot Token Scopes** (must match `SCOPES` in `oauth.mjs`):
   `app_mentions:read`, `chat:write`, `im:history`, `im:write`, `users:read`, `team:read`
 
 **Event Subscriptions**
+
 - Request URL: `https://italy-freight-assistant-production.up.railway.app/slack/events`
 - Subscribe to **bot events**: `app_mention`, `message.im`, `app_home_opened`,
   `app_uninstalled`, `tokens_revoked` (the last two let Marco drop a workspace's
   stored token when it removes him, instead of retrying a dead token)
 
 **Interactivity & Shortcuts**
+
 - Request URL: `https://italy-freight-assistant-production.up.railway.app/slack/interactions`
 
 **App Home**
+
 - Enable the **Home Tab** (so `app_home_opened` fires → triggers onboarding for anyone
   who opens Marco who hasn't been greeted yet).
 
 **Basic Information → Display**
+
 - Set the app name to **Marco**, add an avatar + the short description
   ("Your freight-ops coworker — live Italian-port freight tracking, in Slack").
 
 **Manage Distribution**
+
 - Tick "Remove Hard Coded Information" checklist, then **Activate Public Distribution**.
 - This gives you the public **"Add to Slack"** link (we also serve our own landing
   page at `/` and the redirect at `/slack/install`).
@@ -48,6 +54,7 @@ no OAuth install record, the server falls back to the legacy `SLACK_BOT_TOKEN`.
 ## 2. Railway env vars (italy-freight-assistant service)
 
 Add:
+
 - `SLACK_CLIENT_ID` — Basic Information → App Credentials → Client ID
 - `SLACK_CLIENT_SECRET` — App Credentials → Client Secret
 - `SLACK_SIGNING_SECRET` — App Credentials → Signing Secret (already set)
@@ -55,6 +62,7 @@ Add:
   request host; set to the exact callback URL above.
 
 Already set (keep):
+
 - `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` — **required** for per-workspace
   tokens to persist across restarts (without them, installs live in memory and are
   lost on redeploy).
