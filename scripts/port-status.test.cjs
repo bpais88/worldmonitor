@@ -57,6 +57,20 @@ test('congestionLevel thresholds', () => {
   assert.equal(congestionLevel(8, o), 'congested');
 });
 
+test('computeAllPortStatus accepts an ARRAY and uses each port id (not the index)', () => {
+  // Mirrors italy-ferries.data.json: ports is an array of {id, ...}.
+  const ports = [
+    { id: 'naples', name: 'Naples', lat: 40.84, lon: 14.26, commercial: true },
+    { id: 'gioia_tauro', name: 'Gioia Tauro', lat: 38.43, lon: 15.9, commercial: true },
+  ];
+  const resolve = (s) => (s === 'ITGIT' ? { portId: 'gioia_tauro' } : null);
+  const vessels = [{ mmsi: 'in', lat: 39.0, lon: 16.5, speed: 14, destination: 'ITGIT', timestamp: NOW }];
+  const out = computeAllPortStatus(ports, vessels, resolve, NOW, {}, (p) => p.commercial);
+  const git = out.find((p) => p.portId === 'gioia_tauro');
+  assert.ok(git, 'portId must be the real id, not an array index');
+  assert.equal(git.inbound, 1); // resolves because portId === resolved id
+});
+
 test('computeAllPortStatus filters, skips coord-less ports, and sorts by severity', () => {
   const ports = {
     gioia_tauro: { name: 'Gioia Tauro', lat: 38.43, lon: 15.9, commercial: true },

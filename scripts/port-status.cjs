@@ -69,16 +69,21 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
 }
 
 /**
- * Status for every port in `portsById` (object keyed by port id). `filter(port)`
- * optionally restricts which ports (e.g. commercial only). Ports without coords
- * are skipped. Sorted by congestion severity then atPort count, desc.
+ * Status for every port. `ports` may be an ARRAY of port objects (each with an
+ * `id`) — as in italy-ferries.data.json — or an object keyed by port id. The
+ * emitted portId always comes from the port's own `id` (else the map key) so it
+ * matches resolveDest()'s portId for inbound counting. `filter(port)` optionally
+ * restricts which ports (e.g. commercial only). Ports without coords are skipped.
+ * Sorted by congestion severity then atPort count, desc.
  */
-function computeAllPortStatus(portsById, vessels, resolveDest, now = Date.now(), opts = {}, filter = null) {
+function computeAllPortStatus(ports, vessels, resolveDest, now = Date.now(), opts = {}, filter = null) {
+  const entries = Array.isArray(ports) ? ports.map((p) => [p && p.id, p]) : Object.entries(ports || {});
   const out = [];
-  for (const [portId, p] of Object.entries(portsById || {})) {
+  for (const [key, p] of entries) {
+    if (!p) continue;
     if (filter && !filter(p)) continue;
     if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
-    out.push(computePortStatus({ ...p, portId }, vessels, resolveDest, now, opts));
+    out.push(computePortStatus({ ...p, portId: p.id || key }, vessels, resolveDest, now, opts));
   }
   const rank = { congested: 2, busy: 1, clear: 0 };
   out.sort((a, b) => (rank[b.congestion] - rank[a.congestion]) || (b.atPort - a.atPort) || (b.inbound - a.inbound));
