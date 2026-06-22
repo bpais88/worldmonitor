@@ -74,14 +74,9 @@ export class ItalyFerryPanel extends Panel {
   }
 
   private render(): void {
-    // Only the vessels view has nothing to show when no ferries match; the ports
-    // view still renders the curated port list with zero counts.
-    if (this.mode === 'vessels' && this.ferries.length === 0) {
-      this.teardownMap();
-      this.content.innerHTML = '<div class="economic-empty">No Italian ferries currently in view.</div>';
-      return;
-    }
-
+    // Always build the scaffold (map + Vessels/Ports toggle) so the user can
+    // switch to Ports even when zero freight vessels match — the Ports view still
+    // shows the curated port list with counts.
     this.ensureScaffold();
 
     // Index by MMSI so a table-row click can focus the matching vessel on the map.
@@ -95,7 +90,12 @@ export class ItalyFerryPanel extends Panel {
   private renderBoard(): void {
     const board = this.content.querySelector('.ferry-board');
     if (!board) return;
-    board.innerHTML = this.mode === 'ports' ? this.portsTableHtml() : this.vesselsTableHtml();
+    if (this.mode === 'ports') { board.innerHTML = this.portsTableHtml(); return; }
+    if (this.ferries.length === 0) {
+      board.innerHTML = '<div class="economic-empty">No Italian freight vessels currently in view.</div>';
+      return;
+    }
+    board.innerHTML = this.vesselsTableHtml();
   }
 
   private vesselsTableHtml(): string {
