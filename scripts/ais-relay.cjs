@@ -1848,6 +1848,10 @@ const FERRY_HISTORY_STALE_MS = 6 * 60 * 60 * 1000;
 
 const etaHistory = new Map();  // mmsi -> snapshot[]
 const delayByMmsi = new Map(); // mmsi -> { slipping, stalled, etaGrowthMin, ... }
+// Live computed ETA + signed trend for EVERY tracked freight vessel (not only
+// delayed ones), so we can show "ETA ~04:00 (+20 min vs ~1h ago)" instead of the
+// stale captain-entered AIS ETA. { etaTs, etaDeltaMin, etaWindowMin }.
+const etaInfoByMmsi = new Map();
 let _ferryHistoryDirty = false;
 
 function updateFerryDelays(now = Date.now()) {
@@ -1856,10 +1860,10 @@ function updateFerryDelays(now = Date.now()) {
       const stat = vesselStatic.get(mmsi);
       // Only track freight vessels (cargo + RoPax-by-operator), not tourist craft.
       if (!isFreightVessel(Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType), v.name || (stat && stat.name), stat && stat.imo)) {
-        etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue;
+        etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); etaInfoByMmsi.delete(mmsi); continue;
       }
       const port = resolveDestinationPort(stat && stat.destination);
-      if (!port) { etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); continue; }
+      if (!port) { etaHistory.delete(mmsi); delayByMmsi.delete(mmsi); etaInfoByMmsi.delete(mmsi); continue; }
       const eta = etaFor({ lat: v.lat, lon: v.lon, speedKnots: v.speed }, port, now);
       const snap = {
         ts: now,
@@ -1872,6 +1876,14 @@ function updateFerryDelays(now = Date.now()) {
       const drift = detectDrift(buf);
       if (drift && (drift.slipping || drift.stalled)) delayByMmsi.set(mmsi, drift);
       else delayByMmsi.delete(mmsi);
+      // Live ETA + signed trend for ALL freight (drift carries the trend even when
+      // not slipping). etaTs is null when stopped/at port (no bogus ETA).
+      const info = { etaTs: eta ? eta.etaTs : null };
+      if (drift && Number.isFinite(drift.etaGrowthMin) && drift.windowMin > 0) {
+        info.etaDeltaMin = drift.etaGrowthMin;
+        info.etaWindowMin = drift.windowMin;
+      }
+      etaInfoByMmsi.set(mmsi, info);
     }
     // Prune histories for vessels that stopped reporting.
     for (const [mmsi, buf] of etaHistory) {
@@ -1879,6 +1891,7 @@ function updateFerryDelays(now = Date.now()) {
       if (!last || now - last.ts > FERRY_HISTORY_STALE_MS) {
         etaHistory.delete(mmsi);
         delayByMmsi.delete(mmsi);
+        etaInfoByMmsi.delete(mmsi);
       }
     }
     _ferryHistoryDirty = true;
@@ -4032,6 +4045,12 @@ const server = http.createServer(async (req, res) => {
       if (d) {
         const cached = reasonsByMmsi.get(v.mmsi);
         v.delay = cached && cached.reasons.length ? { ...d, reasons: cached.reasons } : d;
+      }
+      // Live computed ETA + signed trend (vs how it looked earlier in this leg).
+      const info = etaInfoByMmsi.get(v.mmsi);
+      if (info) {
+        if (Number.isFinite(info.etaTs)) v.etaTs = info.etaTs;
+        if (Number.isFinite(info.etaDeltaMin)) { v.etaDeltaMin = info.etaDeltaMin; v.etaWindowMin = info.etaWindowMin; }
       }
     }
 
