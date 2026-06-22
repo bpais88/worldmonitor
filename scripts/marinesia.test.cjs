@@ -106,15 +106,32 @@ test('mergeVesselStatic preserves static identity when a row omits it', () => {
   assert.equal(m.timestamp, 200);         // new wins
 });
 
-test('mergeVesselStatic lets a CLEARED destination/eta reset (not stuck on stale port)', () => {
-  const prev = { mmsi: '1', name: 'X', shipType: 70, imo: '9471056', destination: 'ITCAG', etaAis: '06-22 10:30', callSign: 'IBXY' };
-  // Vessel arrived and cleared its AIS destination — Marinesia now reports empty.
+test('mergeVesselStatic lets a CLEARED destination/eta reset when the row is newer', () => {
+  const prev = { mmsi: '1', name: 'X', shipType: 70, imo: '9471056', destination: 'ITCAG', etaAis: '06-22 10:30', callSign: 'IBXY', timestamp: 100 };
+  // Vessel arrived and cleared its AIS destination — newer Marinesia row reports empty.
   const v = { mmsi: '1', name: 'X', shipType: 70, imo: '', destination: '', etaAis: '', timestamp: 200 };
   const m = mergeVesselStatic(prev, v);
-  assert.equal(m.destination, '');        // cleared, NOT preserved
+  assert.equal(m.destination, '');        // cleared (incoming is newer)
   assert.equal(m.etaAis, '');             // cleared
   assert.equal(m.imo, '9471056');         // static identity still preserved
   assert.equal(m.callSign, 'IBXY');       // static still preserved
+  assert.equal(m.timestamp, 200);
+});
+
+test('mergeVesselStatic does NOT let an OLDER empty voyage field clear a newer one', () => {
+  // e.g. aisstream wrote a fresh destination; a lagging Marinesia row arrives empty.
+  const prev = { mmsi: '1', destination: 'ITNAP', etaAis: '06-22 12:00', imo: '9', timestamp: 200 };
+  const v = { mmsi: '1', destination: '', etaAis: '', imo: '', timestamp: 100 };
+  const m = mergeVesselStatic(prev, v);
+  assert.equal(m.destination, 'ITNAP');     // preserved — incoming row is older
+  assert.equal(m.etaAis, '06-22 12:00');    // preserved
+  assert.equal(m.timestamp, 200);           // monotonic — not regressed to 100
+});
+
+test('mergeVesselStatic: a newer NON-empty destination always overrides regardless', () => {
+  const prev = { mmsi: '1', destination: 'ITNAP', timestamp: 200 };
+  const v = { mmsi: '1', destination: 'ITGOA', timestamp: 100 }; // older but has a real value
+  assert.equal(mergeVesselStatic(prev, v).destination, 'ITGOA');
 });
 
 test('mergeVesselStatic lets newer defined values override', () => {

@@ -85,25 +85,33 @@ function normalizeMarinesiaVessel(raw, now = Date.now()) {
 // preserved when the new row omits it — so a poll missing those never erases
 // richer aisstream- or earlier-poll-derived data.
 //
-// VOYAGE DATA (destination/ETA) is dynamic and CLEARABLE, so it takes the latest
-// value as-is, including empty. Marinesia always includes `dest`, so '' means
-// "no destination", not "omitted" — preserving a stale port would leave an
-// arrived/cleared vessel resolving the old port and being falsely marked stalled.
+// VOYAGE DATA (destination/ETA) is dynamic and CLEARABLE: a non-empty incoming
+// value always applies, but an EMPTY value only clears the prior one when the
+// incoming record is at least as new — so a stale Marinesia row (its `ts` can lag
+// a fresher aisstream static write) can't wipe a newer destination and drop the
+// vessel's ETA history. Marinesia always includes `dest`, so '' means "no
+// destination", not "omitted".
 function mergeVesselStatic(prev, v, now = Date.now()) {
   const p = prev || {};
   const keep = (next, old) => (next != null && next !== '' ? next : old);
+  const vTs = Number.isFinite(v.timestamp) ? v.timestamp : now;
+  const prevTs = Number.isFinite(p.timestamp) ? p.timestamp : -Infinity;
+  const atLeastAsNew = vTs >= prevTs;
+  // Non-empty wins; empty clears only when not older than the stored record.
+  const mergeVoyage = (next, old) => (next ? next : (atLeastAsNew ? '' : (old || '')));
   return {
     mmsi: v.mmsi,
     name: keep(v.name, p.name) || '',
     shipType: v.shipType != null ? v.shipType : p.shipType,
     imo: keep(v.imo, p.imo) || '',
-    destination: v.destination || '', // latest wins (clearable voyage data)
+    destination: mergeVoyage(v.destination, p.destination),
     callSign: p.callSign || '',
     draught: v.draught != null ? v.draught : p.draught,
     length: v.length != null ? v.length : p.length,
     beam: v.beam != null ? v.beam : p.beam,
-    etaAis: v.etaAis || '',            // latest wins (clearable voyage data)
-    timestamp: v.timestamp || now,
+    etaAis: mergeVoyage(v.etaAis, p.etaAis),
+    // Keep timestamp monotonic so an older row can't make the record look stale.
+    timestamp: Math.max(vTs, Number.isFinite(p.timestamp) ? p.timestamp : vTs),
   };
 }
 
