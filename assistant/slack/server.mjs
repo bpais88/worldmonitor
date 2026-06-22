@@ -135,9 +135,10 @@ async function handleEvent(ev) {
   // allowlisted users go through the button. Execution is re-gated to ACTION_USERS
   // in handleInteraction, so a teammate can ask and an authorized user approves.
   const policy = { ...policyForUser(ev.user, { actionUsers: ACTION_USERS, allowDryRunForAll: true }), execute: false };
+  console.log(`[slack] msg @${ev.user} in ${channel}: "${userText.slice(0, 100)}"`);
 
   try {
-    const { text, audit } = await runAgent({
+    const { text, audit, calls } = await runAgent({
       userText,
       history: await getHistory(key),
       tools: TOOLS,
@@ -145,6 +146,8 @@ async function handleEvent(ev) {
       policy,
       context: { channel, thread: threadTs, user: ev.user, postMessage },
     });
+    const proposed = audit.filter((x) => x.mode === 'dryrun').length;
+    console.log(`[slack]   → tools: ${calls.join(', ') || 'none'}${proposed ? ` · ${proposed} proposed` : ''} · replied ${text.length} chars`);
     const reply = text || '(no answer)';
     await postMessage(channel, threadTs, reply);
     await appendTurn(key, userText, reply);
@@ -165,6 +168,7 @@ async function handleInteraction(payload) {
   const clicker = payload.user?.id;
   const action = payload.actions?.[0] || {};
   const id = action.value;
+  console.log(`[slack] button ${action.action_id} by @${clicker} (${id})`);
   const channel = payload.channel?.id;
   const ts = payload.message?.ts;
   const pend = peekPending(id);
