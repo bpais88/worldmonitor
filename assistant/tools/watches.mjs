@@ -20,7 +20,7 @@ export const watchTools = [
     },
     handler: async ({ type, target, condition = 'any' }, ctx = {}) => {
       if (!ctx.channel) return { error: 'no channel context to attach the watch to' };
-      const w = await createWatch({ type, target, condition, channel: ctx.channel, thread: ctx.thread, createdBy: ctx.user });
+      const w = await createWatch({ type, target, condition, channel: ctx.channel, thread: ctx.thread, createdBy: ctx.user, team: ctx.team });
       return { created: true, id: w.id, type: w.type, target: w.target, condition: w.condition };
     },
   },
