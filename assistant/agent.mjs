@@ -4,6 +4,7 @@
 // tools — this file never changes.
 import Anthropic from '@anthropic-ai/sdk';
 import { ANTHROPIC_API_KEY, ASSISTANT_MODEL } from './config.mjs';
+import { evaluateToolCall, DEFAULT_POLICY } from './guardrails.mjs';
 
 export const DEFAULT_SYSTEM =
   'You are the Italy Freight assistant — a maritime logistics analyst for Italian ' +
@@ -11,7 +12,11 @@ export const DEFAULT_SYSTEM =
   'the provided tools and their returned data; if the data does not cover something, ' +
   'say so plainly rather than guessing. Be concise and concrete — cite vessel names, ' +
   'ports, and numbers. For a "report", lead with the headline signals (congested ' +
-  'ports, delayed vessels + their causes). The data is live AIS.';
+  'ports, delayed vessels + their causes). The data is live AIS.\n\n' +
+  'Some tools take ACTIONS (saving files, posting to Slack). If an action tool ' +
+  'returns {blocked}, tell the user it needs actions enabled and DO NOT retry it. ' +
+  'If it returns {dryRun}, tell the user exactly what you would do and that it was ' +
+  'not performed. Never claim an action succeeded unless the tool result confirms it.';
 
 const MAX_STEPS = 6;
 
@@ -27,6 +32,7 @@ export async function runAgent({
   system = DEFAULT_SYSTEM,
   apiKey = ANTHROPIC_API_KEY,
   model = ASSISTANT_MODEL,
+  policy = DEFAULT_POLICY,
   onToolCall,
 } = {}) {
   if (!apiKey) throw new Error('ANTHROPIC_API_KEY not set');
@@ -37,6 +43,8 @@ export async function runAgent({
   const byName = new Map(tools.map((t) => [t.name, t]));
   const convo = [...history, { role: 'user', content: userText }];
   const calls = [];
+  const audit = [];                 // every action tool call: {tool, input, mode, executed}
+  const state = { actionsExecuted: 0 };
 
   for (let step = 0; step < MAX_STEPS; step++) {
     const resp = await client.messages.create({ model, max_tokens: 1024, system, tools: toolDefs, messages: convo });
@@ -45,24 +53,45 @@ export async function runAgent({
     const toolUses = resp.content.filter((c) => c.type === 'tool_use');
     if (toolUses.length === 0) {
       const text = resp.content.filter((c) => c.type === 'text').map((c) => c.text).join('\n').trim();
-      return { text, calls, convo };
+      return { text, calls, audit, convo };
     }
 
     const results = [];
     for (const tu of toolUses) {
       calls.push(tu.name);
-      onToolCall?.(tu.name, tu.input);
       const tool = byName.get(tu.name);
+      const input = tu.input || {};
       let out;
-      try {
-        out = tool ? await tool.handler(tu.input || {}) : { error: `unknown tool ${tu.name}` };
-      } catch (e) {
-        out = { error: e.message };
+
+      if (!tool) {
+        out = { error: `unknown tool ${tu.name}` };
+      } else {
+        const decision = evaluateToolCall(tool, policy, state);
+        onToolCall?.(tu.name, input, decision.mode);
+        if (decision.mode === 'execute') {
+          try {
+            out = await tool.handler(input);
+          } catch (e) {
+            out = { error: e.message };
+          }
+          if (decision.kind === 'action') {
+            state.actionsExecuted += 1;
+            audit.push({ tool: tu.name, input, mode: 'executed' });
+          }
+        } else if (decision.mode === 'dryrun') {
+          // Do NOT run the handler — describe the intended action so the model
+          // tells the user what it would do.
+          out = { dryRun: true, wouldCall: tu.name, withInput: input, note: decision.reason };
+          audit.push({ tool: tu.name, input, mode: 'dryrun' });
+        } else {
+          out = { blocked: true, reason: decision.reason };
+          audit.push({ tool: tu.name, input, mode: 'blocked', reason: decision.reason });
+        }
       }
       results.push({ type: 'tool_result', tool_use_id: tu.id, content: JSON.stringify(out) });
     }
     convo.push({ role: 'user', content: results });
   }
 
-  return { text: '(reached the tool-step limit without a final answer)', calls, convo };
+  return { text: '(reached the tool-step limit without a final answer)', calls, audit, convo };
 }
