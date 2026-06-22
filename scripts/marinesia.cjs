@@ -79,10 +79,16 @@ function normalizeMarinesiaVessel(raw, now = Date.now()) {
   };
 }
 
-// Merge a normalized Marinesia vessel over an existing vesselStatic record,
-// keeping prior (aisstream- or earlier-poll-derived) values where Marinesia
-// omits a field — so a poll missing dest/imo/type never erases richer data.
-// Marinesia carries no call sign, so that field is preserved from prev only.
+// Merge a normalized Marinesia vessel over an existing vesselStatic record.
+//
+// STATIC IDENTITY (name/imo/type/dims, and call sign which Marinesia lacks) is
+// preserved when the new row omits it — so a poll missing those never erases
+// richer aisstream- or earlier-poll-derived data.
+//
+// VOYAGE DATA (destination/ETA) is dynamic and CLEARABLE, so it takes the latest
+// value as-is, including empty. Marinesia always includes `dest`, so '' means
+// "no destination", not "omitted" — preserving a stale port would leave an
+// arrived/cleared vessel resolving the old port and being falsely marked stalled.
 function mergeVesselStatic(prev, v, now = Date.now()) {
   const p = prev || {};
   const keep = (next, old) => (next != null && next !== '' ? next : old);
@@ -91,12 +97,12 @@ function mergeVesselStatic(prev, v, now = Date.now()) {
     name: keep(v.name, p.name) || '',
     shipType: v.shipType != null ? v.shipType : p.shipType,
     imo: keep(v.imo, p.imo) || '',
-    destination: keep(v.destination, p.destination) || '',
+    destination: v.destination || '', // latest wins (clearable voyage data)
     callSign: p.callSign || '',
     draught: v.draught != null ? v.draught : p.draught,
     length: v.length != null ? v.length : p.length,
     beam: v.beam != null ? v.beam : p.beam,
-    etaAis: keep(v.etaAis, p.etaAis) || '',
+    etaAis: v.etaAis || '',            // latest wins (clearable voyage data)
     timestamp: v.timestamp || now,
   };
 }

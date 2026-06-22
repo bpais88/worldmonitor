@@ -94,17 +94,27 @@ test('fetchTile returns the data array on success (injected fetch)', async () =>
   assert.equal(out.length, 2);
 });
 
-test('mergeVesselStatic keeps prior fields where the new row omits them', () => {
+test('mergeVesselStatic preserves static identity when a row omits it', () => {
   const prev = { mmsi: '1', name: 'EUROCARGO RAVENNA', shipType: 70, imo: '9471056', destination: 'ITCAG', callSign: 'IBXY', draught: 7.5, length: 200, beam: 26, etaAis: '06-22 10:30', timestamp: 100 };
-  // A later Marinesia poll where dest/imo dropped out and type went unknown.
-  const v = { mmsi: '1', name: 'EUROCARGO RAVENNA', shipType: undefined, imo: '', destination: '', draught: 7.5, length: 200, beam: 26, etaAis: '', timestamp: 200 };
+  // A later poll where the STATIC fields dropped out (imo blank, type unknown).
+  const v = { mmsi: '1', name: 'EUROCARGO RAVENNA', shipType: undefined, imo: '', destination: 'ITCAG', draught: 7.5, length: 200, beam: 26, etaAis: '06-22 10:30', timestamp: 200 };
   const m = mergeVesselStatic(prev, v, 999);
-  assert.equal(m.destination, 'ITCAG');   // preserved
   assert.equal(m.imo, '9471056');         // preserved
   assert.equal(m.shipType, 70);           // preserved
   assert.equal(m.callSign, 'IBXY');       // Marinesia has none -> kept
-  assert.equal(m.etaAis, '06-22 10:30');  // preserved
+  assert.equal(m.length, 200);            // preserved
   assert.equal(m.timestamp, 200);         // new wins
+});
+
+test('mergeVesselStatic lets a CLEARED destination/eta reset (not stuck on stale port)', () => {
+  const prev = { mmsi: '1', name: 'X', shipType: 70, imo: '9471056', destination: 'ITCAG', etaAis: '06-22 10:30', callSign: 'IBXY' };
+  // Vessel arrived and cleared its AIS destination — Marinesia now reports empty.
+  const v = { mmsi: '1', name: 'X', shipType: 70, imo: '', destination: '', etaAis: '', timestamp: 200 };
+  const m = mergeVesselStatic(prev, v);
+  assert.equal(m.destination, '');        // cleared, NOT preserved
+  assert.equal(m.etaAis, '');             // cleared
+  assert.equal(m.imo, '9471056');         // static identity still preserved
+  assert.equal(m.callSign, 'IBXY');       // static still preserved
 });
 
 test('mergeVesselStatic lets newer defined values override', () => {
