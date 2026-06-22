@@ -1692,6 +1692,68 @@ const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
+const { ITALY_TILES, normalizeMarinesiaVessel, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+
+// --- Marinesia polled provider (REST AIS source) ---------------------------
+// Alternative upstream to aisstream's WebSocket: the free aisstream stream has
+// months-long zero-frame outages, so we also poll Marinesia (Premium), which
+// returns up to 2000 pre-joined vessels per bounding box. The box is tiled (no
+// type filter / pagination) and tiles are polled round-robin within the rate
+// limit. Vessels feed the same vessels/vesselStatic maps the ferry board reads,
+// so freight shows even when aisstream is silent. Disabled if no key is set.
+const MARINESIA_API_KEY = process.env.MARINESIA_API_KEY || '';
+const MARINESIA_ENABLED = !!MARINESIA_API_KEY;
+const MARINESIA_POLL_MS = safeInt(process.env.MARINESIA_POLL_MS, 13_000, 12_000); // >=12s keeps us <=5 req/min
+let marinesiaTileIndex = 0;
+let marinesiaLastPollAt = null;
+let marinesiaLastError = null;
+let marinesiaUpserts = 0;
+let marinesiaBackoffUntil = 0;
+
+function applyMarinesiaVessel(v, now) {
+  if (!v || !v.mmsi) return;
+  if (Number.isFinite(v.lat) && Number.isFinite(v.lon)) {
+    vessels.set(v.mmsi, {
+      mmsi: v.mmsi, name: v.name, lat: v.lat, lon: v.lon, timestamp: v.timestamp || now,
+      shipType: v.shipType, heading: v.heading, speed: v.speed, course: v.course, navStatus: v.navStatus,
+    });
+  }
+  // Identity/voyage record (mirror of processShipStaticData's shape).
+  vesselStatic.set(v.mmsi, {
+    mmsi: v.mmsi, name: v.name, shipType: v.shipType, imo: v.imo,
+    destination: v.destination, callSign: '', draught: v.draught,
+    length: v.length, beam: v.beam, etaAis: v.etaAis, timestamp: v.timestamp || now,
+  });
+  marinesiaUpserts++;
+}
+
+async function pollMarinesiaTick() {
+  if (!MARINESIA_ENABLED) return;
+  const now = Date.now();
+  if (now < marinesiaBackoffUntil) return;
+  const tile = ITALY_TILES[marinesiaTileIndex % ITALY_TILES.length];
+  marinesiaTileIndex++;
+  try {
+    const raw = await fetchTile(tile, MARINESIA_API_KEY);
+    for (const r of raw) applyMarinesiaVessel(normalizeMarinesiaVessel(r, now), now);
+    marinesiaLastPollAt = now;
+    marinesiaLastError = null;
+    if (raw.length >= MARINESIA_CAP) {
+      console.warn(`[Relay] Marinesia tile hit the ${MARINESIA_CAP}-vessel cap — grid may need subdividing`);
+    }
+  } catch (e) {
+    marinesiaLastError = e.message;
+    if (/Too Many Requests/i.test(e.message)) marinesiaBackoffUntil = Date.now() + 60_000; // cool off
+    console.warn('[Relay] Marinesia poll error:', e.message);
+  }
+}
+
+function startMarinesiaLoop() {
+  if (!MARINESIA_ENABLED) { console.log('[Relay] Marinesia disabled (no MARINESIA_API_KEY)'); return; }
+  const sweepS = Math.round(ITALY_TILES.length * MARINESIA_POLL_MS / 1000);
+  console.log(`[Relay] Marinesia enabled: ${ITALY_TILES.length} tiles, poll every ${MARINESIA_POLL_MS / 1000}s (~${sweepS}s/sweep)`);
+  setInterval(() => { void pollMarinesiaTick(); }, MARINESIA_POLL_MS).unref?.();
+}
 
 // Pluggable "why is it delayed?" explainers — add sources here over time.
 // Port congestion + cross-vessel read our own live data (no external call).
@@ -3835,6 +3897,13 @@ const server = http.createServer(async (req, res) => {
       connected: upstreamSocket?.readyState === WebSocket.OPEN,
       upstreamPaused,
       aisKey: { active: aisKeyIndex + 1, pool: AIS_KEYS.length },
+      marinesia: {
+        enabled: MARINESIA_ENABLED,
+        tiles: ITALY_TILES.length,
+        lastPollAt: marinesiaLastPollAt ? new Date(marinesiaLastPollAt).toISOString() : null,
+        upserts: marinesiaUpserts,
+        lastError: marinesiaLastError,
+      },
       vessels: vessels.size,
       densityZones: Array.from(densityGrid.values()).filter(c => c.vessels.size >= 2).length,
       telegram: {
@@ -4508,6 +4577,7 @@ server.listen(PORT, () => {
   startFerryDelayLoop();
   startFerryEnrichLoop();
   startMeteoalarmLoop();
+  startMarinesiaLoop();
 });
 
 wss.on('connection', (ws, req) => {
