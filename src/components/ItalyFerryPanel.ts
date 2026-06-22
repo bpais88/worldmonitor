@@ -7,8 +7,11 @@ import {
   type FerryStatus,
 } from '@/services/logistics/ferry-tracker';
 import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
+import { getPortStatus, type PortStatus } from '@/services/logistics/port-status';
 
 const REFRESH_INTERVAL_MS = 60_000;
+
+type BoardMode = 'vessels' | 'ports';
 
 const STATUS_CLASS: Record<FerryStatus, string> = {
   under_way: 'ferry-status-underway',
@@ -16,12 +19,18 @@ const STATUS_CLASS: Record<FerryStatus, string> = {
   in_port: 'ferry-status-port',
 };
 
+const CONGESTION_LABEL: Record<PortStatus['congestion'], string> = {
+  clear: 'Clear', busy: 'Busy', congested: 'Congested',
+};
+
 /**
- * Live board of Italian island ferries derived from AIS. Self-contained: call
- * start() after mounting to begin polling. No app-wide data-loader wiring needed.
+ * Live board of Italian freight vessels derived from AIS, with a Vessels/Ports
+ * toggle. Self-contained: call start() after mounting to begin polling.
  */
 export class ItalyFerryPanel extends Panel {
   private ferries: TrackedFerry[] = [];
+  private ports: PortStatus[] = [];
+  private mode: BoardMode = 'vessels';
   private timer: ReturnType<typeof setInterval> | null = null;
   private map: ItalyFerryMap | null = null;
   private mapMounted = false;
@@ -44,6 +53,7 @@ export class ItalyFerryPanel extends Panel {
       this.ferries = ferries;
       this.setCount(ferries.length);
       this.setDataBadge('live');
+      if (this.mode === 'ports') await this.refreshPorts();
       this.render();
     } catch {
       this.setDataBadge('unavailable');
@@ -55,8 +65,18 @@ export class ItalyFerryPanel extends Panel {
     }
   }
 
+  private async refreshPorts(): Promise<void> {
+    try {
+      this.ports = await getPortStatus();
+    } catch {
+      /* keep the last-known port list */
+    }
+  }
+
   private render(): void {
-    if (this.ferries.length === 0) {
+    // Only the vessels view has nothing to show when no ferries match; the ports
+    // view still renders the curated port list with zero counts.
+    if (this.mode === 'vessels' && this.ferries.length === 0) {
       this.teardownMap();
       this.content.innerHTML = '<div class="economic-empty">No Italian ferries currently in view.</div>';
       return;
@@ -68,6 +88,17 @@ export class ItalyFerryPanel extends Panel {
     this.ferryByMmsi.clear();
     for (const f of this.ferries) this.ferryByMmsi.set(f.mmsi, f);
 
+    this.map?.setFerries(this.ferries);
+    this.renderBoard();
+  }
+
+  private renderBoard(): void {
+    const board = this.content.querySelector('.ferry-board');
+    if (!board) return;
+    board.innerHTML = this.mode === 'ports' ? this.portsTableHtml() : this.vesselsTableHtml();
+  }
+
+  private vesselsTableHtml(): string {
     // Group by destination island group (fallback bucket for unresolved).
     const groups = new Map<string, TrackedFerry[]>();
     for (const f of this.ferries) {
@@ -77,8 +108,7 @@ export class ItalyFerryPanel extends Panel {
       groups.set(key, bucket);
     }
 
-    // One table with group header rows, so every column lines up across groups
-    // (separate per-group tables sized their columns independently → misaligned).
+    // One table with group header rows, so every column lines up across groups.
     const body = [...groups.entries()].map(([group, ferries]) => {
       const groupRow = `<tr class="ferry-group-row"><td colspan="6">${escapeHtml(group)} <span class="ferry-group-count">${ferries.length}</span></td></tr>`;
       const rows = ferries.map((f) => {
@@ -101,20 +131,36 @@ export class ItalyFerryPanel extends Panel {
       return groupRow + rows;
     }).join('');
 
-    const table = `<table class="ferry-table">
+    return `<table class="ferry-table">
       <thead><tr>
         <th>Vessel</th><th>Operator</th><th>Status</th><th>Destination</th><th>Speed</th><th>ETA</th>
       </tr></thead>
       <tbody>${body}</tbody>
     </table>`;
+  }
 
-    const board = this.content.querySelector('.ferry-board');
-    if (board) board.innerHTML = table;
-    this.map?.setFerries(this.ferries);
+  private portsTableHtml(): string {
+    if (this.ports.length === 0) {
+      return '<div class="economic-empty">Port status unavailable.</div>';
+    }
+    const rows = this.ports.map((p) => `
+      <tr>
+        <td class="ferry-name">${escapeHtml(p.name)}</td>
+        <td>${escapeHtml(p.region ?? '—')}</td>
+        <td><span class="port-congestion port-congestion-${p.congestion}">${CONGESTION_LABEL[p.congestion]}</span></td>
+        <td>${p.atPort}</td>
+        <td>${p.inbound}</td>
+      </tr>`).join('');
+    return `<table class="ferry-table port-table">
+      <thead><tr>
+        <th>Port</th><th>Region</th><th>Status</th><th title="Freight vessels waiting / berthed within ~8 km">At port</th><th title="Freight vessels under way, bound here">Inbound</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
   }
 
   /**
-   * Build the persistent map host + legend + table container once, synchronously
+   * Build the persistent map host + toggle + table container once, synchronously
    * (bypassing the debounced setContent so the host exists immediately for the
    * MapLibre instance, which is then updated in place rather than re-created).
    */
@@ -127,16 +173,35 @@ export class ItalyFerryPanel extends Panel {
         <span><i style="background:#e0a032"></i>At anchor</span>
         <span><i style="background:#9aa0a6"></i>In port</span>
       </div>
+      <div class="ferry-toggle" role="tablist">
+        <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
+        <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
+      </div>
       <div class="ferry-board"></div>
       <div class="economic-footer">
-        <span class="economic-source">Source: AIS (aisstream.io) · ~ = inferred from course</span>
+        <span class="economic-source">Source: AIS · ~ = inferred from course · ports = our curated freight ports</span>
       </div>
     `;
     const host = this.content.querySelector<HTMLElement>('.ferry-map-host');
     if (host) this.map = new ItalyFerryMap(host);
 
-    // Click a table row to fly to that vessel on the map (delegated, so it keeps
-    // working as the board's innerHTML is replaced on each refresh).
+    // Mode toggle.
+    const toggle = this.content.querySelector<HTMLElement>('.ferry-toggle');
+    toggle?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('button[data-mode]');
+      const mode = btn?.dataset.mode as BoardMode | undefined;
+      if (!mode || mode === this.mode) return;
+      this.mode = mode;
+      this.updateToggleActive();
+      if (mode === 'ports') {
+        void this.refreshPorts().then(() => this.renderBoard());
+      } else {
+        this.renderBoard();
+      }
+    });
+    this.updateToggleActive();
+
+    // Click a vessel row to fly to it on the map (delegated, survives innerHTML swaps).
     const board = this.content.querySelector<HTMLElement>('.ferry-board');
     board?.addEventListener('click', (e) => {
       const row = (e.target as HTMLElement).closest<HTMLElement>('tr[data-mmsi]');
@@ -147,6 +212,11 @@ export class ItalyFerryPanel extends Panel {
     });
 
     this.mapMounted = true;
+  }
+
+  private updateToggleActive(): void {
+    const btns = this.content.querySelectorAll<HTMLElement>('.ferry-toggle-btn');
+    btns.forEach((b) => b.classList.toggle('is-active', b.dataset.mode === this.mode));
   }
 
   private teardownMap(): void {
