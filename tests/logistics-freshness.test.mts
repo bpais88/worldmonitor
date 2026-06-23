@@ -1,14 +1,14 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { describeFreshness, agoLabel, clockUtc } from '../src/services/logistics/freshness.ts';
+import { describeFreshness, agoLabel, clockAmsterdam } from '../src/services/logistics/freshness.ts';
 
 describe('describeFreshness', () => {
-  it('shows "as of HH:MM:SS UTC" when live', () => {
-    const gen = Date.parse('2026-06-23T13:25:07Z');
+  it('shows "as of HH:MM" in Amsterdam time when live', () => {
+    const gen = Date.parse('2026-06-23T13:25:07Z'); // 13:25 UTC = 15:25 Amsterdam (CEST, summer)
     const b = describeFreshness({ generatedAt: gen, warming: false, stale: false, ageSec: 8 });
     assert.equal(b.state, 'live');
-    assert.equal(b.detail, 'as of 13:25:07 UTC');
+    assert.equal(b.detail, 'as of 15:25 CEST');
   });
 
   it('flags warming up (amber) when the relay has not finished its first sweep', () => {
@@ -41,8 +41,11 @@ describe('agoLabel', () => {
   });
 });
 
-describe('clockUtc', () => {
-  it('renders HH:MM:SS UTC', () => {
-    assert.equal(clockUtc(Date.parse('2026-06-23T09:04:01Z')), '09:04:01 UTC');
+describe('clockAmsterdam', () => {
+  it('renders HH:MM in Amsterdam time (summer = CEST, UTC+2)', () => {
+    assert.equal(clockAmsterdam(Date.parse('2026-06-23T09:04:01Z')), '11:04 CEST');
+  });
+  it('uses CET in winter (UTC+1)', () => {
+    assert.equal(clockAmsterdam(Date.parse('2026-01-15T09:04:01Z')), '10:04 CET');
   });
 });

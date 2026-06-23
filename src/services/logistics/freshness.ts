@@ -21,20 +21,26 @@ export function agoLabel(ageSec: number | undefined): string {
   return `${Math.round(s / 3600)}h ago`;
 }
 
-/** UTC clock "HH:MM:SS UTC" from epoch ms. */
-export function clockUtc(epochMs: number): string {
-  return `${new Date(epochMs).toISOString().slice(11, 19)} UTC`;
+/** Amsterdam wall-clock "HH:MM CET/CEST" from epoch ms (Italy shares this zone). */
+export function clockAmsterdam(epochMs: number): string {
+  return new Intl.DateTimeFormat('en-GB', {
+    timeZone: 'Europe/Amsterdam',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+    timeZoneName: 'short',
+  }).format(epochMs);
 }
 
 /**
- * Decide the freshness badge from feed meta.
+ * Decide the freshness badge from feed meta. Time is shown in Amsterdam time.
  * - warming  → amber "warming up…" (count still filling after a relay restart)
  * - stale    → amber "stale · last update Xm ago" (ingest stalled)
- * - otherwise→ green "as of HH:MM:SS UTC"
+ * - otherwise→ green "as of HH:MM CEST"
  */
 export function describeFreshness(meta: FeedMeta | undefined): FreshnessBadge {
   if (!meta) return { state: 'live', detail: '' };
   if (meta.warming) return { state: 'cached', detail: 'warming up…' };
   if (meta.stale) return { state: 'cached', detail: `stale · last update ${agoLabel(meta.ageSec)}` };
-  return { state: 'live', detail: meta.generatedAt ? `as of ${clockUtc(meta.generatedAt)}` : '' };
+  return { state: 'live', detail: meta.generatedAt ? `as of ${clockAmsterdam(meta.generatedAt)}` : '' };
 }
