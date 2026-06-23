@@ -1,7 +1,7 @@
 // Free vessel data provider — backed by aisstream.io via the Railway relay's
 // /ais/vessels endpoint (proxied through /api/ais-vessels on the web).
 
-import type { VesselDataProvider, VesselQuery, LiveVessel } from './types';
+import type { VesselDataProvider, VesselQuery, LiveVessel, FeedMeta } from './types';
 import { shipTypeCategory, type ShipCategory } from '../classify';
 
 const VESSELS_PROXY_URL = '/api/ais-vessels';
@@ -121,6 +121,8 @@ export function buildVesselsQueryString(query: VesselQuery): string {
 
 export class AisStreamProvider implements VesselDataProvider {
   readonly id = 'aisstream';
+  /** Freshness meta from the most recent successful fetch. */
+  lastMeta: FeedMeta | undefined;
 
   constructor(private readonly baseUrl: string = VESSELS_PROXY_URL) {}
 
@@ -145,8 +147,16 @@ export class AisStreamProvider implements VesselDataProvider {
   private async fetchVessels(base: string, qs: string): Promise<LiveVessel[]> {
     const res = await fetch(`${base}${qs}`, { headers: { Accept: 'application/json' } });
     if (!res.ok) throw new Error(`ais-vessels request failed: ${res.status}`);
-    const data = await res.json();
-    const rows: unknown = (data as { vessels?: unknown })?.vessels;
+    const data = await res.json() as {
+      vessels?: unknown; generatedAt?: number; warming?: boolean; stale?: boolean; ageSec?: number;
+    };
+    this.lastMeta = {
+      generatedAt: Number.isFinite(data.generatedAt) ? data.generatedAt : undefined,
+      warming: !!data.warming,
+      stale: !!data.stale,
+      ageSec: Number.isFinite(data.ageSec) ? data.ageSec : undefined,
+    };
+    const rows: unknown = data?.vessels;
     if (!Array.isArray(rows)) return [];
     const out: LiveVessel[] = [];
     for (const row of rows) {

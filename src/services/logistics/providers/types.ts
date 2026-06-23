@@ -56,9 +56,23 @@ export interface VesselQuery {
   limit?: number;
 }
 
+/** Freshness signals from the feed (relay), so the UI can show data age / warmup. */
+export interface FeedMeta {
+  /** When the relay built the response (epoch ms). */
+  generatedAt?: number;
+  /** Relay hasn't completed one full tile sweep since boot — count still filling in. */
+  warming?: boolean;
+  /** Ingest has stalled (no recent successful poll) — data is aging. */
+  stale?: boolean;
+  /** Seconds since the last successful upstream poll. */
+  ageSec?: number;
+}
+
 /** Source of live vessel positions for the logistics engine. */
 export interface VesselDataProvider {
   readonly id: string;
   /** Vessels currently inside the query viewport. */
   getVesselsInBounds(query: VesselQuery): Promise<LiveVessel[]>;
+  /** Freshness meta from the most recent fetch, if the provider tracks it. */
+  readonly lastMeta?: FeedMeta;
 }

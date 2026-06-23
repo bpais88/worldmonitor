@@ -8,6 +8,8 @@ import {
 } from '@/services/logistics/ferry-tracker';
 import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
 import { getPortStatus, type PortStatus } from '@/services/logistics/port-status';
+import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
+import { describeFreshness } from '@/services/logistics/freshness';
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -54,7 +56,10 @@ export class ItalyFerryPanel extends Panel {
       const ferries = await getTrackedItalianFerries();
       this.ferries = ferries;
       this.setCount(ferries.length);
-      this.setDataBadge('live');
+      // Freshness badge: "as of HH:MM:SS" normally, "warming up…" right after a relay
+      // restart (count still filling), or "stale" if ingest has stalled.
+      const { state, detail } = describeFreshness(aisStreamProvider.lastMeta);
+      this.setDataBadge(state, detail);
       if (this.mode === 'ports') await this.refreshPorts();
       this.render();
     } catch {
