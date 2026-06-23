@@ -15,14 +15,15 @@ const DEFAULT_STALE_MS = 4 * 60 * 1000;
 /**
  * @param {object} s
  * @param {number|null} s.lastPollAt  epoch ms of the last successful Marinesia poll (null = never)
- * @param {number} s.pollsOk          successful tile polls since boot
+ * @param {number} s.tilesSeen        DISTINCT tiles successfully polled since boot (not total polls —
+ *                                    a duplicate success must not let a never-polled tile count as covered)
  * @param {number} s.tileCount        number of tiles in a full sweep
  * @param {number} [s.now]
  * @param {number} [s.staleMs]
  * @returns {{ warming: boolean, stale: boolean, ageSec: number|null }}
  */
-function relayFreshness({ lastPollAt, pollsOk, tileCount, now = Date.now(), staleMs = DEFAULT_STALE_MS }) {
-  const warming = !(pollsOk >= tileCount && tileCount > 0);
+function relayFreshness({ lastPollAt, tilesSeen, tileCount, now = Date.now(), staleMs = DEFAULT_STALE_MS }) {
+  const warming = !(tilesSeen >= tileCount && tileCount > 0);
   const ageSec = Number.isFinite(lastPollAt) ? Math.max(0, Math.round((now - lastPollAt) / 1000)) : null;
   const stale = lastPollAt == null ? true : now - lastPollAt > staleMs;
   return { warming, stale, ageSec };
