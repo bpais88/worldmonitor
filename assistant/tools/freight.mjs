@@ -122,8 +122,10 @@ export const freightTools = [
     handler: async () => {
       const j = await relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000');
       const delayed = (j.vessels || []).filter((v) => v.delay && (v.delay.slipping || v.delay.stalled));
+      const feed = feedNote(j);
       return {
         count: delayed.length,
+        ...(feed ? { feed } : {}),
         delayed: delayed.map((v) => ({
           name: v.name, operator: v.operatorName || null, destination: v.destination || null,
           etaGrowthMin: v.delay.etaGrowthMin, stalled: !!v.delay.stalled,
@@ -148,9 +150,11 @@ export const freightTools = [
       const matches = (j.vessels || []).filter(
         (v) => (v.name || '').toLowerCase().includes(q) || String(v.imo || '') === query || String(v.mmsi || '') === query,
       );
-      if (!matches.length) return { found: false, query };
+      const feed = feedNote(j);
+      if (!matches.length) return { found: false, query, ...(feed ? { feed } : {}) };
       return {
         found: true,
+        ...(feed ? { feed } : {}),
         matches: matches.slice(0, 5).map((v) => ({
           name: v.name, mmsi: v.mmsi, imo: v.imo || null, operator: v.operatorName || null,
           category: v.category, destination: v.destination || null, speedKnots: v.speed,
@@ -177,7 +181,8 @@ export const freightTools = [
       const p = (portsRes.ports || []).find(
         (x) => x.name.toLowerCase() === q || String(x.portId).toLowerCase() === q || x.name.toLowerCase().includes(q),
       );
-      if (!p) return { found: false, port };
+      const feed = feedNote(portsRes);
+      if (!p) return { found: false, port, ...(feed ? { feed } : {}) };
       const vessels = vesselsRes.vessels || [];
       const atPortMmsi = new Set();
       const atPort = [];
@@ -200,6 +205,7 @@ export const freightTools = [
       }
       return {
         found: true,
+        ...(feed ? { feed } : {}),
         port: p.name, region: p.region, congestion: p.congestion,
         atPortCount: p.atPort, vesselsAtPort: atPort,
         inboundCount: inbound.length, vesselsInbound: inbound,

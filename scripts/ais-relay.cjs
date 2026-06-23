@@ -1709,6 +1709,13 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
 const { relayFreshness } = require('./freshness.cjs');
+// Freshness fields for a response — ONLY when Marinesia is the active feed. With no
+// MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
+// would falsely mark live aisstream-backed data as permanently warming/stale.
+function feedFreshness() {
+  if (!MARINESIA_ENABLED) return {};
+  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length });
+}
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
@@ -1737,7 +1744,10 @@ let marinesiaLastPollAt = null;
 let marinesiaLastError = null;
 let marinesiaUpserts = 0;
 let marinesiaBackoffUntil = 0;
-let marinesiaPollsOk = 0; // successful tile polls since boot — drives the "warming" flag
+// DISTINCT tiles successfully polled since boot — drives the "warming" flag. A Set
+// (not a counter) so a tile that keeps failing during cold start can't be masked by
+// duplicate successes from other tiles in later cycles.
+const marinesiaTilesSeen = new Set();
 
 function applyMarinesiaVessel(v, now) {
   if (!v || !v.mmsi) return;
@@ -1759,14 +1769,15 @@ async function pollMarinesiaTick() {
   if (!MARINESIA_ENABLED) return;
   const now = Date.now();
   if (now < marinesiaBackoffUntil) return;
-  const tile = ITALY_TILES[marinesiaTileIndex % ITALY_TILES.length];
+  const tileIdx = marinesiaTileIndex % ITALY_TILES.length;
+  const tile = ITALY_TILES[tileIdx];
   marinesiaTileIndex++;
   try {
     const raw = await fetchTile(tile, MARINESIA_API_KEY);
     for (const r of raw) applyMarinesiaVessel(normalizeMarinesiaVessel(r, now), now);
     marinesiaLastPollAt = now;
     marinesiaLastError = null;
-    marinesiaPollsOk++;
+    if (marinesiaTilesSeen.size < ITALY_TILES.length) marinesiaTilesSeen.add(tileIdx);
     if (raw.length >= MARINESIA_CAP) {
       console.warn(`[Relay] Marinesia tile hit the ${MARINESIA_CAP}-vessel cap — grid may need subdividing`);
     }
@@ -4000,7 +4011,7 @@ const handleRequest = async (req, res) => {
         lastPollAt: marinesiaLastPollAt ? new Date(marinesiaLastPollAt).toISOString() : null,
         upserts: marinesiaUpserts,
         lastError: marinesiaLastError,
-        ...relayFreshness({ lastPollAt: marinesiaLastPollAt, pollsOk: marinesiaPollsOk, tileCount: ITALY_TILES.length }),
+        ...feedFreshness(),
       },
       vessels: vessels.size,
       densityZones: Array.from(densityGrid.values()).filter(c => c.vessels.size >= 2).length,
@@ -4139,7 +4150,7 @@ const handleRequest = async (req, res) => {
       generatedAt: Date.now(),
       // Freshness signals so clients can show "warming up…" / "stale" instead of a
       // misleadingly low count (e.g. right after a relay restart).
-      ...relayFreshness({ lastPollAt: marinesiaLastPollAt, pollsOk: marinesiaPollsOk, tileCount: ITALY_TILES.length }),
+      ...feedFreshness(),
     }));
   } else if (pathname === '/ais/ports') {
     // Per-port freight congestion: our curated commercial ports x live freight
@@ -4170,7 +4181,7 @@ const handleRequest = async (req, res) => {
       'CDN-Cache-Control': 'public, max-age=30',
     }, JSON.stringify({
       ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now,
-      ...relayFreshness({ lastPollAt: marinesiaLastPollAt, pollsOk: marinesiaPollsOk, tileCount: ITALY_TILES.length }),
+      ...feedFreshness(),
     }));
   } else if (pathname === '/ais/voyages/daily') {
     // Trips Marco registered per day (durable counters). ?days=N (default 14, max 120).
