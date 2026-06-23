@@ -49,7 +49,7 @@ export function privacyHtml() {
       <li><strong>Conversation context:</strong> short-term only — auto-deleted after ~1 hour of thread inactivity.</li>
       <li><strong>Watches &amp; configuration:</strong> kept until you cancel the watch or uninstall Marco.</li>
       <li><strong>Workspace token:</strong> kept until you uninstall Marco.</li>
-      <li><strong>Usage counters:</strong> daily counters retained ~120 days, then auto-expire.</li>
+      <li><strong>Usage counters:</strong> daily counters retained ~40 days, then auto-expire.</li>
     </ul>
 
     <h2>Deleting your data</h2>

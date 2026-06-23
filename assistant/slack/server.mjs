@@ -27,7 +27,7 @@ import { policyForUser, parseActionUsers } from './permissions.mjs';
 import { threadKey, getHistory, appendTurn } from './memory.mjs';
 import { putPending, peekPending, takePending } from './pending.mjs';
 import { relayGet } from '../relay.mjs';
-import { listWatches, evaluateWatches } from '../watches.mjs';
+import { listWatches, evaluateWatches, cancelWatchesForTeam } from '../watches.mjs';
 import { authorizeUrl, exchangeCode, newState, consumeState } from './oauth.mjs';
 import {
   getInstallation, saveInstallation, getConfig, setConfig, addActionUser, listInstallations, removeInstallation,
@@ -160,7 +160,8 @@ async function handleEvent(payload) {
   // (No token needed to handle this — and it may already be gone.)
   if (ev.type === 'app_uninstalled' || ev.type === 'tokens_revoked') {
     await removeInstallation(teamId);
-    console.log(`[slack] ${ev.type}: removed workspace ${teamId}`);
+    const purged = await cancelWatchesForTeam(teamId); // honor the privacy policy
+    console.log(`[slack] ${ev.type}: removed workspace ${teamId}${purged ? ` (${purged} watch(es) purged)` : ''}`);
     return;
   }
 

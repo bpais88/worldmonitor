@@ -34,6 +34,20 @@ export async function cancelWatch(id) {
   return existed;
 }
 
+/**
+ * Cancel every watch belonging to a workspace — called on uninstall so we honor the
+ * privacy policy's "watches removed when you uninstall Marco". Returns the count removed.
+ */
+export async function cancelWatchesForTeam(team) {
+  if (!team) return 0;
+  const ws = await listWatches();
+  let n = 0;
+  for (const w of ws) {
+    if (w.team === team) { await cancelWatch(w.id); n++; }
+  }
+  return n;
+}
+
 const matchPort = (ports, target) => {
   const q = String(target).toLowerCase();
   return ports.find((p) => p.name.toLowerCase() === q || String(p.portId).toLowerCase() === q || p.name.toLowerCase().includes(q));

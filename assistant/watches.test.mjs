@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { createWatch, listWatches, cancelWatch, evaluateWatches } from './watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesForTeam, evaluateWatches } from './watches.mjs';
 
 const genoa = (congestion) => [{ name: 'Genoa', portId: 'genoa', congestion, atPort: 9, inbound: 3 }];
 
@@ -43,4 +43,15 @@ test('list and cancel watches', async () => {
   assert.ok((await listWatches()).some((x) => x.id === w.id));
   assert.equal(await cancelWatch(w.id), true);
   assert.ok(!(await listWatches()).some((x) => x.id === w.id));
+});
+
+test('cancelWatchesForTeam removes only that workspace’s watches (uninstall)', async () => {
+  const a1 = await createWatch({ type: 'port_congestion', target: 'Genoa', team: 'T_A', channel: 'C', thread: 'T' });
+  const a2 = await createWatch({ type: 'vessel_delay', target: 'MOBY X', team: 'T_A', channel: 'C', thread: 'T' });
+  const b1 = await createWatch({ type: 'port_congestion', target: 'Bari', team: 'T_B', channel: 'C', thread: 'T' });
+  assert.equal(await cancelWatchesForTeam('T_A'), 2);
+  const remaining = await listWatches();
+  assert.ok(!remaining.some((w) => w.id === a1.id || w.id === a2.id), 'T_A watches gone');
+  assert.ok(remaining.some((w) => w.id === b1.id), 'T_B watch kept');
+  await cancelWatch(b1.id);
 });
