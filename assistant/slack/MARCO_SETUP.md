@@ -10,41 +10,37 @@ no OAuth install record, the server falls back to the legacy `SLACK_BOT_TOKEN`.
 
 ---
 
-## 1. Slack app config (api.slack.com/apps → your app)
+## 1. Slack app config (api.slack.com/apps)
 
-**OAuth & Permissions**
+**Fastest path — create from the manifest.** At api.slack.com/apps → **Create New App**
+→ **From a manifest** → pick the workspace → paste the contents of
+[`marco-app-manifest.json`](./marco-app-manifest.json). That sets the name,
+description, bot user, App Home tab, all bot scopes, the OAuth redirect URL, the
+event subscriptions (incl. `app_uninstalled` / `tokens_revoked`), and interactivity —
+in one step. (For an existing app, **App Manifest** in the sidebar lets you paste the
+same JSON to update it.)
 
-- **Redirect URLs** → add:
-  `https://italy-freight-assistant-production.up.railway.app/slack/oauth/callback`
-- **Bot Token Scopes** (must match `SCOPES` in `oauth.mjs`):
-  `app_mentions:read`, `chat:write`, `im:history`, `im:write`, `users:read`, `team:read`
+If you prefer to click through instead, the manifest encodes exactly:
 
-**Event Subscriptions**
+- **OAuth redirect URL:** `…/slack/oauth/callback`
+- **Bot scopes:** `app_mentions:read`, `chat:write`, `im:history`, `im:write`, `users:read`, `team:read`
+- **Event request URL:** `…/slack/events` · **bot events:** `app_mention`, `message.im`, `app_home_opened`, `app_uninstalled`, `tokens_revoked`
+- **Interactivity request URL:** `…/slack/interactions`
+- **App Home:** Home tab enabled
 
-- Request URL: `https://italy-freight-assistant-production.up.railway.app/slack/events`
-- Subscribe to **bot events**: `app_mention`, `message.im`, `app_home_opened`,
-  `app_uninstalled`, `tokens_revoked` (the last two let Marco drop a workspace's
-  stored token when it removes him, instead of retrying a dead token)
+> ⚠️ When you paste the events request URL, Slack sends a verification challenge — the
+> service must already be deployed (it is) so it can answer. The manifest flow handles
+> this automatically once the service is up.
 
-**Interactivity & Shortcuts**
+**Basic Information → Display:** add an avatar (the name/description come from the manifest).
 
-- Request URL: `https://italy-freight-assistant-production.up.railway.app/slack/interactions`
+**Manage Distribution** (these are NOT in the manifest — set them in the UI):
 
-**App Home**
-
-- Enable the **Home Tab** (so `app_home_opened` fires → triggers onboarding for anyone
-  who opens Marco who hasn't been greeted yet).
-
-**Basic Information → Display**
-
-- Set the app name to **Marco**, add an avatar + the short description
-  ("Your freight-ops coworker — live Italian-port freight tracking, in Slack").
-
-**Manage Distribution**
-
-- Tick "Remove Hard Coded Information" checklist, then **Activate Public Distribution**.
-- This gives you the public **"Add to Slack"** link (we also serve our own landing
-  page at `/` and the redirect at `/slack/install`).
+- **Privacy Policy URL:** `https://italy-freight-assistant-production.up.railway.app/privacy`
+- **Support URL:** `https://italy-freight-assistant-production.up.railway.app/support`
+  (both served live by the assistant — see `legal.mjs`)
+- Tick "Remove Hard Coded Information", then **Activate Public Distribution** → gives
+  you the public **"Add to Slack"** link (we also serve a landing page at `/`).
 
 > App Directory *listing* is optional and comes later (Slack review). You can onboard
 > your first customers immediately with the direct install link below.
