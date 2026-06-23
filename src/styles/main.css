@@ -1195,6 +1195,9 @@ body.panel-resize-active iframe {
   background: var(--border);
   padding: 2px 6px;
   border-radius: 2px;
+  /* Keep a gap from the data badge so a long "as of …" can't collapse against the
+     count (header is space-between; a wide badge eats the free space → "UTC171"). */
+  margin-inline-start: 8px;
   transition: color 0.3s ease, background 0.3s ease;
 }
 
