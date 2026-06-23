@@ -3942,7 +3942,7 @@ function getCorsOrigin(req) {
   return '';
 }
 
-const server = http.createServer(async (req, res) => {
+const handleRequest = async (req, res) => {
   const pathname = (req.url || '/').split('?')[0];
   const corsOrigin = getCorsOrigin(req);
   if (corsOrigin) {
@@ -4592,6 +4592,24 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(404);
     res.end();
   }
+};
+
+// Guard the router: a thrown error (sync or async) in any handler returns 500
+// instead of taking down the whole relay process (AIS ingest for everyone).
+const server = http.createServer((req, res) => {
+  Promise.resolve()
+    .then(() => handleRequest(req, res))
+    .catch((e) => {
+      console.error('[Relay] request handler crashed:', (e && e.stack) || e);
+      try {
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'internal' }));
+        } else {
+          res.end();
+        }
+      } catch { /* socket already gone */ }
+    });
 });
 
 function connectUpstream() {
