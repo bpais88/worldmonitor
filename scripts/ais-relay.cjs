@@ -1708,6 +1708,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
+const { relayFreshness } = require('./freshness.cjs');
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
@@ -1736,6 +1737,7 @@ let marinesiaLastPollAt = null;
 let marinesiaLastError = null;
 let marinesiaUpserts = 0;
 let marinesiaBackoffUntil = 0;
+let marinesiaPollsOk = 0; // successful tile polls since boot — drives the "warming" flag
 
 function applyMarinesiaVessel(v, now) {
   if (!v || !v.mmsi) return;
@@ -1764,6 +1766,7 @@ async function pollMarinesiaTick() {
     for (const r of raw) applyMarinesiaVessel(normalizeMarinesiaVessel(r, now), now);
     marinesiaLastPollAt = now;
     marinesiaLastError = null;
+    marinesiaPollsOk++;
     if (raw.length >= MARINESIA_CAP) {
       console.warn(`[Relay] Marinesia tile hit the ${MARINESIA_CAP}-vessel cap — grid may need subdividing`);
     }
@@ -3997,6 +4000,7 @@ const handleRequest = async (req, res) => {
         lastPollAt: marinesiaLastPollAt ? new Date(marinesiaLastPollAt).toISOString() : null,
         upserts: marinesiaUpserts,
         lastError: marinesiaLastError,
+        ...relayFreshness({ lastPollAt: marinesiaLastPollAt, pollsOk: marinesiaPollsOk, tileCount: ITALY_TILES.length }),
       },
       vessels: vessels.size,
       densityZones: Array.from(densityGrid.values()).filter(c => c.vessels.size >= 2).length,
@@ -4133,6 +4137,9 @@ const handleRequest = async (req, res) => {
       tracked: vessels.size,
       bbox: bounds,
       generatedAt: Date.now(),
+      // Freshness signals so clients can show "warming up…" / "stale" instead of a
+      // misleadingly low count (e.g. right after a relay restart).
+      ...relayFreshness({ lastPollAt: marinesiaLastPollAt, pollsOk: marinesiaPollsOk, tileCount: ITALY_TILES.length }),
     }));
   } else if (pathname === '/ais/ports') {
     // Per-port freight congestion: our curated commercial ports x live freight
@@ -4161,7 +4168,10 @@ const handleRequest = async (req, res) => {
       'Content-Type': 'application/json',
       'Cache-Control': 'public, max-age=15',
       'CDN-Cache-Control': 'public, max-age=30',
-    }, JSON.stringify({ ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now }));
+    }, JSON.stringify({
+      ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now,
+      ...relayFreshness({ lastPollAt: marinesiaLastPollAt, pollsOk: marinesiaPollsOk, tileCount: ITALY_TILES.length }),
+    }));
   } else if (pathname === '/ais/voyages/daily') {
     // Trips Marco registered per day (durable counters). ?days=N (default 14, max 120).
     const now = Date.now();

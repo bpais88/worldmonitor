@@ -9,6 +9,14 @@ import ferryEta from '../../scripts/ferry-eta.cjs';
 const { resolveDestinationPort } = ferryEta;
 const OPERATOR_IDS = ['tirrenia', 'gnv', 'moby', 'grimaldi', 'corsica_sardinia', 'snav', 'caronte'];
 
+// Pull the relay's freshness signals into a compact note so the agent can caveat a
+// count it would otherwise quote as authoritative. Only present when not fully fresh.
+function feedNote(j) {
+  if (j && j.warming) return { warming: true, note: 'Feed is still warming up after a restart — counts are partial, ask again shortly.' };
+  if (j && j.stale) return { stale: true, note: `Feed may be stale — last upstream update ~${j.ageSec ?? '?'}s ago.` };
+  return null;
+}
+
 // Live-ETA view for a vessel: prefer the relay's freshly-computed ETA (distance ÷
 // speed, recomputed each poll) over the stale captain-entered AIS ETA, and never
 // surface an ETA when the vessel is stopped/at port. etaTrendMin is the signed
@@ -45,12 +53,14 @@ export const freightTools = [
   {
     name: 'get_port_congestion',
     description:
-      'Congestion status for Italian commercial freight ports. Returns, per port: congestion level (clear/busy/congested), atPort (freight vessels waiting/berthed within ~8 km) and inbound (under way, bound there). Use for "which ports are busy/congested", "how many vessels waiting at X".',
+      'Congestion status for Italian commercial freight ports. Returns, per port: congestion level (clear/busy/congested), atPort (freight vessels waiting/berthed within ~8 km) and inbound (under way, bound there). If the result has a "feed" field (warming/stale), LEAD your answer with that caveat — the counts are partial or aging. Use for "which ports are busy/congested", "how many vessels waiting at X".',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const j = await relayGet('/ais/ports');
+      const feed = feedNote(j);
       return {
         freightTracked: j.freightTracked,
+        ...(feed ? { feed } : {}),
         ports: (j.ports || []).map((p) => ({
           port: p.name, region: p.region, congestion: p.congestion, atPort: p.atPort, inbound: p.inbound,
         })),
@@ -60,7 +70,7 @@ export const freightTools = [
   {
     name: 'find_freight_vessels',
     description:
-      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
+      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. If the result has a "feed" field (warming/stale), lead with that caveat — the count is partial or aging. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
     input_schema: {
       type: 'object',
       properties: {
@@ -92,8 +102,10 @@ export const freightTools = [
       if (delayedOnly) {
         vs = vs.filter((v) => v.delay && (v.delay.slipping || v.delay.stalled));
       }
+      const feed = feedNote(j);
       return {
         count: vs.length,
+        ...(feed ? { feed } : {}),
         vessels: vs.slice(0, limit).map((v) => ({
           name: v.name, operator: v.operatorName || null, category: v.category,
           destination: v.destination || null, speedKnots: v.speed, ...etaView(v),
