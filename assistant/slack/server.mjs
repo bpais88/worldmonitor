@@ -34,6 +34,7 @@ import {
 } from './installations.mjs';
 import { MARCO_PERSONA, onboardingText } from './onboarding.mjs';
 import { recordUsage } from '../usage.mjs';
+import { privacyHtml, supportHtml } from './legal.mjs';
 
 const PORT = process.env.PORT || 3010;
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
@@ -353,6 +354,9 @@ const server = http.createServer(async (req, res) => {
     }
     if (path === '/slack/install') return handleInstall(req, res);
     if (path === '/slack/oauth/callback') return handleOAuthCallback(req, res, Object.fromEntries(u.searchParams));
+    // Public legal pages required for Slack distribution.
+    if (path === '/privacy') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(privacyHtml()); }
+    if (path === '/support') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(supportHtml()); }
     if (path === '/') return landingPage(res);
     res.writeHead(404); return res.end();
   }
