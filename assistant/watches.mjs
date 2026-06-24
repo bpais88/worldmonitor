@@ -16,22 +16,49 @@ export async function createWatch({ type, target, channel, thread, createdBy, te
   return watch;
 }
 
-export async function listWatches() {
+// Pass { team } to get only that workspace's watches (tenant isolation). No filter
+// (the ticker) returns every watch across workspaces, which it needs to evaluate.
+export async function listWatches({ team } = {}) {
   const ids = await setMembers(INDEX);
   const out = [];
   for (const id of ids) {
     const w = await kvGet(key(id));
-    if (w) out.push(w);
-    else await setRem(INDEX, id); // prune dangling index entries
+    if (!w) { await setRem(INDEX, id); continue; } // prune dangling index entries
+    if (team && w.team !== team) continue;
+    out.push(w);
   }
   return out;
 }
 
-export async function cancelWatch(id) {
-  const existed = !!(await kvGet(key(id)));
+// Cancel one watch by id. Pass { team } to refuse cancelling another workspace's
+// watch (tenant guard); omit it for trusted internal callers. Returns true if removed.
+export async function cancelWatch(id, { team } = {}) {
+  const w = await kvGet(key(id));
+  if (!w) return false;
+  if (team && w.team !== team) return false;
   await kvDel(key(id));
   await setRem(INDEX, id);
-  return existed;
+  return true;
+}
+
+/**
+ * Cancel watches by human target name (port/vessel), scoped to a team. Mirrors the
+ * lenient matching used when creating a watch, so "stop watching Porto Marghera"
+ * resolves the same way "alert me when Porto Marghera clears" did. Optional `type`
+ * narrows to port_congestion / vessel_delay. Returns the cancelled watches so the
+ * caller can confirm exactly what it stopped.
+ */
+export async function cancelWatchesByTarget({ team, target, type } = {}) {
+  const q = String(target || '').toLowerCase().trim();
+  if (!q) return [];
+  const ws = await listWatches({ team });
+  const matched = ws.filter((w) => {
+    if (type && w.type !== type) return false;
+    const t = String(w.target).toLowerCase();
+    return t === q || t.includes(q) || q.includes(t);
+  });
+  for (const w of matched) await cancelWatch(w.id, { team });
+  return matched;
 }
 
 /**

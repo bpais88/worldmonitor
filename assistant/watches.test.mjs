@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { createWatch, listWatches, cancelWatch, cancelWatchesForTeam, evaluateWatches } from './watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesForTeam, evaluateWatches } from './watches.mjs';
 
 const genoa = (congestion) => [{ name: 'Genoa', portId: 'genoa', congestion, atPort: 9, inbound: 3 }];
 
@@ -43,6 +43,49 @@ test('list and cancel watches', async () => {
   assert.ok((await listWatches()).some((x) => x.id === w.id));
   assert.equal(await cancelWatch(w.id), true);
   assert.ok(!(await listWatches()).some((x) => x.id === w.id));
+});
+
+test('listWatches scoped by team returns only that workspace’s watches', async () => {
+  const a = await createWatch({ type: 'port_congestion', target: 'Salerno', team: 'WS_A', channel: 'C', thread: 'T' });
+  const b = await createWatch({ type: 'port_congestion', target: 'Trieste', team: 'WS_B', channel: 'C', thread: 'T' });
+  const onlyA = await listWatches({ team: 'WS_A' });
+  assert.ok(onlyA.some((w) => w.id === a.id), 'A’s watch present');
+  assert.ok(!onlyA.some((w) => w.id === b.id), 'B’s watch absent from A’s list');
+  await cancelWatch(a.id);
+  await cancelWatch(b.id);
+});
+
+test('cancelWatch refuses to cancel another workspace’s watch (tenant guard)', async () => {
+  const b = await createWatch({ type: 'port_congestion', target: 'Ancona', team: 'WS_B', channel: 'C', thread: 'T' });
+  // Workspace A tries to cancel B’s watch by id -> rejected, watch survives.
+  assert.equal(await cancelWatch(b.id, { team: 'WS_A' }), false);
+  assert.ok((await listWatches({ team: 'WS_B' })).some((w) => w.id === b.id), 'B’s watch survives A’s attempt');
+  // B cancels its own -> ok.
+  assert.equal(await cancelWatch(b.id, { team: 'WS_B' }), true);
+});
+
+test('cancelWatchesByTarget cancels by name within a team, leaving others', async () => {
+  const a = await createWatch({ type: 'port_congestion', target: 'Porto Marghera', team: 'WS_A', channel: 'C', thread: 'T' });
+  const aOther = await createWatch({ type: 'port_congestion', target: 'Genoa', team: 'WS_A', channel: 'C', thread: 'T' });
+  const bSame = await createWatch({ type: 'port_congestion', target: 'Porto Marghera', team: 'WS_B', channel: 'C', thread: 'T' });
+  const cancelled = await cancelWatchesByTarget({ team: 'WS_A', target: 'porto marghera' });
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0].id, a.id);
+  // A’s other-port watch and B’s same-name watch (different workspace) are untouched.
+  assert.ok((await listWatches({ team: 'WS_A' })).some((w) => w.id === aOther.id), 'A’s other-port watch kept');
+  assert.ok((await listWatches({ team: 'WS_B' })).some((w) => w.id === bSame.id), 'B’s same-name watch kept (different workspace)');
+  await cancelWatch(aOther.id);
+  await cancelWatch(bSame.id);
+});
+
+test('cancelWatchesByTarget matches leniently (substring); empty when nothing matches', async () => {
+  const a = await createWatch({ type: 'port_congestion', target: 'Porto Marghera', team: 'WS_C', channel: 'C', thread: 'T' });
+  // A substring of the stored target resolves it ("marghera" -> "Porto Marghera").
+  const cancelled = await cancelWatchesByTarget({ team: 'WS_C', target: 'marghera' });
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0].id, a.id);
+  // Nothing left, and an unknown name returns [].
+  assert.deepEqual(await cancelWatchesByTarget({ team: 'WS_C', target: 'nowhere' }), []);
 });
 
 test('cancelWatchesForTeam removes only that workspace’s watches (uninstall)', async () => {
