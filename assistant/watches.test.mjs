@@ -1,40 +1,80 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesForTeam, evaluateWatches } from './watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesForTeam, evaluateWatches, WATCH_DWELL_MS } from './watches.mjs';
 
 const genoa = (congestion) => [{ name: 'Genoa', portId: 'genoa', congestion, atPort: 9, inbound: 3 }];
 
-test('port watch: silent baseline, alerts on transition, no repeat', async () => {
+test('port watch: silent baseline, alerts on a sustained transition, no repeat', async () => {
   const w = await createWatch({ type: 'port_congestion', target: 'Genoa', channel: 'C1', thread: 'T1', createdBy: 'U1' });
+  const t = 1_000_000;
   // First eval = baseline (records state, no alert).
-  assert.equal((await evaluateWatches({ ports: genoa('clear'), vessels: [] })).length, 0);
-  // Transition clear -> congested = one alert.
-  const a = await evaluateWatches({ ports: genoa('congested'), vessels: [] });
+  assert.equal((await evaluateWatches({ ports: genoa('clear') }, t)).length, 0);
+  // Transition observed but still within the dwell window -> no alert yet.
+  assert.equal((await evaluateWatches({ ports: genoa('congested') }, t + 1000)).length, 0);
+  // New state has now held past the dwell -> one alert.
+  const a = await evaluateWatches({ ports: genoa('congested') }, t + WATCH_DWELL_MS + 1000);
   assert.equal(a.length, 1);
   assert.match(a[0].message, /Genoa.*congested/);
   // Same state again = no repeat.
-  assert.equal((await evaluateWatches({ ports: genoa('congested'), vessels: [] })).length, 0);
+  assert.equal((await evaluateWatches({ ports: genoa('congested') }, t + WATCH_DWELL_MS + 2000)).length, 0);
   await cancelWatch(w.id);
 });
 
-test('port watch condition "clears" fires only on clearing, not on busy', async () => {
+test('port watch condition "clears" fires only on a sustained clearing, not on busy', async () => {
   const w = await createWatch({ type: 'port_congestion', target: 'Genoa', condition: 'clears', channel: 'C', thread: 'T' });
-  await evaluateWatches({ ports: genoa('clear'), vessels: [] }); // baseline
-  // becomes congested -> must NOT alert (we only want "clears")
-  assert.equal((await evaluateWatches({ ports: genoa('congested'), vessels: [] })).length, 0);
-  // clears -> alert
-  const a = await evaluateWatches({ ports: genoa('clear'), vessels: [] });
+  const t = 2_000_000;
+  await evaluateWatches({ ports: genoa('clear') }, t); // baseline = clear
+  // becomes congested and holds past the dwell -> commits silently (we only want "clears")
+  await evaluateWatches({ ports: genoa('congested') }, t + 1000);
+  assert.equal((await evaluateWatches({ ports: genoa('congested') }, t + WATCH_DWELL_MS + 1000)).length, 0);
+  // clears and holds past the dwell -> alert
+  await evaluateWatches({ ports: genoa('clear') }, t + WATCH_DWELL_MS + 2000);
+  const a = await evaluateWatches({ ports: genoa('clear') }, t + 2 * WATCH_DWELL_MS + 3000);
   assert.equal(a.length, 1);
   assert.match(a[0].message, /cleared/);
   await cancelWatch(w.id);
 });
 
-test('vessel watch alerts when the vessel becomes delayed', async () => {
+test('vessel watch alerts when the vessel stays delayed past the dwell', async () => {
   const w = await createWatch({ type: 'vessel_delay', target: 'MOBY FANTASY', channel: 'C', thread: 'T' });
-  await evaluateWatches({ ports: [], vessels: [{ name: 'MOBY FANTASY' }] }); // baseline: ok
-  const a = await evaluateWatches({ ports: [], vessels: [{ name: 'MOBY FANTASY', delay: { slipping: true, reasons: [{ summary: 'rough seas' }] } }] });
+  const t = 3_000_000;
+  const delayed = [{ name: 'MOBY FANTASY', delay: { slipping: true, reasons: [{ summary: 'rough seas' }] } }];
+  await evaluateWatches({ ports: [], vessels: [{ name: 'MOBY FANTASY' }] }, t); // baseline: ok
+  await evaluateWatches({ ports: [], vessels: delayed }, t + 1000); // candidate delayed
+  const a = await evaluateWatches({ ports: [], vessels: delayed }, t + WATCH_DWELL_MS + 1000);
   assert.equal(a.length, 1);
   assert.match(a[0].message, /MOBY FANTASY.*delayed/);
+  await cancelWatch(w.id);
+});
+
+test('flapping port state never matures, so it never alerts', async () => {
+  const w = await createWatch({ type: 'port_congestion', target: 'Genoa', condition: 'clears', channel: 'C', thread: 'T' });
+  const t = 4_000_000;
+  const STEP = 5 * 60_000; // realistic 5-min ticks, shorter than the dwell
+  await evaluateWatches({ ports: genoa('busy') }, t); // baseline busy
+  let alerts = 0;
+  // Oscillate busy<->clear every tick for an hour: each clear reverts before the dwell.
+  for (let i = 1; i <= 12; i++) {
+    const congestion = i % 2 === 0 ? 'busy' : 'clear';
+    alerts += (await evaluateWatches({ ports: genoa(congestion) }, t + i * STEP)).length;
+  }
+  assert.equal(alerts, 0, 'flapping must produce no alerts');
+  await cancelWatch(w.id);
+});
+
+test('a sustained clear still alerts (once) after the flapping settles', async () => {
+  const w = await createWatch({ type: 'port_congestion', target: 'Genoa', condition: 'clears', channel: 'C', thread: 'T' });
+  const t = 5_000_000;
+  const STEP = 5 * 60_000;
+  await evaluateWatches({ ports: genoa('busy') }, t); // baseline busy
+  for (let i = 1; i <= 6; i++) { // flap for a while
+    await evaluateWatches({ ports: genoa(i % 2 === 0 ? 'busy' : 'clear') }, t + i * STEP);
+  }
+  let alerts = 0; // then clear holds steadily, well past the dwell
+  for (let i = 7; i <= 16; i++) {
+    alerts += (await evaluateWatches({ ports: genoa('clear') }, t + i * STEP)).length;
+  }
+  assert.equal(alerts, 1, 'exactly one alert once the clear is sustained');
   await cancelWatch(w.id);
 });
 
