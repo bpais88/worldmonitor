@@ -61,16 +61,24 @@ test('verifySlackSignature rejects when secret/headers missing', () => {
 });
 
 // --- pending action store (approval flow) -------------------------------
-test('putPending/takePending round-trips an action once', () => {
-  const id = putPending({ tool: 'save_freight_report', input: { filename: 'x' } });
-  assert.equal(peekPending(id).tool, 'save_freight_report'); // peek doesn't consume
-  const taken = takePending(id);
+// The store API is async (kvGet/kvSet/kvDel over Upstash or the in-memory fallback),
+// so every call must be awaited. The 30-min TTL is enforced by Upstash via
+// kvSet(..., EX); the in-memory fallback used in tests does not expire keys, so
+// expiry itself is an integration concern, not unit-tested here.
+test('putPending/takePending round-trips an action once', async () => {
+  const id = await putPending({ tool: 'save_freight_report', input: { filename: 'x' } });
+  assert.equal((await peekPending(id)).tool, 'save_freight_report'); // peek doesn't consume
+  const taken = await takePending(id);
   assert.equal(taken.input.filename, 'x');
-  assert.equal(takePending(id), null); // already consumed
+  assert.equal(await takePending(id), null); // already consumed
 });
 
-test('peekPending returns null for unknown / expired ids', () => {
-  assert.equal(peekPending('nope'), null);
-  const id = putPending({ tool: 't', input: {} }, 1_000);
-  assert.equal(peekPending(id, 1_000 + 31 * 60 * 1000), null); // past 30-min TTL
+test('peekPending/takePending return null for unknown, empty, and consumed ids', async () => {
+  assert.equal(await peekPending('nope'), null); // unknown id
+  assert.equal(await peekPending(''), null);     // falsy id is guarded
+  assert.equal(await takePending('nope'), null); // nothing to take
+  const id = await putPending({ tool: 't', input: {} });
+  assert.equal((await peekPending(id)).tool, 't'); // present before consume
+  await takePending(id);
+  assert.equal(await peekPending(id), null);       // gone after consume
 });
