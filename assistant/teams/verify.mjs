@@ -51,12 +51,13 @@ export async function verifyTeamsToken({ authHeader, appId, serviceUrl }, { keyS
     algorithms: ['RS256'],
     clockTolerance: CLOCK_SKEW_SEC,
   });
-  // Anti-spoofing: when we know the Activity's serviceUrl (the address we POST replies
-  // to), the token MUST carry a matching serviceurl claim — an ABSENT claim is rejected
-  // too. No JWT lib checks this; it's Bot Framework specific and hand-written.
+  // Anti-spoofing: serviceUrl (the address we POST replies to) is REQUIRED — both the
+  // Activity body value AND the token's serviceurl claim must be present and match. A
+  // missing body value or a missing claim is a HARD failure: never skip the check just
+  // because a field is absent. No JWT lib checks this; it's Bot Framework specific.
   const claimUrl = payload.serviceurl ?? payload.serviceUrl;
-  if (serviceUrl && claimUrl?.replace(/\/$/, '') !== serviceUrl.replace(/\/$/, '')) {
-    throw new Error('serviceUrl claim mismatch');
+  if (!serviceUrl || !claimUrl || claimUrl.replace(/\/$/, '') !== serviceUrl.replace(/\/$/, '')) {
+    throw new Error('serviceUrl missing or claim mismatch');
   }
   return payload;
 }

@@ -67,6 +67,14 @@ test('rejects a token missing the serviceurl claim (anti-spoof requires it)', as
   await assert.rejects(() => verify(token), /serviceurl/i);
 });
 
+test('rejects when the Activity body omits serviceUrl (anti-spoof is mandatory, never skipped)', async () => {
+  const token = await sign(); // valid token, carries the serviceurl claim
+  await assert.rejects(
+    async () => verifyTeamsToken({ authHeader: `Bearer ${token}`, appId: APP_ID, serviceUrl: '' }, { keySet }),
+    /serviceurl/i,
+  );
+});
+
 test('rejects a token signed by the wrong key', async () => {
   const other = await generateKeyPair('RS256');
   await assert.rejects(async () => verify(await sign({ key: other.privateKey })), /signature/i);
