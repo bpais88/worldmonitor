@@ -35,6 +35,7 @@ import {
 import { MARCO_PERSONA, onboardingText } from './onboarding.mjs';
 import { recordUsage } from '../usage.mjs';
 import { privacyHtml, supportHtml } from './legal.mjs';
+import { send, update, dm, deliverFor } from '../send.mjs';
 
 const PORT = process.env.PORT || 3010;
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
@@ -84,32 +85,13 @@ function alreadySeen(id) {
   return false;
 }
 
-// ---- Slack Web API helpers (token is per-workspace) -----------------------
-async function slackApi(method, payload, botToken) {
-  const res = await fetch(`https://slack.com/api/${method}`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json; charset=utf-8', Authorization: `Bearer ${botToken}` },
-    body: JSON.stringify(payload),
-  });
-  const j = await res.json().catch(() => ({}));
-  if (!j.ok) console.warn(`[slack] ${method} failed:`, j.error || res.status);
-  return j;
-}
+// Message delivery (send / update / dm) now lives in ../send.mjs, branching on
+// install.platform — the seam that will let Teams reuse this exact flow. Slack
+// installs carry a per-workspace token as `deliver`; a legacy env-token workspace
+// is wrapped in a synthetic { platform:'slack', deliver: BOT_TOKEN } install below.
 
-// Build token-bound helpers for one workspace.
-function apiFor(botToken) {
-  const post = (channel, thread_ts, text, blocks) =>
-    slackApi('chat.postMessage', { channel, thread_ts, text, blocks, unfurl_links: false }, botToken);
-  const update = (channel, ts, text) =>
-    slackApi('chat.update', { channel, ts, text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, botToken);
-  const dm = async (userId, text) => {
-    const open = await slackApi('conversations.open', { users: userId }, botToken);
-    const channel = open.channel?.id;
-    if (channel) await slackApi('chat.postMessage', { channel, text, unfurl_links: false }, botToken);
-  };
-  return { post, update, dm };
-}
-
+// postEphemeral is Slack-specific (it POSTs to a response_url, no token, no platform
+// equivalent), so it stays here rather than in the neutral delivery layer.
 async function postEphemeral(responseUrl, text) {
   if (!responseUrl) return;
   await fetch(responseUrl, {
@@ -166,16 +148,17 @@ async function handleEvent(payload) {
   }
 
   const inst = await getInstallation(teamId);
-  const botToken = inst?.botToken || BOT_TOKEN;
-  const botUserId = inst?.botUserId || BOT_USER_ID;
-  if (!botToken) { console.warn(`[slack] no token for team ${teamId}`); return; }
-  const { post, dm } = apiFor(botToken);
+  // Resolve a delivery target: the workspace install, or a synthetic legacy install
+  // wrapping the env BOT_TOKEN when there's no OAuth record.
+  const install = inst || (BOT_TOKEN ? { platform: 'slack', deliver: BOT_TOKEN, botUserId: BOT_USER_ID } : null);
+  const botUserId = install?.botUserId || BOT_USER_ID;
+  if (!deliverFor(install)) { console.warn(`[slack] no token for team ${teamId}`); return; }
 
   // First-run onboarding: greet anyone who opens Marco's home tab once per workspace.
   if (ev.type === 'app_home_opened') {
     const cfg = await getConfig(teamId);
     if (!cfg.onboarded && ev.user && ev.user !== botUserId) {
-      await dm(ev.user, onboardingText(ev.user));
+      await dm(install, { userId: ev.user, text: onboardingText(ev.user) });
       await setConfig(teamId, { onboarded: true });
     }
     return;
@@ -207,7 +190,7 @@ async function handleEvent(payload) {
       tools: TOOLS,
       system: SLACK_SYSTEM,
       policy,
-      context: { channel, thread: threadTs, user: ev.user, team: teamId, postMessage: post },
+      context: { channel, thread: threadTs, user: ev.user, team: teamId, postMessage: (ch, th, text, blocks) => send(install, { channelId: ch, threadId: th, text, blocks }) },
     });
     // Observe-only token metering (no cap yet) — per workspace, per day.
     const day = await recordUsage(teamId, usage);
@@ -215,17 +198,17 @@ async function handleEvent(payload) {
     console.log(`[slack]   → tools: ${calls.join(', ') || 'none'}${proposed ? ` · ${proposed} proposed` : ''} · ${usage.input}+${usage.output} tok · replied ${text.length} chars` +
       (day ? ` · today ${day.messages} msg / ${day.input + day.output} tok` : ''));
     const reply = text || '(no answer)';
-    await post(channel, threadTs, reply);
+    await send(install, { channelId: channel, threadId: threadTs, text: reply });
     await appendTurn(key, userText, reply);
 
     // For each proposed (dry-run) action, post an Approve/Reject card.
     for (const a of audit.filter((x) => x.mode === 'dryrun')) {
       const id = await putPending({ tool: a.tool, input: a.input, requestedBy: ev.user, team: teamId, channel, thread: threadTs });
-      await post(channel, threadTs, `Proposed action: ${a.tool}`, approvalBlocks(id, a.tool, a.input));
+      await send(install, { channelId: channel, threadId: threadTs, text: `Proposed action: ${a.tool}`, blocks: approvalBlocks(id, a.tool, a.input) });
     }
   } catch (e) {
     console.error('[slack] agent error:', e.message);
-    await post(channel, threadTs, `⚠️ Sorry — I hit an error: ${e.message}`);
+    await send(install, { channelId: channel, threadId: threadTs, text: `⚠️ Sorry — I hit an error: ${e.message}` });
   }
 }
 
@@ -240,16 +223,15 @@ async function handleInteraction(payload) {
   const ts = payload.message?.ts;
 
   const inst = await getInstallation(teamId);
-  const botToken = inst?.botToken || BOT_TOKEN;
-  if (!botToken) return;
-  const { post, update } = apiFor(botToken);
+  const install = inst || (BOT_TOKEN ? { platform: 'slack', deliver: BOT_TOKEN } : null);
+  if (!deliverFor(install)) return;
   const pend = await peekPending(id);
 
-  if (!pend) return update(channel, ts, '⌛ This proposed action expired.');
+  if (!pend) return update(install, { channelId: channel, messageId: ts, text: '⌛ This proposed action expired.' });
 
   if (action.action_id === 'reject_action') {
     await takePending(id);
-    return update(channel, ts, `❌ Rejected by <@${clicker}> — \`${pend.tool}\` not run.`);
+    return update(install, { channelId: channel, messageId: ts, text: `❌ Rejected by <@${clicker}> — \`${pend.tool}\` not run.` });
   }
 
   // approve — only workspace-authorized users may execute.
@@ -259,13 +241,13 @@ async function handleInteraction(payload) {
   }
   await takePending(id);
   const tool = toolByName.get(pend.tool);
-  if (!tool) return update(channel, ts, `⚠️ Unknown tool \`${pend.tool}\`.`);
+  if (!tool) return update(install, { channelId: channel, messageId: ts, text: `⚠️ Unknown tool \`${pend.tool}\`.` });
   try {
-    const result = await tool.handler(pend.input || {}, { channel: pend.channel, thread: pend.thread, team: teamId, postMessage: post });
+    const result = await tool.handler(pend.input || {}, { channel: pend.channel, thread: pend.thread, team: teamId, postMessage: (ch, th, text, blocks) => send(install, { channelId: ch, threadId: th, text, blocks }) });
     const summary = result && result.error ? `error: ${result.error}` : JSON.stringify(result).slice(0, 200);
-    await update(channel, ts, `✅ Approved by <@${clicker}> — \`${pend.tool}\` done.\n${summary}`);
+    await update(install, { channelId: channel, messageId: ts, text: `✅ Approved by <@${clicker}> — \`${pend.tool}\` done.\n${summary}` });
   } catch (e) {
-    await update(channel, ts, `⚠️ \`${pend.tool}\` failed: ${e.message}`);
+    await update(install, { channelId: channel, messageId: ts, text: `⚠️ \`${pend.tool}\` failed: ${e.message}` });
   }
 }
 
@@ -301,8 +283,7 @@ async function handleOAuthCallback(req, res, query) {
     if (inst.installedBy) await addActionUser(inst.teamId, inst.installedBy); // installer can approve actions
     // The magic moment: Marco DMs the installer to introduce himself.
     if (inst.installedBy) {
-      const { dm } = apiFor(inst.botToken);
-      await dm(inst.installedBy, onboardingText(inst.installedBy));
+      await dm(inst, { userId: inst.installedBy, text: onboardingText(inst.installedBy) });
       await setConfig(inst.teamId, { onboarded: true });
     }
     console.log(`[slack] installed in ${inst.teamId} (${inst.teamName}) by ${inst.installedBy}`);
@@ -407,9 +388,9 @@ async function tickWatches() {
     const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
     for (const a of alerts) {
       const inst = await getInstallation(a.watch.team);
-      const token = inst?.botToken || BOT_TOKEN;
-      if (!token) continue;
-      await slackApi('chat.postMessage', { channel: a.watch.channel, thread_ts: a.watch.thread, text: a.message, unfurl_links: false }, token);
+      const install = inst || (BOT_TOKEN ? { platform: 'slack', deliver: BOT_TOKEN } : null);
+      if (!deliverFor(install)) continue;
+      await send(install, { channelId: a.watch.channel, threadId: a.watch.thread, text: a.message });
     }
     if (alerts.length) console.log(`[slack] watch tick: ${alerts.length} alert(s) posted`);
   } catch (e) {

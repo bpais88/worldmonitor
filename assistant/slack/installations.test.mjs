@@ -15,6 +15,15 @@ test('save/get/list/remove an installation', async () => {
   assert.ok(!(await listInstallations()).some((i) => i.teamId === 'T1'));
 });
 
+test('saveInstallation stamps platform=slack + deliver, keeps botToken readable', async () => {
+  await saveInstallation({ teamId: 'TGEN', botToken: 'xoxb-x', botUserId: 'UB', installedBy: 'U' });
+  const got = await getInstallation('TGEN');
+  assert.equal(got.platform, 'slack');     // generalized record shape
+  assert.equal(got.deliver, 'xoxb-x');     // delivery handle for send.mjs
+  assert.equal(got.botToken, 'xoxb-x');    // still readable for the legacy path
+  await removeInstallation('TGEN');
+});
+
 test('getConfig returns full defaults; setConfig shallow-merges', async () => {
   const c0 = await getConfig('T2');
   assert.deepEqual(c0, { ports: [], operators: [], actionUsers: [], onboarded: false });

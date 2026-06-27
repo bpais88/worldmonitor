@@ -15,9 +15,13 @@ const DEFAULT_CONFIG = { ports: [], operators: [], actionUsers: [], onboarded: f
 /** Persist a workspace installation. inst: { teamId, teamName, botToken, botUserId, installedBy, installedAt }. */
 export async function saveInstallation(inst) {
   if (!inst || !inst.teamId) throw new Error('saveInstallation: teamId required');
-  await kvSet(instKey(inst.teamId), inst);
+  // Store in the platform-neutral shape (see send.mjs) so the delivery layer can
+  // treat Slack and Teams uniformly. For Slack the delivery handle is the bot token.
+  // Spread `inst` last so an already-stamped record keeps its own platform/deliver.
+  const record = { platform: 'slack', deliver: inst.botToken, ...inst };
+  await kvSet(instKey(inst.teamId), record);
   await setAdd(INDEX, inst.teamId);
-  return inst;
+  return record;
 }
 
 export async function getInstallation(teamId) {
