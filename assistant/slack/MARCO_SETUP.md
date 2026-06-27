@@ -63,6 +63,9 @@ Already set (keep):
   tokens to persist across restarts (without them, installs live in memory and are
   lost on redeploy).
 - `ANTHROPIC_API_KEY`, `RELAY_URL`, `RELAY_SHARED_SECRET`, `WATCH_TICK_MS`.
+- `WATCH_DWELL_MS` *(optional)* — how long a watch's state change must hold before
+  it alerts (debounce; default 30 min). Stops a port whose congestion flaps near a
+  threshold from spamming the channel; a genuinely sustained change still alerts.
 
 Legacy (can stay as a fallback for your own workspace, or remove once you re-install
 via OAuth): `SLACK_BOT_TOKEN`, `SLACK_BOT_USER_ID`, `SLACK_ACTION_USERS`.
