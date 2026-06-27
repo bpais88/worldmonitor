@@ -45,36 +45,40 @@ export async function handleTeamsRequest(req, res, body) {
 }
 
 async function dispatch(activity) {
+  if (activity.type === 'conversationUpdate') {
+    // First contact / install — the conversation-reference capture lands in a later PR.
+    console.log(`[teams] conversationUpdate in ${activity.conversation?.id}`);
+    return;
+  }
+  if (activity.type !== 'message' || !shouldRespond(activity)) return;
+
+  const n = normalizeTeamsActivity(activity);
+  if (!n.text) return;
+  console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
+
+  // The conversation reference for this turn's reply (serviceUrl from the inbound).
+  const install = { platform: 'teams', deliver: { serviceUrl: n.serviceUrl } };
+  const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
+
   try {
-    if (activity.type === 'message' && shouldRespond(activity)) {
-      const n = normalizeTeamsActivity(activity);
-      if (!n.text) return;
-      console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
-
-      // The conversation reference for this turn's reply (serviceUrl from the inbound).
-      const install = { platform: 'teams', deliver: { serviceUrl: n.serviceUrl } };
-      const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
-
-      const { text, usage, calls } = await runAgent({
-        userText: n.text,
-        history: await getHistory(key),
-        tools: TEAMS_TOOLS,
-        system: TEAMS_SYSTEM,
-        policy: DEFAULT_POLICY, // read-only on Teams for now (no action tools wired)
-        context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId },
-      });
-      const reply = text || '(no answer)';
-      const day = await recordUsage(n.tenantId, usage);
-      console.log(`[teams]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${reply.length} chars` +
-        (day ? ` · today ${day.messages} msg / ${day.input + day.output} tok` : ''));
-      // Reply to the user's message (replyToId = the inbound activity id).
-      await send(install, { channelId: n.channelId, threadId: n.activityId, text: reply });
-      await appendTurn(key, n.text, reply);
-    } else if (activity.type === 'conversationUpdate') {
-      // First contact / install — the conversation-reference capture lands in a later PR.
-      console.log(`[teams] conversationUpdate in ${activity.conversation?.id}`);
-    }
+    const { text, usage, calls } = await runAgent({
+      userText: n.text,
+      history: await getHistory(key),
+      tools: TEAMS_TOOLS,
+      system: TEAMS_SYSTEM,
+      policy: DEFAULT_POLICY, // read-only on Teams for now (no action tools wired)
+      context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId },
+    });
+    const reply = text || '(no answer)';
+    const day = await recordUsage(n.tenantId, usage);
+    console.log(`[teams]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${reply.length} chars` +
+      (day ? ` · today ${day.messages} msg / ${day.input + day.output} tok` : ''));
+    // Reply to the user's message (replyToId = the inbound activity id).
+    await send(install, { channelId: n.channelId, threadId: n.activityId, text: reply });
+    await appendTurn(key, n.text, reply);
   } catch (e) {
-    console.error('[teams] dispatch error:', e.message);
+    console.error('[teams] agent error:', e.message);
+    // Mirror Slack: tell the user instead of staying silent (best-effort).
+    await send(install, { channelId: n.channelId, threadId: n.activityId, text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
   }
 }
