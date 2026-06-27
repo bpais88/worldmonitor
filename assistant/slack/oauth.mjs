@@ -38,9 +38,11 @@ export async function exchangeCode({ clientId, clientSecret, code, redirectUri, 
   const j = await res.json().catch(() => ({}));
   if (!j.ok) throw new Error(`oauth.v2.access failed: ${j.error || res.status}`);
   return {
+    platform: 'slack',
     teamId: j.team?.id,
     teamName: j.team?.name || '',
     botToken: j.access_token,
+    deliver: j.access_token, // platform-neutral delivery handle (see send.mjs)
     botUserId: j.bot_user_id,
     installedBy: j.authed_user?.id || '',
     installedAt: new Date().toISOString(),
