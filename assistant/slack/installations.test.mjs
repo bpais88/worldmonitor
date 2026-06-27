@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import {
   saveInstallation, getInstallation, listInstallations, removeInstallation,
-  getConfig, setConfig, addActionUser,
+  getConfig, setConfig, addActionUser, deliverFor,
 } from './installations.mjs';
 
 test('save/get/list/remove an installation', async () => {
@@ -22,6 +22,12 @@ test('saveInstallation stamps platform=slack + deliver, keeps botToken readable'
   assert.equal(got.deliver, 'xoxb-x');     // delivery handle for send.mjs
   assert.equal(got.botToken, 'xoxb-x');    // still readable for the legacy path
   await removeInstallation('TGEN');
+});
+
+test('deliverFor resolves deliver, falls back to legacy botToken, else null', () => {
+  assert.equal(deliverFor({ platform: 'slack', deliver: 'xoxb-new' }), 'xoxb-new');
+  assert.equal(deliverFor({ botToken: 'xoxb-legacy' }), 'xoxb-legacy'); // pre-generalization record
+  assert.equal(deliverFor(null), null);
 });
 
 test('getConfig returns full defaults; setConfig shallow-merges', async () => {

@@ -31,11 +31,12 @@ import { listWatches, evaluateWatches, cancelWatchesForTeam } from '../watches.m
 import { authorizeUrl, exchangeCode, newState, consumeState } from './oauth.mjs';
 import {
   getInstallation, saveInstallation, getConfig, setConfig, addActionUser, listInstallations, removeInstallation,
+  legacyInstall, deliverFor,
 } from './installations.mjs';
 import { MARCO_PERSONA, onboardingText } from './onboarding.mjs';
 import { recordUsage } from '../usage.mjs';
 import { privacyHtml, supportHtml } from './legal.mjs';
-import { send, update, dm, deliverFor } from '../send.mjs';
+import { send, update, dm } from '../send.mjs';
 
 const PORT = process.env.PORT || 3010;
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
@@ -103,6 +104,9 @@ async function postEphemeral(responseUrl, text) {
 
 const cleanText = (t) => String(t || '').replace(/<@[A-Z0-9]+>/g, '').replace(/\s+/g, ' ').trim();
 
+// Adapt the agent/tool postMessage(channel, thread, text, blocks) contract onto send().
+const postMessageFor = (install) => (ch, th, text, blocks) => send(install, { channelId: ch, threadId: th, text, blocks });
+
 // Which users may EXECUTE actions in this workspace. Installed workspaces use their
 // own config allowlist; a legacy (env-token) workspace falls back to env.
 function resolveActionUsers(inst, cfg) {
@@ -148,9 +152,7 @@ async function handleEvent(payload) {
   }
 
   const inst = await getInstallation(teamId);
-  // Resolve a delivery target: the workspace install, or a synthetic legacy install
-  // wrapping the env BOT_TOKEN when there's no OAuth record.
-  const install = inst || (BOT_TOKEN ? { platform: 'slack', deliver: BOT_TOKEN, botUserId: BOT_USER_ID } : null);
+  const install = inst || legacyInstall();
   const botUserId = install?.botUserId || BOT_USER_ID;
   if (!deliverFor(install)) { console.warn(`[slack] no token for team ${teamId}`); return; }
 
@@ -190,7 +192,7 @@ async function handleEvent(payload) {
       tools: TOOLS,
       system: SLACK_SYSTEM,
       policy,
-      context: { channel, thread: threadTs, user: ev.user, team: teamId, postMessage: (ch, th, text, blocks) => send(install, { channelId: ch, threadId: th, text, blocks }) },
+      context: { channel, thread: threadTs, user: ev.user, team: teamId, postMessage: postMessageFor(install) },
     });
     // Observe-only token metering (no cap yet) — per workspace, per day.
     const day = await recordUsage(teamId, usage);
@@ -223,7 +225,7 @@ async function handleInteraction(payload) {
   const ts = payload.message?.ts;
 
   const inst = await getInstallation(teamId);
-  const install = inst || (BOT_TOKEN ? { platform: 'slack', deliver: BOT_TOKEN } : null);
+  const install = inst || legacyInstall();
   if (!deliverFor(install)) return;
   const pend = await peekPending(id);
 
@@ -243,7 +245,7 @@ async function handleInteraction(payload) {
   const tool = toolByName.get(pend.tool);
   if (!tool) return update(install, { channelId: channel, messageId: ts, text: `⚠️ Unknown tool \`${pend.tool}\`.` });
   try {
-    const result = await tool.handler(pend.input || {}, { channel: pend.channel, thread: pend.thread, team: teamId, postMessage: (ch, th, text, blocks) => send(install, { channelId: ch, threadId: th, text, blocks }) });
+    const result = await tool.handler(pend.input || {}, { channel: pend.channel, thread: pend.thread, team: teamId, postMessage: postMessageFor(install) });
     const summary = result && result.error ? `error: ${result.error}` : JSON.stringify(result).slice(0, 200);
     await update(install, { channelId: channel, messageId: ts, text: `✅ Approved by <@${clicker}> — \`${pend.tool}\` done.\n${summary}` });
   } catch (e) {
@@ -388,7 +390,7 @@ async function tickWatches() {
     const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
     for (const a of alerts) {
       const inst = await getInstallation(a.watch.team);
-      const install = inst || (BOT_TOKEN ? { platform: 'slack', deliver: BOT_TOKEN } : null);
+      const install = inst || legacyInstall();
       if (!deliverFor(install)) continue;
       await send(install, { channelId: a.watch.channel, threadId: a.watch.thread, text: a.message });
     }

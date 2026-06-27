@@ -12,6 +12,21 @@ const cfgKey = (teamId) => `slack:cfg:${teamId}`;
 
 const DEFAULT_CONFIG = { ports: [], operators: [], actionUsers: [], onboarded: false };
 
+// Legacy single-workspace fallback: a deploy with no OAuth record for a team can
+// still operate from an env bot token. legacyInstall() materializes that as the same
+// neutral install shape the delivery layer (send.mjs) expects, so call sites never
+// hand-build it. Returns null when no env token is set.
+const ENV_BOT_TOKEN = process.env.SLACK_BOT_TOKEN || '';
+const ENV_BOT_USER_ID = process.env.SLACK_BOT_USER_ID || '';
+export const legacyInstall = () =>
+  ENV_BOT_TOKEN ? { platform: 'slack', deliver: ENV_BOT_TOKEN, botUserId: ENV_BOT_USER_ID } : null;
+
+// The delivery handle for an install: a Slack bot token, or (Teams, later) a
+// conversation reference. The `?? botToken` branch is transitional back-compat for
+// records persisted before the record was generalized; both writers now stamp
+// `deliver`, so a re-saved record self-heals and this fallback can later be dropped.
+export const deliverFor = (install) => install?.deliver ?? install?.botToken ?? null;
+
 /** Persist a workspace installation. inst: { teamId, teamName, botToken, botUserId, installedBy, installedAt }. */
 export async function saveInstallation(inst) {
   if (!inst || !inst.teamId) throw new Error('saveInstallation: teamId required');

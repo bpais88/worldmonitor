@@ -9,7 +9,7 @@
 // reference. deliverFor() resolves it, tolerating legacy Slack records persisted
 // before generalization that only carry `botToken`.
 
-export const deliverFor = (install) => install?.deliver ?? install?.botToken ?? null;
+import { deliverFor } from './slack/installations.mjs';
 
 async function slackApi(method, payload, botToken) {
   const res = await fetch(`https://slack.com/api/${method}`, {
