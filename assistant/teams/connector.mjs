@@ -4,21 +4,27 @@
 // activities to the conversation's serviceUrl. This is enough to reply to an
 // inbound activity; the fuller send/update + conversation-reference reuse (for
 // proactive watch alerts) lands with the agent wiring in a later PR.
-const TOKEN_URL = 'https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token';
+const AUTHORITY = 'https://login.microsoftonline.com';
 const SCOPE = 'https://api.botframework.com/.default';
+const TOKEN_REFRESH_SKEW_SEC = 300; // refresh slightly before the token actually expires
 
 let _token = { value: '', expMs: 0 };
 
-async function botToken({ appId, appSecret }, now = Date.now()) {
+// Single-tenant bots must mint the Connector token from their OWN Azure AD tenant's
+// authority; only multi-tenant bots use the shared 'botframework.com' authority. Pass
+// tenantId (the app's tenant id, via MS_APP_TENANT_ID) for single-tenant — which is how
+// this bot is registered — and omit it for multi-tenant.
+async function botToken({ appId, appSecret, tenantId }, now = Date.now()) {
   if (_token.value && now < _token.expMs) return _token.value;
-  const res = await fetch(TOKEN_URL, {
+  const tokenUrl = `${AUTHORITY}/${tenantId || 'botframework.com'}/oauth2/v2.0/token`;
+  const res = await fetch(tokenUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
     body: new URLSearchParams({ grant_type: 'client_credentials', client_id: appId, client_secret: appSecret, scope: SCOPE }),
   });
   const j = await res.json().catch(() => ({}));
   if (!j.access_token) throw new Error(`bot token failed: ${j.error || res.status}`);
-  _token = { value: j.access_token, expMs: now + ((j.expires_in || 3600) - 300) * 1000 };
+  _token = { value: j.access_token, expMs: now + ((j.expires_in || 3600) - TOKEN_REFRESH_SKEW_SEC) * 1000 };
   return _token.value;
 }
 

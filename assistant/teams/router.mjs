@@ -8,6 +8,7 @@ import { replyToActivity } from './connector.mjs';
 
 const MS_APP_ID = process.env.MS_APP_ID || '';
 const MS_APP_SECRET = process.env.MS_APP_SECRET || '';
+const MS_APP_TENANT_ID = process.env.MS_APP_TENANT_ID || ''; // set for a single-tenant bot
 
 export async function handleTeamsRequest(req, res, body) {
   let activity;
@@ -31,7 +32,7 @@ async function dispatch(activity) {
       const n = normalizeTeamsActivity(activity);
       console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
       // PR2: echo to prove the loop. Real agent wiring lands in the next PR.
-      await replyToActivity(activity, `🔁 ${n.text}`, { appId: MS_APP_ID, appSecret: MS_APP_SECRET });
+      await replyToActivity(activity, `🔁 ${n.text}`, { appId: MS_APP_ID, appSecret: MS_APP_SECRET, tenantId: MS_APP_TENANT_ID });
     } else if (activity.type === 'conversationUpdate') {
       // First contact / install — the conversation-reference capture lands later.
       console.log(`[teams] conversationUpdate in ${activity.conversation?.id}`);
