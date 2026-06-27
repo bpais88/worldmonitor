@@ -26,9 +26,10 @@ async function slackApi(method, payload, botToken) {
 /** Post a message (optionally a thread reply, optionally with platform blocks/cards). */
 export async function send(install, { channelId, threadId, text, blocks }) {
   if (install?.platform === 'teams') {
-    // Teams: `deliver` carries the conversation reference (serviceUrl). channelId is the
-    // conversation id; threadId is the inbound activity to reply to (replyToId).
-    return sendActivity({ serviceUrl: install.deliver?.serviceUrl, conversationId: channelId, activityId: threadId }, { text });
+    // Teams: `deliver` is the conversation reference (serviceUrl + from/recipient accounts +
+    // locale). channelId is the conversation id; threadId is the inbound activity to reply
+    // to (replyToId). The connector assembles the complete Bot Framework reply activity.
+    return sendActivity({ ...install.deliver, conversationId: channelId, activityId: threadId }, { text });
   }
   return slackApi('chat.postMessage', { channel: channelId, thread_ts: threadId, text, blocks, unfurl_links: false }, deliverFor(install));
 }

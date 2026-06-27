@@ -56,8 +56,9 @@ async function dispatch(activity) {
   if (!n.text) return;
   console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
 
-  // The conversation reference for this turn's reply (serviceUrl from the inbound).
-  const install = { platform: 'teams', deliver: { serviceUrl: n.serviceUrl } };
+  // The conversation reference for this turn's reply: serviceUrl + the channel accounts
+  // the Connector requires on a reply (outbound from = the bot, recipient = the user).
+  const install = { platform: 'teams', deliver: { serviceUrl: n.serviceUrl, from: n.botAccount, recipient: n.userAccount, locale: n.locale } };
   const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
 
   try {

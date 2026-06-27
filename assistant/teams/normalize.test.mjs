@@ -8,10 +8,11 @@ test('channel message: strips the <at> mention and maps every id', () => {
     text: '<at>Marco</at> which ports are busy?',
     replyToId: 'root1',
     serviceUrl: 'https://smba.trafficmanager.net/emea/',
-    from: { aadObjectId: 'aad-user-9' },
+    from: { id: '29:user', aadObjectId: 'aad-user-9' },
     recipient: { id: '28:app-id' },
     conversation: { id: 'conv-7', conversationType: 'channel' },
     channelData: { tenant: { id: 'tenant-3' } },
+    locale: 'en-GB',
   });
   assert.equal(n.tenantId, 'tenant-3');
   assert.equal(n.channelId, 'conv-7');
@@ -21,6 +22,10 @@ test('channel message: strips the <at> mention and maps every id', () => {
   assert.equal(n.serviceUrl, 'https://smba.trafficmanager.net/emea/');
   assert.equal(n.conversationType, 'channel');
   assert.equal(n.activityId, 'a1');
+  // Channel accounts for the reply: from = bot (inbound recipient), recipient = user (inbound from).
+  assert.deepEqual(n.botAccount, { id: '28:app-id' });
+  assert.deepEqual(n.userAccount, { id: '29:user', aadObjectId: 'aad-user-9' });
+  assert.equal(n.locale, 'en-GB');
 });
 
 test('personal (1:1) message: threadId falls back to the conversation id', () => {

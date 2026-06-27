@@ -57,11 +57,18 @@ test('send → Teams: routes through the connector to the Bot Framework reply UR
     return { ok: true, json: async () => ({}) };
   };
   try {
-    const install = { platform: 'teams', deliver: { serviceUrl: 'https://smba.trafficmanager.net/emea/' } };
+    const install = { platform: 'teams', deliver: { serviceUrl: 'https://smba.trafficmanager.net/emea/', from: { id: '28:bot' }, recipient: { id: '29:user' } } };
     await send(install, { channelId: 'conv-1', threadId: 'act-1', text: 'hello from Teams' });
     const sendCall = calls.find((c) => c.url.includes('/v3/conversations/'));
     assert.equal(sendCall.url, 'https://smba.trafficmanager.net/emea/v3/conversations/conv-1/activities/act-1');
-    assert.deepEqual(JSON.parse(sendCall.opts.body), { type: 'message', text: 'hello from Teams', replyToId: 'act-1' });
+    assert.deepEqual(JSON.parse(sendCall.opts.body), {
+      type: 'message',
+      from: { id: '28:bot' },
+      recipient: { id: '29:user' },
+      conversation: { id: 'conv-1' },
+      replyToId: 'act-1',
+      text: 'hello from Teams',
+    });
   } finally { globalThis.fetch = real; }
 });
 
