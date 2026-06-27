@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { send, update, dm, deliverFor } from './send.mjs';
+import { send, update, dm } from './send.mjs';
 
 // Capture outgoing Slack Web API calls by stubbing global fetch, so we can assert
 // the platform-neutral layer produces byte-identical payloads to the old inline code.
@@ -15,12 +15,6 @@ function withFetch(fn) {
     try { await fn(calls); } finally { globalThis.fetch = real; }
   };
 }
-
-test('deliverFor resolves deliver, falls back to legacy botToken, else null', () => {
-  assert.equal(deliverFor({ platform: 'slack', deliver: 'xoxb-new' }), 'xoxb-new');
-  assert.equal(deliverFor({ botToken: 'xoxb-legacy' }), 'xoxb-legacy'); // pre-generalization record
-  assert.equal(deliverFor(null), null);
-});
 
 test('send → chat.postMessage, same payload as the old inline post()', withFetch(async (calls) => {
   await send({ platform: 'slack', deliver: 'xoxb-1' }, { channelId: 'C9', threadId: 'T9', text: 'hi' });
