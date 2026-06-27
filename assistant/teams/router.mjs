@@ -1,14 +1,32 @@
-// Teams (Bot Framework) request router — the Teams adapter's receive half, mirroring
-// the Slack adapter: verify the inbound request, ack fast (<5s), then handle async.
-// For now it ECHOES message text so the end-to-end loop is verifiable; the real agent
-// run + Adaptive-card approvals + conversation-reference capture land in later PRs.
+// Teams (Bot Framework) request router — the Teams adapter's receive half, mirroring the
+// Slack adapter: verify the inbound request, ack fast (<5s), then run the agent async and
+// reply through the platform-neutral send() seam.
+//
+// Scope (PR3): read-class Q&A — Marco answers freight/weather questions on Teams with the
+// same brain as Slack. Approval-gated ACTIONS (Adaptive cards) and proactive watch alerts
+// (which need a stored conversation reference + a Teams install record) land in later PRs.
 import { verifyTeamsToken } from './verify.mjs';
 import { normalizeTeamsActivity, shouldRespond } from './normalize.mjs';
-import { replyToActivity } from './connector.mjs';
+import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
+import { DEFAULT_POLICY } from '../guardrails.mjs';
+import { freightTools } from '../tools/freight.mjs';
+import { weatherTools } from '../tools/weather.mjs';
+import { recordUsage } from '../usage.mjs';
+import { send } from '../send.mjs';
+// TODO: MARCO_PERSONA + thread memory are platform-neutral but currently live under slack/;
+// Teams is now their 2nd consumer, so they should move to neutral modules in a follow-up.
+import { MARCO_PERSONA } from '../slack/onboarding.mjs';
+import { threadKey, getHistory, appendTurn } from '../slack/memory.mjs';
 
 const MS_APP_ID = process.env.MS_APP_ID || '';
-const MS_APP_SECRET = process.env.MS_APP_SECRET || '';
-const MS_APP_TENANT_ID = process.env.MS_APP_TENANT_ID || ''; // set for a single-tenant bot
+
+// Read-class tools only for now (Q&A). Action tools (post report) need the Adaptive-card
+// approval flow (next PR); watches need a Teams install record for proactive delivery.
+const TEAMS_TOOLS = [...freightTools, ...weatherTools];
+
+// Marco's voice + the analyst base, with Teams markdown rules (Teams renders standard
+// Markdown — no Slack mrkdwn quirks).
+const TEAMS_SYSTEM = `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\nYou are replying in Microsoft Teams. Use standard Markdown: **bold**, bullet lists, and small tables when useful. Keep replies tight.`;
 
 export async function handleTeamsRequest(req, res, body) {
   let activity;
@@ -27,17 +45,40 @@ export async function handleTeamsRequest(req, res, body) {
 }
 
 async function dispatch(activity) {
+  if (activity.type === 'conversationUpdate') {
+    // First contact / install — the conversation-reference capture lands in a later PR.
+    console.log(`[teams] conversationUpdate in ${activity.conversation?.id}`);
+    return;
+  }
+  if (activity.type !== 'message' || !shouldRespond(activity)) return;
+
+  const n = normalizeTeamsActivity(activity);
+  if (!n.text) return;
+  console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
+
+  // The conversation reference for this turn's reply (serviceUrl from the inbound).
+  const install = { platform: 'teams', deliver: { serviceUrl: n.serviceUrl } };
+  const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
+
   try {
-    if (activity.type === 'message' && shouldRespond(activity)) {
-      const n = normalizeTeamsActivity(activity);
-      console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
-      // PR2: echo to prove the loop. Real agent wiring lands in the next PR.
-      await replyToActivity(activity, `🔁 ${n.text}`, { appId: MS_APP_ID, appSecret: MS_APP_SECRET, tenantId: MS_APP_TENANT_ID });
-    } else if (activity.type === 'conversationUpdate') {
-      // First contact / install — the conversation-reference capture lands later.
-      console.log(`[teams] conversationUpdate in ${activity.conversation?.id}`);
-    }
+    const { text, usage, calls } = await runAgent({
+      userText: n.text,
+      history: await getHistory(key),
+      tools: TEAMS_TOOLS,
+      system: TEAMS_SYSTEM,
+      policy: DEFAULT_POLICY, // read-only on Teams for now (no action tools wired)
+      context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId },
+    });
+    const reply = text || '(no answer)';
+    const day = await recordUsage(n.tenantId, usage);
+    console.log(`[teams]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${reply.length} chars` +
+      (day ? ` · today ${day.messages} msg / ${day.input + day.output} tok` : ''));
+    // Reply to the user's message (replyToId = the inbound activity id).
+    await send(install, { channelId: n.channelId, threadId: n.activityId, text: reply });
+    await appendTurn(key, n.text, reply);
   } catch (e) {
-    console.error('[teams] dispatch error:', e.message);
+    console.error('[teams] agent error:', e.message);
+    // Mirror Slack: tell the user instead of staying silent (best-effort).
+    await send(install, { channelId: n.channelId, threadId: n.activityId, text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
   }
 }

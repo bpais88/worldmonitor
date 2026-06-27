@@ -48,8 +48,24 @@ test('legacy botToken-only install still delivers (uses botToken as the bearer)'
   assert.equal(calls[0].auth, 'Bearer xoxb-legacy');
 }));
 
-test('teams platform throws until the Teams adapter is wired (PR1 is Slack-only)', async () => {
-  await assert.rejects(() => send({ platform: 'teams', deliver: {} }, { channelId: 'c', text: 't' }), /teams delivery not wired/);
+test('send → Teams: routes through the connector to the Bot Framework reply URL', async () => {
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    if (url.includes('/oauth2/v2.0/token')) return { ok: true, json: async () => ({ access_token: 'tok', expires_in: 3600 }) };
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const install = { platform: 'teams', deliver: { serviceUrl: 'https://smba.trafficmanager.net/emea/' } };
+    await send(install, { channelId: 'conv-1', threadId: 'act-1', text: 'hello from Teams' });
+    const sendCall = calls.find((c) => c.url.includes('/v3/conversations/'));
+    assert.equal(sendCall.url, 'https://smba.trafficmanager.net/emea/v3/conversations/conv-1/activities/act-1');
+    assert.deepEqual(JSON.parse(sendCall.opts.body), { type: 'message', text: 'hello from Teams', replyToId: 'act-1' });
+  } finally { globalThis.fetch = real; }
+});
+
+test('update/dm still throw for Teams (Adaptive-card update + onboarding DM land in later PRs)', async () => {
   await assert.rejects(() => update({ platform: 'teams' }, { channelId: 'c', messageId: 'm', text: 't' }), /teams delivery not wired/);
   await assert.rejects(() => dm({ platform: 'teams' }, { userId: 'u', text: 't' }), /teams delivery not wired/);
 });

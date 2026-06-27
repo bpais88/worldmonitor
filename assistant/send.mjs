@@ -10,6 +10,7 @@
 // before generalization that only carry `botToken`.
 
 import { deliverFor } from './slack/installations.mjs';
+import { sendActivity } from './teams/connector.mjs';
 
 async function slackApi(method, payload, botToken) {
   const res = await fetch(`https://slack.com/api/${method}`, {
@@ -24,7 +25,11 @@ async function slackApi(method, payload, botToken) {
 
 /** Post a message (optionally a thread reply, optionally with platform blocks/cards). */
 export async function send(install, { channelId, threadId, text, blocks }) {
-  if (install?.platform === 'teams') throw new Error('send: teams delivery not wired yet');
+  if (install?.platform === 'teams') {
+    // Teams: `deliver` carries the conversation reference (serviceUrl). channelId is the
+    // conversation id; threadId is the inbound activity to reply to (replyToId).
+    return sendActivity({ serviceUrl: install.deliver?.serviceUrl, conversationId: channelId, activityId: threadId }, { text });
+  }
   return slackApi('chat.postMessage', { channel: channelId, thread_ts: threadId, text, blocks, unfurl_links: false }, deliverFor(install));
 }
 
