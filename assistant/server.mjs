@@ -9,7 +9,7 @@
 // Env: PORT (3010), TEAMS_MESSAGING_PATH (/api/messages), WATCH_TICK_MS. Per-adapter
 // env is documented in slack/adapter.mjs and teams/router.mjs.
 import http from 'node:http';
-import { handleSlackGet, handleSlackPost, slackBoot } from './slack/adapter.mjs';
+import { handleSlackGet, handleSlackPost, slackBoot, slackStatus } from './slack/adapter.mjs';
 import { handleTeamsRequest } from './teams/router.mjs';
 import { relayGet } from './relay.mjs';
 import { listWatches, evaluateWatches } from './watches.mjs';
@@ -30,8 +30,15 @@ function readBody(req) {
 const server = http.createServer(async (req, res) => {
   const u = new globalThis.URL(req.url, 'http://localhost');
 
-  // GET routes are all Slack/distribution concerns (health, OAuth, legal pages, landing).
-  if (req.method === 'GET') return handleSlackGet(req, res, u);
+  if (req.method === 'GET') {
+    // /health is a host liveness concern; the Slack adapter contributes its sub-status.
+    if (u.pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ ok: true, ...(await slackStatus()) }));
+    }
+    // The remaining GETs (OAuth, served legal pages, landing) are Slack/distribution concerns.
+    return handleSlackGet(req, res, u);
+  }
   if (req.method !== 'POST') { res.writeHead(404); return res.end(); }
 
   const body = await readBody(req);
@@ -46,6 +53,8 @@ const server = http.createServer(async (req, res) => {
 // each watch's channel ONLY on a state change, via the platform-neutral send() (so each
 // alert reaches its workspace's platform). The data fetch is freight-domain today; the
 // delivery is platform-agnostic. Skips entirely when there are no watches.
+// TODO: the freight fetch+shape belongs in a domain watch-source module; the host should
+// only START the loop. Extract when a second watch source or the Teams adapter arrives.
 const WATCH_TICK_MS = Number(process.env.WATCH_TICK_MS) || 5 * 60_000;
 async function tickWatches() {
   try {

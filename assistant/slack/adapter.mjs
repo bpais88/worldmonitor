@@ -319,11 +319,6 @@ function verified(req, body) {
 // /distribution concerns. The host delegates every GET here.
 export async function handleSlackGet(req, res, u) {
   const path = u.pathname;
-  if (path === '/health') {
-    res.writeHead(200, { 'Content-Type': 'application/json' });
-    const teams = await listInstallations().catch(() => []);
-    return res.end(JSON.stringify({ ok: true, multiTenant: !!CLIENT_ID, installs: teams.length }));
-  }
   if (path === '/slack/install') return handleInstall(req, res);
   if (path === '/slack/oauth/callback') return handleOAuthCallback(req, res, Object.fromEntries(u.searchParams));
   // Public legal pages required for Slack distribution.
@@ -361,6 +356,12 @@ export async function handleSlackPost(req, res, body, u) {
   }
 
   res.writeHead(404); res.end();
+}
+
+// Slack sub-status for the host's /health route (OAuth mode + install count).
+export async function slackStatus() {
+  const teams = await listInstallations().catch(() => []);
+  return { multiTenant: !!CLIENT_ID, installs: teams.length };
 }
 
 // Startup banner — the host calls this once the listener is up.
