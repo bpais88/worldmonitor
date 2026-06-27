@@ -55,8 +55,9 @@ export async function verifyTeamsToken({ authHeader, appId, serviceUrl }, { keyS
   // Activity body value AND the token's serviceurl claim must be present and match. A
   // missing body value or a missing claim is a HARD failure: never skip the check just
   // because a field is absent. No JWT lib checks this; it's Bot Framework specific.
-  const claimUrl = payload.serviceurl ?? payload.serviceUrl;
-  if (!serviceUrl || !claimUrl || claimUrl.replace(/\/$/, '') !== serviceUrl.replace(/\/$/, '')) {
+  const claim = (payload.serviceurl ?? payload.serviceUrl)?.replace(/\/$/, '');
+  const expected = serviceUrl?.replace(/\/$/, '');
+  if (!expected || claim !== expected) { // absent body value, absent claim, or mismatch
     throw new Error('serviceUrl missing or claim mismatch');
   }
   return payload;
