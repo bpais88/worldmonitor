@@ -37,9 +37,13 @@ import { MARCO_PERSONA, onboardingText } from './onboarding.mjs';
 import { recordUsage } from '../usage.mjs';
 import { privacyHtml, supportHtml } from './legal.mjs';
 import { send, update, dm } from '../send.mjs';
+import { handleTeamsRequest } from '../teams/router.mjs';
 
 const PORT = process.env.PORT || 3010;
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
+// Teams (Bot Framework) shares this same process; its endpoint is auth'd by JWT, not
+// Slack's HMAC, so it's routed before the Slack signature gate.
+const TEAMS_MESSAGING_PATH = process.env.TEAMS_MESSAGING_PATH || '/api/messages';
 // Multi-tenant OAuth credentials.
 const CLIENT_ID = process.env.SLACK_CLIENT_ID || '';
 const CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || '';
@@ -346,8 +350,12 @@ const server = http.createServer(async (req, res) => {
   }
   if (req.method !== 'POST') { res.writeHead(404); return res.end(); }
 
-  // --- Signed POST routes (Slack events + interactions) ---
   const body = await readBody(req);
+
+  // Teams (Bot Framework) — its own JWT auth lives inside the handler, not Slack HMAC.
+  if (path === TEAMS_MESSAGING_PATH) return handleTeamsRequest(req, res, body);
+
+  // --- Signed Slack POST routes (events + interactions) ---
   if (!verified(req, body)) { res.writeHead(401); return res.end('bad signature'); }
 
   if (path.startsWith('/slack/events')) {
@@ -407,4 +415,5 @@ server.listen(PORT, () => {
     `${CLIENT_ID || BOT_TOKEN ? '' : ' · WARN no token/client configured'}`);
   setInterval(() => { void tickWatches(); }, WATCH_TICK_MS).unref?.();
   console.log(`[slack] watch ticker every ${WATCH_TICK_MS / 1000}s`);
+  if (process.env.MS_APP_ID) console.log(`[teams] Bot Framework endpoint on ${TEAMS_MESSAGING_PATH}`);
 });
