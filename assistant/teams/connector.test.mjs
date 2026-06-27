@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { replyToActivity } from './connector.mjs';
+import { sendActivity } from './connector.mjs';
 
 // Capture outbound calls by stubbing global fetch. NOTE: botToken caches the token in
 // module scope, so the first test runs against a cold cache (and thus exercises the
@@ -20,8 +20,11 @@ function withFetch(fn) {
 }
 
 test('single-tenant: mints the Connector token from the app tenant authority (not botframework.com)', withFetch(async (calls) => {
-  const inbound = { serviceUrl: 'https://smba.trafficmanager.net/emea/', conversation: { id: 'c1' }, id: 'a1' };
-  await replyToActivity(inbound, 'hi', { appId: 'app', appSecret: 'sec', tenantId: 'TENANT-GUID' });
+  await sendActivity(
+    { serviceUrl: 'https://smba.trafficmanager.net/emea/', conversationId: 'c1', activityId: 'a1' },
+    { text: 'hi' },
+    { appId: 'app', appSecret: 'sec', tenantId: 'TENANT-GUID' },
+  );
   const tokenCall = calls.find((c) => c.url.includes('/oauth2/v2.0/token'));
   assert.equal(tokenCall.url, 'https://login.microsoftonline.com/TENANT-GUID/oauth2/v2.0/token');
   const replyCall = calls.find((c) => c.url.includes('/v3/conversations/'));
@@ -30,8 +33,7 @@ test('single-tenant: mints the Connector token from the app tenant authority (no
 }));
 
 test('reply falls back to send-to-conversation when the inbound has no activity id', withFetch(async (calls) => {
-  const inbound = { serviceUrl: 'https://smba.trafficmanager.net/emea/', conversation: { id: 'c2' } }; // no id
-  await replyToActivity(inbound, 'hi', { appId: 'app', appSecret: 'sec', tenantId: 'T' });
+  await sendActivity({ serviceUrl: 'https://smba.trafficmanager.net/emea/', conversationId: 'c2' }, { text: 'hi' }, { appId: 'app', appSecret: 'sec', tenantId: 'T' });
   const replyCall = calls.find((c) => c.url.includes('/v3/conversations/'));
   assert.equal(replyCall.url, 'https://smba.trafficmanager.net/emea/v3/conversations/c2/activities');
   assert.equal(JSON.parse(replyCall.opts.body).replyToId, undefined);
