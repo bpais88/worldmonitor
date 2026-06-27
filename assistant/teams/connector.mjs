@@ -26,11 +26,16 @@ async function botToken({ appId, appSecret }, now = Date.now()) {
 export async function replyToActivity(inbound, text, creds) {
   const token = await botToken(creds);
   const base = String(inbound.serviceUrl || '').replace(/\/$/, '');
-  const url = `${base}/v3/conversations/${encodeURIComponent(inbound.conversation.id)}/activities/${encodeURIComponent(inbound.id)}`;
+  const convId = encodeURIComponent(inbound.conversation.id);
+  // Reply-to-activity when we have an inbound activity id; otherwise fall back to
+  // send-to-conversation (channels without nested replies may omit the id).
+  const url = inbound.id
+    ? `${base}/v3/conversations/${convId}/activities/${encodeURIComponent(inbound.id)}`
+    : `${base}/v3/conversations/${convId}/activities`;
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ type: 'message', text, replyToId: inbound.id }),
+    body: JSON.stringify({ type: 'message', text, ...(inbound.id ? { replyToId: inbound.id } : {}) }),
   });
   if (!res.ok) console.warn('[teams] reply failed:', res.status);
   return res;

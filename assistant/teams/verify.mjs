@@ -8,6 +8,12 @@
 // verification is error-prone and security-critical, so we use jsonwebtoken +
 // jwks-rsa (scoped to this file). Everything else in the Teams adapter stays
 // hand-rolled over fetch.
+//
+// Scope: this validates the production Connector->Bot path (issuer
+// api.botframework.com). The Bot Framework Emulator's separate issuer and the
+// per-signing-key channel "endorsements" check are intentionally NOT implemented —
+// this is a production, Teams-only adapter. Revisit if local Emulator auth or
+// multi-channel support is added.
 import jwt from 'jsonwebtoken';
 import { JwksClient } from 'jwks-rsa';
 
@@ -20,7 +26,8 @@ const CLOCK_SKEW_SEC = 300; // 5-min tolerance, per Bot Framework guidance
 let _jwks;
 async function defaultGetKey(header, fetchImpl = fetch) {
   if (!_jwks) {
-    const meta = await fetchImpl(OPENID_CONFIG).then((r) => r.json());
+    const meta = await fetchImpl(OPENID_CONFIG).then((r) => r.json()).catch(() => ({}));
+    if (!meta?.jwks_uri) throw new Error('JWKS discovery failed (no jwks_uri)'); // fail closed
     _jwks = new JwksClient({ jwksUri: meta.jwks_uri, cache: true, cacheMaxAge: 24 * 60 * 60 * 1000, rateLimit: true });
   }
   const key = await _jwks.getSigningKey(header.kid);

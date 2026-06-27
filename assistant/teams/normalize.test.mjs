@@ -34,6 +34,10 @@ test('personal (1:1) message: threadId falls back to the conversation id', () =>
   assert.equal(n.conversationType, 'personal');
 });
 
+test('strips a self-closing <at/> mention as well as the paired form', () => {
+  assert.equal(normalizeTeamsActivity({ type: 'message', text: '<at id="0"/> status please', conversation: { id: 'c' } }).text, 'status please');
+});
+
 test('shouldRespond: always answers in personal chat', () => {
   assert.equal(shouldRespond({ conversation: { conversationType: 'personal' } }), true);
   assert.equal(shouldRespond({}), true); // default conversationType is personal

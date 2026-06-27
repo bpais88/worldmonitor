@@ -4,7 +4,10 @@
 
 // Strip Teams mention spans (<at>Name</at>) so the agent sees a clean prompt,
 // mirroring the Slack adapter stripping <@U…> mentions.
-const stripMentions = (text) => String(text || '').replace(/<at\b[^>]*>.*?<\/at>/gi, '').replace(/\s+/g, ' ').trim();
+const stripMentions = (text) => String(text || '')
+  .replace(/<at\b[^>]*\/>/gi, '')        // self-closing <at .../>
+  .replace(/<at\b[^>]*>.*?<\/at>/gi, '') // paired <at>…</at>
+  .replace(/\s+/g, ' ').trim();
 
 /**
  * Map an Activity to { tenantId, channelId, threadId, userId, text } plus the
