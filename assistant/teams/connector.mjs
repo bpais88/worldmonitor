@@ -34,22 +34,37 @@ async function botToken(creds = ENV_CREDS, now = Date.now()) {
 }
 
 /**
- * Post a message into a Teams conversation. ref = { serviceUrl, conversationId, activityId? }:
- * a threaded reply when activityId is present, otherwise a new message in the conversation
- * (proactive, or channels that omit nested replies). creds default to env (single-tenant).
+ * Post a message into a Teams conversation. ref = { serviceUrl, conversationId, activityId?,
+ * from?, recipient?, locale? }: a threaded reply when activityId is present, otherwise a new
+ * message in the conversation (proactive, or channels that omit nested replies). creds
+ * default to env (single-tenant).
+ *
+ * A reply must be a COMPLETE Activity — the Connector does not infer from/recipient/
+ * conversation for a raw REST POST, and rejects (HTTP 400) one that omits them. The caller
+ * supplies the channel accounts from the inbound activity: outbound `from` = the bot,
+ * `recipient` = the user (see Bot Connector "Reply to Activity").
  */
-export async function sendActivity({ serviceUrl, conversationId, activityId }, { text }, creds = ENV_CREDS) {
+export async function sendActivity({ serviceUrl, conversationId, activityId, from, recipient, locale }, { text }, creds = ENV_CREDS) {
   const token = await botToken(creds);
   const base = String(serviceUrl || '').replace(/\/$/, '');
   const conv = encodeURIComponent(conversationId);
   const url = activityId
     ? `${base}/v3/conversations/${conv}/activities/${encodeURIComponent(activityId)}`
     : `${base}/v3/conversations/${conv}/activities`;
+  const activity = {
+    type: 'message',
+    ...(from ? { from } : {}),
+    ...(recipient ? { recipient } : {}),
+    ...(conversationId ? { conversation: { id: conversationId } } : {}),
+    ...(activityId ? { replyToId: activityId } : {}),
+    ...(locale ? { locale } : {}),
+    text,
+  };
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify({ type: 'message', text, ...(activityId ? { replyToId: activityId } : {}) }),
+    body: JSON.stringify(activity),
   });
-  if (!res.ok) console.warn('[teams] send failed:', res.status);
+  if (!res.ok) console.warn('[teams] send failed:', res.status, (await res.text().catch(() => '')).slice(0, 300));
   return res;
 }

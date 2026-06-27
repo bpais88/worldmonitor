@@ -12,7 +12,8 @@ const stripMentions = (text) => String(text || '')
 /**
  * Map an Activity to { tenantId, channelId, threadId, userId, text } plus the
  * delivery/context fields the adapter needs (serviceUrl, conversationType,
- * activityId). Every id is an opaque string — the core already treats them so.
+ * activityId, and the channel accounts for the reply). Every id is an opaque
+ * string — the core already treats them so.
  */
 export function normalizeTeamsActivity(activity = {}) {
   const conv = activity.conversation || {};
@@ -25,6 +26,13 @@ export function normalizeTeamsActivity(activity = {}) {
     serviceUrl: activity.serviceUrl || '',
     conversationType: conv.conversationType || 'personal', // 'personal' | 'channel' | 'groupChat'
     activityId: activity.id || '',
+    // Channel accounts for building a valid outbound reply: the Connector rejects (400) a
+    // reply that omits from/recipient. Outbound `from` = the bot (the inbound recipient),
+    // outbound `recipient` = the user (the inbound from). Also the seed of the proactive
+    // conversation reference persisted in a later PR.
+    botAccount: activity.recipient || undefined,
+    userAccount: activity.from || undefined,
+    locale: activity.locale || undefined,
   };
 }
 

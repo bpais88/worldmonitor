@@ -19,9 +19,10 @@ function withFetch(fn) {
   };
 }
 
-test('single-tenant: mints the Connector token from the app tenant authority (not botframework.com)', withFetch(async (calls) => {
+test('single-tenant token authority + complete reply activity (from=bot, recipient=user, conversation)', withFetch(async (calls) => {
   await sendActivity(
-    { serviceUrl: 'https://smba.trafficmanager.net/emea/', conversationId: 'c1', activityId: 'a1' },
+    { serviceUrl: 'https://smba.trafficmanager.net/emea/', conversationId: 'c1', activityId: 'a1',
+      from: { id: '28:bot', name: 'Marco' }, recipient: { id: '29:user', name: 'Ana' }, locale: 'it' },
     { text: 'hi' },
     { appId: 'app', appSecret: 'sec', tenantId: 'TENANT-GUID' },
   );
@@ -29,7 +30,16 @@ test('single-tenant: mints the Connector token from the app tenant authority (no
   assert.equal(tokenCall.url, 'https://login.microsoftonline.com/TENANT-GUID/oauth2/v2.0/token');
   const replyCall = calls.find((c) => c.url.includes('/v3/conversations/'));
   assert.equal(replyCall.url, 'https://smba.trafficmanager.net/emea/v3/conversations/c1/activities/a1');
-  assert.deepEqual(JSON.parse(replyCall.opts.body), { type: 'message', text: 'hi', replyToId: 'a1' });
+  // The body must be a complete Activity, else the Connector returns 400.
+  assert.deepEqual(JSON.parse(replyCall.opts.body), {
+    type: 'message',
+    from: { id: '28:bot', name: 'Marco' },
+    recipient: { id: '29:user', name: 'Ana' },
+    conversation: { id: 'c1' },
+    replyToId: 'a1',
+    locale: 'it',
+    text: 'hi',
+  });
 }));
 
 test('reply falls back to send-to-conversation when the inbound has no activity id', withFetch(async (calls) => {
