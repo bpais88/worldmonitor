@@ -1,22 +1,21 @@
-// Slack surface for Marco — the freight-ops AI coworker.
+// Slack adapter for Marco — the Slack half of "one brain, two thin adapters". It owns
+// the Slack request HANDLERS (mounted by the neutral host in ../server.mjs): the GET
+// distribution routes (OAuth install, served legal pages, health, landing) and the
+// signed POST routes (events + interactions). It does NOT own the HTTP listener.
 //
-// MULTI-WORKSPACE: customers "Add to Slack" via OAuth; each workspace's bot token
-// is stored (installations.mjs) and looked up per event by team_id, so one process
-// serves every workspace. On install, Marco DMs the installer to introduce himself
-// (the onboarding "magic moment").
+// MULTI-WORKSPACE: customers "Add to Slack" via OAuth; each workspace's bot token is
+// stored (installations.mjs) and looked up per event by team_id. On install, Marco DMs
+// the installer to introduce himself (the onboarding "magic moment").
 //
 // Per message: @mention/DM -> verify signature -> ack <3s -> run the agent with a
-// PER-USER, PER-WORKSPACE policy. Actions are never auto-executed: the agent
-// PROPOSES (dry-run) and we post Approve/Reject buttons; execution happens only
-// when a workspace-authorized user approves. Per-thread memory enables follow-ups.
-// Standalone ESM service — `node assistant/slack/server.mjs`.
+// PER-USER, PER-WORKSPACE policy. Actions are never auto-executed: the agent PROPOSES
+// (dry-run) and we post Approve/Reject buttons; execution happens only when a
+// workspace-authorized user approves. Per-thread memory enables follow-ups.
 //
 // Env (multi-tenant): SLACK_CLIENT_ID, SLACK_CLIENT_SECRET, SLACK_SIGNING_SECRET,
 //      SLACK_REDIRECT_URI (optional; else derived from request host), PUBLIC_URL.
 // Env (legacy single-workspace fallback, still honored if no install record):
 //      SLACK_BOT_TOKEN, SLACK_BOT_USER_ID, SLACK_ACTION_USERS.
-// Env (shared): ANTHROPIC_API_KEY, RELAY_URL, RELAY_SHARED_SECRET, PORT (3010).
-import http from 'node:http';
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { actionTools } from '../tools/actions.mjs';
@@ -26,8 +25,7 @@ import { verifySlackSignature } from './verify.mjs';
 import { policyForUser, parseActionUsers } from './permissions.mjs';
 import { threadKey, getHistory, appendTurn } from './memory.mjs';
 import { putPending, peekPending, takePending } from './pending.mjs';
-import { relayGet } from '../relay.mjs';
-import { listWatches, evaluateWatches, cancelWatchesForTeam } from '../watches.mjs';
+import { cancelWatchesForTeam } from '../watches.mjs';
 import { authorizeUrl, exchangeCode, newState, consumeState } from './oauth.mjs';
 import {
   getInstallation, saveInstallation, getConfig, setConfig, addActionUser, listInstallations, removeInstallation,
@@ -37,13 +35,8 @@ import { MARCO_PERSONA, onboardingText } from './onboarding.mjs';
 import { recordUsage } from '../usage.mjs';
 import { privacyHtml, supportHtml } from './legal.mjs';
 import { send, update, dm } from '../send.mjs';
-import { handleTeamsRequest } from '../teams/router.mjs';
 
-const PORT = process.env.PORT || 3010;
 const SIGNING_SECRET = process.env.SLACK_SIGNING_SECRET || '';
-// Teams (Bot Framework) shares this same process; its endpoint is auth'd by JWT, not
-// Slack's HMAC, so it's routed before the Slack signature gate.
-const TEAMS_MESSAGING_PATH = process.env.TEAMS_MESSAGING_PATH || '/api/messages';
 // Multi-tenant OAuth credentials.
 const CLIENT_ID = process.env.SLACK_CLIENT_ID || '';
 const CLIENT_SECRET = process.env.SLACK_CLIENT_SECRET || '';
@@ -311,15 +304,6 @@ function landingPage(res) {
     '<img alt="Add to Slack" height="48" width="172" src="https://platform.slack-edge.com/img/add_to_slack.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"></a></p>');
 }
 
-// ---- HTTP server ----------------------------------------------------------
-function readBody(req) {
-  return new Promise((resolve) => {
-    let data = '';
-    req.on('data', (c) => { data += c; if (data.length > 2e6) req.destroy(); });
-    req.on('end', () => resolve(data));
-  });
-}
-
 function verified(req, body) {
   return verifySlackSignature({
     signingSecret: SIGNING_SECRET,
@@ -329,33 +313,30 @@ function verified(req, body) {
   });
 }
 
-const server = http.createServer(async (req, res) => {
-  const u = new globalThis.URL(req.url, 'http://localhost');
+// ---- Mounted request handlers (the neutral host in ../server.mjs calls these) ----
+
+// GET routes: health, OAuth install/callback, served legal pages, landing — all Slack
+// /distribution concerns. The host delegates every GET here.
+export async function handleSlackGet(req, res, u) {
   const path = u.pathname;
-
-  // --- Unsigned GET routes (browser redirects + health/landing) ---
-  if (req.method === 'GET') {
-    if (path === '/health') {
-      res.writeHead(200, { 'Content-Type': 'application/json' });
-      const teams = await listInstallations().catch(() => []);
-      return res.end(JSON.stringify({ ok: true, multiTenant: !!CLIENT_ID, installs: teams.length }));
-    }
-    if (path === '/slack/install') return handleInstall(req, res);
-    if (path === '/slack/oauth/callback') return handleOAuthCallback(req, res, Object.fromEntries(u.searchParams));
-    // Public legal pages required for Slack distribution.
-    if (path === '/privacy') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(privacyHtml()); }
-    if (path === '/support') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(supportHtml()); }
-    if (path === '/') return landingPage(res);
-    res.writeHead(404); return res.end();
+  if (path === '/health') {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    const teams = await listInstallations().catch(() => []);
+    return res.end(JSON.stringify({ ok: true, multiTenant: !!CLIENT_ID, installs: teams.length }));
   }
-  if (req.method !== 'POST') { res.writeHead(404); return res.end(); }
+  if (path === '/slack/install') return handleInstall(req, res);
+  if (path === '/slack/oauth/callback') return handleOAuthCallback(req, res, Object.fromEntries(u.searchParams));
+  // Public legal pages required for Slack distribution.
+  if (path === '/privacy') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(privacyHtml()); }
+  if (path === '/support') { res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' }); return res.end(supportHtml()); }
+  if (path === '/') return landingPage(res);
+  res.writeHead(404); return res.end();
+}
 
-  const body = await readBody(req);
-
-  // Teams (Bot Framework) — its own JWT auth lives inside the handler, not Slack HMAC.
-  if (path === TEAMS_MESSAGING_PATH) return handleTeamsRequest(req, res, body);
-
-  // --- Signed Slack POST routes (events + interactions) ---
+// Signed POST routes (events + interactions). The host has already read the body and
+// dispatched the Teams path, so anything here must carry a valid Slack signature.
+export async function handleSlackPost(req, res, body, u) {
+  const path = u.pathname;
   if (!verified(req, body)) { res.writeHead(401); return res.end('bad signature'); }
 
   if (path.startsWith('/slack/events')) {
@@ -380,40 +361,12 @@ const server = http.createServer(async (req, res) => {
   }
 
   res.writeHead(404); res.end();
-});
-
-// ---- Proactive watch ticker ----------------------------------------------
-// Every tick: evaluate active watches against live ports/vessels and post to each
-// watch's channel ONLY on a state change. Each watch posts with its own workspace's
-// token (resolved by watch.team). Skips entirely when there are no watches.
-const WATCH_TICK_MS = Number(process.env.WATCH_TICK_MS) || 5 * 60_000;
-async function tickWatches() {
-  try {
-    const watches = await listWatches();
-    if (!watches.length) return;
-    const [portsRes, vesselsRes] = await Promise.all([
-      relayGet('/ais/ports'),
-      relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000'),
-    ]);
-    const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
-    for (const a of alerts) {
-      const inst = await getInstallation(a.watch.team);
-      const install = inst || legacyInstall();
-      if (!deliverFor(install)) continue;
-      await send(install, { channelId: a.watch.channel, threadId: a.watch.thread, text: a.message });
-    }
-    if (alerts.length) console.log(`[slack] watch tick: ${alerts.length} alert(s) posted`);
-  } catch (e) {
-    console.warn('[slack] watch tick error:', e.message);
-  }
 }
 
-server.listen(PORT, () => {
+// Startup banner — the host calls this once the listener is up.
+export function slackBoot() {
   const mode = CLIENT_ID ? 'multi-workspace (OAuth)' : 'single-workspace (env token)';
-  console.log(`[slack] Marco on :${PORT} · ${mode}` +
+  console.log(`[slack] ${mode}` +
     `${SIGNING_SECRET ? '' : ' · WARN no SLACK_SIGNING_SECRET'}` +
     `${CLIENT_ID || BOT_TOKEN ? '' : ' · WARN no token/client configured'}`);
-  setInterval(() => { void tickWatches(); }, WATCH_TICK_MS).unref?.();
-  console.log(`[slack] watch ticker every ${WATCH_TICK_MS / 1000}s`);
-  if (process.env.MS_APP_ID) console.log(`[teams] Bot Framework endpoint on ${TEAMS_MESSAGING_PATH}`);
-});
+}

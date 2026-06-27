@@ -37,7 +37,7 @@ Every tool is `read` (auto-runs) or `action` (gated). Policy escalation:
 
 ## Slack surface + per-user approval
 
-`node assistant/slack/server.mjs` runs a service that: verifies Slack's request
+`node assistant/server.mjs` runs the host (Slack + Teams adapters on one process) that: verifies Slack's request
 signature, @mention/DM → runs the agent → replies in-thread (with per-thread
 memory for follow-ups). **Actions require human approval:** the agent proposes an
 action, the bot posts *Approve / Reject* buttons, and the tool runs only when a
