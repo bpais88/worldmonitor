@@ -12,9 +12,12 @@ import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { watchTools } from '../tools/watches.mjs';
+import { actionTools } from '../tools/actions.mjs';
 import { cancelWatchesByConversation } from '../watches.mjs';
+import { putPending, peekPending, takePending } from '../slack/pending.mjs';
+import { approvalCard, isCardSubmit } from './cards.mjs';
 import { recordUsage } from '../usage.mjs';
-import { send } from '../send.mjs';
+import { send, update } from '../send.mjs';
 import { recordTeamsConversation, markTeamsOnboarded, removeTeamsInstall } from './installations.mjs';
 import { shouldGreet, teamsOnboardingText, botWasRemoved } from './onboarding.mjs';
 // TODO: MARCO_PERSONA + thread memory are platform-neutral but currently live under slack/;
@@ -24,10 +27,15 @@ import { threadKey, getHistory, appendTurn } from '../slack/memory.mjs';
 
 const MS_APP_ID = process.env.MS_APP_ID || '';
 
-// Read-class tools: freight/weather Q&A + proactive watches (watch creation is read-class —
-// no approval gate). Side-effecting ACTION tools (post report) still need the Adaptive-card
-// approval flow (PR④).
-const TEAMS_TOOLS = [...freightTools, ...weatherTools, ...watchTools];
+// Read-class Q&A + watches PLUS side-effecting ACTION tools, gated by the propose-then-approve
+// Adaptive-card flow (PR④). Read tools execute; action tools are proposed (dry-run) and only
+// run after an Approve click.
+const TEAMS_TOOLS = [...freightTools, ...weatherTools, ...watchTools, ...actionTools];
+const TEAMS_TOOL_BY_NAME = new Map(TEAMS_TOOLS.map((t) => [t.name, t]));
+
+// Like Slack: actions are ALLOWED but never auto-executed — execute:false forces every action
+// tool into a dry-run proposal that the human resolves via the card. Read tools still execute.
+const TEAMS_POLICY = { ...DEFAULT_POLICY, allowActions: true, execute: false };
 
 // Marco's voice + the analyst base, with Teams markdown rules (Teams renders standard
 // Markdown — no Slack mrkdwn quirks).
@@ -54,6 +62,12 @@ async function dispatch(activity) {
     await onConversationUpdate(activity);
     return;
   }
+  // An Adaptive-card Approve/Reject click arrives as a message with `value` and no text —
+  // route it to the approval handler, not the agent.
+  if (isCardSubmit(activity)) {
+    await handleApproval(activity);
+    return;
+  }
   if (activity.type !== 'message' || !shouldRespond(activity)) return;
 
   const n = normalizeTeamsActivity(activity);
@@ -67,27 +81,80 @@ async function dispatch(activity) {
   const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
 
   try {
-    const { text, usage, calls } = await runAgent({
+    const { text, usage, calls, audit } = await runAgent({
       userText: n.text,
       history: await getHistory(key),
       tools: TEAMS_TOOLS,
       system: TEAMS_SYSTEM,
-      policy: DEFAULT_POLICY, // read-class tools only (Q&A + watches); no side-effecting actions yet
+      policy: TEAMS_POLICY, // read tools execute; action tools become Approve/Reject proposals
       // platform + deliver let a watch created here carry its own delivery handle (Teams has
       // no per-tenant token), so the proactive ticker can alert this conversation later.
       context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId, platform: 'teams', deliver },
     });
     const reply = text || '(no answer)';
     const day = await recordUsage(n.tenantId, usage);
-    console.log(`[teams]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${reply.length} chars` +
+    const dryruns = audit.filter((x) => x.mode === 'dryrun');
+    console.log(`[teams]   → tools: ${calls.join(', ') || 'none'}${dryruns.length ? ` · ${dryruns.length} proposed` : ''} · ${usage.input}+${usage.output} tok · replied ${reply.length} chars` +
       (day ? ` · today ${day.messages} msg / ${day.input + day.output} tok` : ''));
     // Reply to the user's message (replyToId = the inbound activity id).
     await send(install, { channelId: n.channelId, threadId: n.activityId, text: reply });
     await appendTurn(key, n.text, reply);
+    // Post an Approve/Reject Adaptive Card for each proposed (dry-run) action.
+    for (const a of dryruns) {
+      const id = await putPending({ tool: a.tool, input: a.input, requestedBy: n.userId, team: n.tenantId, channel: n.channelId });
+      await send(install, { channelId: n.channelId, threadId: n.activityId, card: approvalCard(id, a.tool, a.input) });
+    }
   } catch (e) {
     console.error('[teams] agent error:', e.message);
     // Mirror Slack: tell the user instead of staying silent (best-effort).
     await send(install, { channelId: n.channelId, threadId: n.activityId, text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
+  }
+}
+
+// An Adaptive-card Approve/Reject click (object-data Action.Submit). Re-authorize the clicker,
+// run or drop the proposed action, and PUT the card to a terminal state in place. Auth =
+// requester-only (the proposer's aadObjectId must match the clicker), tenant-scoped — a
+// designated-approver allowlist (Slack parity) needs a Teams config store (future).
+async function handleApproval(activity) {
+  const { actionId, decision } = activity.value || {};
+  const clicker = activity.from?.aadObjectId || '';
+  const tenantId = activity.channelData?.tenant?.id || activity.conversation?.tenantId || '';
+  const conversationId = activity.conversation?.id || '';
+  const install = { platform: 'teams', deliver: { serviceUrl: activity.serviceUrl } };
+  // Resolve the card in place; activity.replyToId is the card message's id (the PUT target).
+  const resolve = (text) => update(install, { channelId: conversationId, messageId: activity.replyToId, text })
+    .catch((e) => console.warn('[teams] card update failed:', e.message));
+
+  const pend = await peekPending(actionId);
+  if (!pend) return resolve('⌛ This proposed action expired.');
+
+  if (decision === 'reject') {
+    await takePending(actionId);
+    console.log(`[teams] action ${pend.tool} rejected by ${clicker}`);
+    return resolve(`❌ Rejected — **${pend.tool}** not run.`);
+  }
+  // Approve — only the requester may run their own proposed action, within its tenant. On an
+  // unauthorized click, LEAVE the card live (no resolve/take) so the legitimate requester can
+  // still approve — just log it (Teams has no per-click ephemeral reply to scold the clicker).
+  if (pend.requestedBy && clicker !== pend.requestedBy) {
+    console.log(`[teams] unauthorized approve on ${pend.tool} by ${clicker} (requester ${pend.requestedBy}) — card left live`);
+    return;
+  }
+  if (pend.team && tenantId && pend.team !== tenantId) {
+    console.log(`[teams] cross-tenant approve refused on ${pend.tool} (${tenantId} vs ${pend.team}) — card left live`);
+    return;
+  }
+
+  await takePending(actionId);
+  const tool = TEAMS_TOOL_BY_NAME.get(pend.tool);
+  if (!tool) return resolve(`⚠️ Unknown tool **${pend.tool}**.`);
+  try {
+    const result = await tool.handler(pend.input || {}, { channel: conversationId, team: tenantId, user: clicker });
+    const summary = result && result.error ? `error: ${result.error}` : JSON.stringify(result).slice(0, 200);
+    console.log(`[teams] action ${pend.tool} approved + run by ${clicker}`);
+    return resolve(`✅ Approved — **${pend.tool}** done.\n${summary}`);
+  } catch (e) {
+    return resolve(`⚠️ **${pend.tool}** failed: ${e.message}`);
   }
 }
 

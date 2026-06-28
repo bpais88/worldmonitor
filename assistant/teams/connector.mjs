@@ -44,13 +44,27 @@ async function botToken(creds = ENV_CREDS, now = Date.now()) {
  * supplies the channel accounts from the inbound activity: outbound `from` = the bot,
  * `recipient` = the user (see Bot Connector "Reply to Activity").
  */
-export async function sendActivity({ serviceUrl, conversationId, activityId, from, recipient, locale }, { text }, creds = ENV_CREDS) {
+// Mint the bot token and POST/PUT a JSON activity to the Connector, logging the response body
+// on a non-2xx. Shared by the send/reply path and the in-place card-update (PUT) path.
+async function request(method, url, body, creds) {
   const token = await botToken(creds);
+  const res = await fetch(url, {
+    method,
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) console.warn(`[teams] ${method} failed:`, res.status, (await res.text().catch(() => '')).slice(0, 300));
+  return res;
+}
+
+export async function sendActivity({ serviceUrl, conversationId, activityId, from, recipient, locale }, { text, attachments } = {}, creds = ENV_CREDS) {
   const base = String(serviceUrl || '').replace(/\/$/, '');
   const conv = encodeURIComponent(conversationId);
   const url = activityId
     ? `${base}/v3/conversations/${conv}/activities/${encodeURIComponent(activityId)}`
     : `${base}/v3/conversations/${conv}/activities`;
+  // Card-only sends (attachments, no text) avoid Teams "message splitting" so the POST
+  // reliably returns the card's activity id (and the click echoes it as replyToId anyway).
   const activity = {
     type: 'message',
     ...(from ? { from } : {}),
@@ -58,13 +72,20 @@ export async function sendActivity({ serviceUrl, conversationId, activityId, fro
     ...(conversationId ? { conversation: { id: conversationId } } : {}),
     ...(activityId ? { replyToId: activityId } : {}),
     ...(locale ? { locale } : {}),
-    text,
+    ...(text != null ? { text } : {}),
+    ...(attachments ? { attachments } : {}),
   };
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
-    body: JSON.stringify(activity),
-  });
-  if (!res.ok) console.warn('[teams] send failed:', res.status, (await res.text().catch(() => '')).slice(0, 300));
-  return res;
+  return request('POST', url, activity, creds);
+}
+
+/**
+ * Replace a message the bot previously sent — used to resolve an Adaptive Card in place after
+ * an Approve/Reject. PUT to the activity; the path identifies the target, so (unlike a send)
+ * from/recipient/conversation are NOT required in the body. activityId = the card message's id
+ * (the Action.Submit click carries it as `replyToId`).
+ */
+export async function updateActivity({ serviceUrl, conversationId, activityId }, { text, attachments } = {}, creds = ENV_CREDS) {
+  const base = String(serviceUrl || '').replace(/\/$/, '');
+  const url = `${base}/v3/conversations/${encodeURIComponent(conversationId)}/activities/${encodeURIComponent(activityId)}`;
+  return request('PUT', url, { type: 'message', ...(text != null ? { text } : {}), ...(attachments ? { attachments } : {}) }, creds);
 }

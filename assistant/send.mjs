@@ -10,7 +10,10 @@
 // before generalization that only carry `botToken`.
 
 import { deliverFor } from './slack/installations.mjs';
-import { sendActivity } from './teams/connector.mjs';
+import { sendActivity, updateActivity } from './teams/connector.mjs';
+
+// Wrap an Adaptive Card object as a Bot Framework attachment (the Teams card transport).
+const teamsCard = (card) => (card ? [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }] : undefined);
 
 async function slackApi(method, payload, botToken) {
   const res = await fetch(`https://slack.com/api/${method}`, {
@@ -23,20 +26,24 @@ async function slackApi(method, payload, botToken) {
   return j;
 }
 
-/** Post a message (optionally a thread reply, optionally with platform blocks/cards). */
-export async function send(install, { channelId, threadId, text, blocks }) {
+/** Post a message (optionally a thread reply; `blocks` = Slack Block Kit, `card` = Teams Adaptive Card). */
+export async function send(install, { channelId, threadId, text, blocks, card }) {
   if (install?.platform === 'teams') {
     // Teams: `deliver` is the conversation reference (serviceUrl + from/recipient accounts +
     // locale). channelId is the conversation id; threadId is the inbound activity to reply
     // to (replyToId). The connector assembles the complete Bot Framework reply activity.
-    return sendActivity({ ...install.deliver, conversationId: channelId, activityId: threadId }, { text });
+    return sendActivity({ ...install.deliver, conversationId: channelId, activityId: threadId }, { text, attachments: teamsCard(card) });
   }
   return slackApi('chat.postMessage', { channel: channelId, thread_ts: threadId, text, blocks, unfurl_links: false }, deliverFor(install));
 }
 
 /** Edit a previously-sent message in place (used to resolve approval cards). */
-export async function update(install, { channelId, messageId, text }) {
-  if (install?.platform === 'teams') throw new Error('update: teams delivery not wired yet');
+export async function update(install, { channelId, messageId, text, card }) {
+  if (install?.platform === 'teams') {
+    // Teams: PUT the activity in place. channelId = conversation id, messageId = the card's
+    // activity id (the Action.Submit click carries it as replyToId).
+    return updateActivity({ serviceUrl: install.deliver?.serviceUrl, conversationId: channelId, activityId: messageId }, { text, attachments: teamsCard(card) });
+  }
   return slackApi('chat.update', { channel: channelId, ts: messageId, text, blocks: [{ type: 'section', text: { type: 'mrkdwn', text } }] }, deliverFor(install));
 }
 
