@@ -37,6 +37,15 @@ export function normalizeTeamsActivity(activity = {}) {
 }
 
 /**
+ * The send.mjs Teams delivery handle for a normalized activity (outbound `from` = the bot,
+ * `recipient` = the user). Built once here so the reply path and the proactive/onboarding
+ * path that persists it can never disagree on the conversation reference.
+ */
+export const toTeamsDeliver = (n) => ({
+  serviceUrl: n.serviceUrl, from: n.botAccount, recipient: n.userAccount, locale: n.locale,
+});
+
+/**
  * Whether the bot should answer this message. In personal (1:1) chat it always
  * responds; in channels / group chats only when @mentioned — verified against the
  * bot's own id in the entities list, NOT by parsing text (which is forgeable).
