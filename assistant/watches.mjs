@@ -73,6 +73,24 @@ export async function cancelWatchesByTarget({ team, target, type } = {}) {
 }
 
 /**
+ * Cancel watches bound to a single Teams conversation — called when the bot is removed from
+ * that chat/channel (the Teams analog of Slack's uninstall cleanup), so the ticker stops
+ * evaluating + attempting alerts into a conversation it can no longer post to. Matches the
+ * conversation exactly (1:1, where channel === conversationId) or by its channel root before
+ * the `;messageid=` suffix (channel threads). Scoped to `team` (tenant). Returns the count.
+ */
+export async function cancelWatchesByConversation({ team, conversationId } = {}) {
+  if (!conversationId) return 0;
+  const ws = await listWatches({ team });
+  let n = 0;
+  for (const w of ws) {
+    const ch = String(w.channel || '');
+    if (ch === conversationId || ch.startsWith(`${conversationId};`)) { await cancelWatch(w.id, { team }); n++; }
+  }
+  return n;
+}
+
+/**
  * Cancel every watch belonging to a workspace — called on uninstall so we honor the
  * privacy policy's "watches removed when you uninstall Marco". Returns the count removed.
  */

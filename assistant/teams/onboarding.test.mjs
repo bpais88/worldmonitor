@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { botWasAdded, shouldGreet, teamsOnboardingText } from './onboarding.mjs';
+import { botWasAdded, botWasRemoved, shouldGreet, teamsOnboardingText } from './onboarding.mjs';
 
 test('botWasAdded: true only when the bot id is in membersAdded (verified, not text-parsed)', () => {
   const base = { recipient: { id: '28:bot' } };
@@ -8,6 +8,13 @@ test('botWasAdded: true only when the bot id is in membersAdded (verified, not t
   assert.equal(botWasAdded({ ...base, membersAdded: [{ id: '29:someone' }] }), false);
   assert.equal(botWasAdded({ ...base }), false);               // no membersAdded
   assert.equal(botWasAdded({ membersAdded: [{ id: '28:bot' }] }), false); // no bot id
+});
+
+test('botWasRemoved: true only when the bot id is in membersRemoved', () => {
+  const base = { recipient: { id: '28:bot' } };
+  assert.equal(botWasRemoved({ ...base, membersRemoved: [{ id: '28:bot' }] }), true);
+  assert.equal(botWasRemoved({ ...base, membersRemoved: [{ id: '29:user' }] }), false); // a user left, not the bot
+  assert.equal(botWasRemoved({ ...base, membersAdded: [{ id: '28:bot' }] }), false);     // added, not removed
 });
 
 test('shouldGreet: only when the bot is added to a personal (1:1) chat', () => {

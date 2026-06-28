@@ -12,10 +12,11 @@ import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { watchTools } from '../tools/watches.mjs';
+import { cancelWatchesByConversation } from '../watches.mjs';
 import { recordUsage } from '../usage.mjs';
 import { send } from '../send.mjs';
-import { recordTeamsConversation, markTeamsOnboarded } from './installations.mjs';
-import { shouldGreet, teamsOnboardingText } from './onboarding.mjs';
+import { recordTeamsConversation, markTeamsOnboarded, removeTeamsInstall } from './installations.mjs';
+import { shouldGreet, teamsOnboardingText, botWasRemoved } from './onboarding.mjs';
 // TODO: MARCO_PERSONA + thread memory are platform-neutral but currently live under slack/;
 // Teams is now their 2nd consumer, so they should move to neutral modules in a follow-up.
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
@@ -98,6 +99,14 @@ async function onConversationUpdate(activity) {
   const n = normalizeTeamsActivity(activity);
   if (!n.channelId) return;
   try {
+    // Bot removed from this conversation → Slack-parity cleanup: drop the install record and
+    // cancel any watches bound here, so the ticker stops evaluating + alerting a dead chat.
+    if (botWasRemoved(activity)) {
+      await removeTeamsInstall(n.channelId);
+      const cancelled = await cancelWatchesByConversation({ team: n.tenantId, conversationId: n.channelId });
+      console.log(`[teams] removed ${n.channelId} (install cleared, ${cancelled} watch(es) cancelled)`);
+      return;
+    }
     // Capture/refresh the conversation reference through the SAME extraction the reply path
     // uses (normalize + toTeamsDeliver), so the persisted, proactive-only reference can't drift.
     const rec = await recordTeamsConversation({

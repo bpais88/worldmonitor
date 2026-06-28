@@ -13,6 +13,16 @@ export function botWasAdded(activity = {}) {
 }
 
 /**
+ * True when THIS conversationUpdate is the bot itself being REMOVED from a chat/team —
+ * the signal to clean up that conversation's install record + watches (Teams' analog of
+ * Slack's app_uninstalled). Verified against the bot's own id in membersRemoved.
+ */
+export function botWasRemoved(activity = {}) {
+  const botId = activity.recipient?.id;
+  return !!botId && (activity.membersRemoved || []).some((m) => m && m.id === botId);
+}
+
+/**
  * Whether THIS conversationUpdate should trigger the first-run welcome: the bot was just
  * added to a 1:1 (personal) chat. Channels / group chats are captured (for proactive
  * delivery) but not auto-greeted, to avoid posting into a shared space uninvited.

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesForTeam, evaluateWatches, WATCH_DWELL_MS } from './watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesByConversation, cancelWatchesForTeam, evaluateWatches, WATCH_DWELL_MS } from './watches.mjs';
 
 const genoa = (congestion) => [{ name: 'Genoa', portId: 'genoa', congestion, atPort: 9, inbound: 3 }];
 
@@ -150,4 +150,19 @@ test('createWatch defaults platform to slack; carries platform + deliver for Tea
   assert.deepEqual(teamsW.deliver, deliver);
   await cancelWatch(slackW.id);
   await cancelWatch(teamsW.id);
+});
+
+test('cancelWatchesByConversation cancels a removed Teams conversation’s watches (exact 1:1 + channel prefix), scoped', async () => {
+  const T = 'CONV_T';
+  const dm = await createWatch({ type: 'port_congestion', target: 'Genoa', team: T, platform: 'teams', channel: 'a:conv1' });
+  const ch = await createWatch({ type: 'port_congestion', target: 'Bari', team: T, platform: 'teams', channel: '19:abc@thread.tacv2;messageid=42' });
+  const other = await createWatch({ type: 'port_congestion', target: 'Trieste', team: T, platform: 'teams', channel: 'a:conv2' });
+  // Bot removed from the 1:1 (channel === conversationId) -> exact match.
+  assert.equal(await cancelWatchesByConversation({ team: T, conversationId: 'a:conv1' }), 1);
+  // Bot removed from the channel (root id, no ;messageid=) -> prefix-matches the thread watch.
+  assert.equal(await cancelWatchesByConversation({ team: T, conversationId: '19:abc@thread.tacv2' }), 1);
+  const remaining = (await listWatches({ team: T })).map((w) => w.id);
+  assert.ok(!remaining.includes(dm.id) && !remaining.includes(ch.id), 'removed-conversation watches gone');
+  assert.ok(remaining.includes(other.id), 'a different conversation’s watch survives');
+  await cancelWatch(other.id);
 });
