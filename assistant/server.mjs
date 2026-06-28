@@ -66,10 +66,19 @@ async function tickWatches() {
     ]);
     const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
     for (const a of alerts) {
-      const inst = await getInstallation(a.watch.team);
-      const install = inst || legacyInstall();
-      if (!deliverFor(install)) continue;
-      await send(install, { channelId: a.watch.channel, threadId: a.watch.thread, text: a.message });
+      let install, threadId;
+      if (a.watch.platform === 'teams') {
+        // Teams carries its conversation reference on the watch (no per-tenant token to resolve).
+        // Post a fresh message — no replyToId, since the inbound activity is long gone.
+        if (!a.watch.deliver?.serviceUrl) continue;
+        install = { platform: 'teams', deliver: a.watch.deliver };
+        threadId = undefined;
+      } else {
+        install = (await getInstallation(a.watch.team)) || legacyInstall();
+        if (!deliverFor(install)) continue;
+        threadId = a.watch.thread;
+      }
+      await send(install, { channelId: a.watch.channel, threadId, text: a.message });
     }
     if (alerts.length) console.log(`[host] watch tick: ${alerts.length} alert(s) posted`);
   } catch (e) {

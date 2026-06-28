@@ -11,6 +11,7 @@ import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { watchTools } from '../tools/watches.mjs';
 import { recordUsage } from '../usage.mjs';
 import { send } from '../send.mjs';
 import { recordTeamsConversation, markTeamsOnboarded } from './installations.mjs';
@@ -22,9 +23,10 @@ import { threadKey, getHistory, appendTurn } from '../slack/memory.mjs';
 
 const MS_APP_ID = process.env.MS_APP_ID || '';
 
-// Read-class tools only for now (Q&A). Action tools (post report) need the Adaptive-card
-// approval flow (next PR); watches need a Teams install record for proactive delivery.
-const TEAMS_TOOLS = [...freightTools, ...weatherTools];
+// Read-class tools: freight/weather Q&A + proactive watches (watch creation is read-class —
+// no approval gate). Side-effecting ACTION tools (post report) still need the Adaptive-card
+// approval flow (PR④).
+const TEAMS_TOOLS = [...freightTools, ...weatherTools, ...watchTools];
 
 // Marco's voice + the analyst base, with Teams markdown rules (Teams renders standard
 // Markdown — no Slack mrkdwn quirks).
@@ -57,8 +59,10 @@ async function dispatch(activity) {
   if (!n.text) return;
   console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
 
-  // The conversation reference for this turn's reply (the same handle the proactive path persists).
-  const install = { platform: 'teams', deliver: toTeamsDeliver(n) };
+  // The conversation reference for this turn — used for the reply AND stamped on any watch
+  // created this turn (so the proactive ticker can alert this conversation later). Built once.
+  const deliver = toTeamsDeliver(n);
+  const install = { platform: 'teams', deliver };
   const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
 
   try {
@@ -67,8 +71,10 @@ async function dispatch(activity) {
       history: await getHistory(key),
       tools: TEAMS_TOOLS,
       system: TEAMS_SYSTEM,
-      policy: DEFAULT_POLICY, // read-only on Teams for now (no action tools wired)
-      context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId },
+      policy: DEFAULT_POLICY, // read-class tools only (Q&A + watches); no side-effecting actions yet
+      // platform + deliver let a watch created here carry its own delivery handle (Teams has
+      // no per-tenant token), so the proactive ticker can alert this conversation later.
+      context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId, platform: 'teams', deliver },
     });
     const reply = text || '(no answer)';
     const day = await recordUsage(n.tenantId, usage);

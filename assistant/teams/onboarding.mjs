@@ -28,9 +28,6 @@ export function teamsOnboardingText(conversationType = 'personal') {
   const cta = conversationType === 'personal'
     ? 'Just message me here — no setup.'
     : '**@mention me** in any channel and I’ll jump in.';
-  // Note: read-only Q&A only for now. The "watch X and ping me when it changes" CTA is
-  // intentionally omitted until Teams watch creation + proactive alerts land (PR⑤b) — don't
-  // advertise a flow the Teams adapter can't fulfil yet.
   return [
     "👋 Ciao, I’m **Marco** — your freight-ops coworker. I track every commercial cargo ship and RoPax ferry moving through Italian ports, live.",
     '',
@@ -38,9 +35,9 @@ export function teamsOnboardingText(conversationType = 'personal') {
     '',
     '**Try me:**',
     '- *Which ports are congested right now?*',
-    '- *Any delays at Genoa?*',
+    '- *Watch Genoa and tell me when it clears*',
     '- *Where’s the MOBY FANTASY?*',
     '',
-    'Ask me about any Italian port or operator — Genoa, Livorno, Civitavecchia… MOBY, Tirrenia, GNV…',
+    '**Which ports or operators should I watch for your team?** (Genoa, Livorno, Civitavecchia… MOBY, Tirrenia, GNV…)',
   ].join('\n');
 }

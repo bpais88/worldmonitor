@@ -138,3 +138,16 @@ test('cancelWatchesForTeam removes only that workspace’s watches (uninstall)',
   assert.ok(remaining.some((w) => w.id === b1.id), 'T_B watch kept');
   await cancelWatch(b1.id);
 });
+
+test('createWatch defaults platform to slack; carries platform + deliver for Teams', async () => {
+  const slackW = await createWatch({ type: 'port_congestion', target: 'Genoa', channel: 'C', thread: 'T', team: 'WS' });
+  assert.equal(slackW.platform, 'slack');     // default keeps existing Slack watches unchanged
+  assert.equal(slackW.deliver, undefined);
+  // A Teams watch carries its conversation reference so the ticker can deliver without a token lookup.
+  const deliver = { serviceUrl: 'https://smba/', from: { id: '28:bot' }, recipient: { id: '29:user' } };
+  const teamsW = await createWatch({ type: 'port_congestion', target: 'Trieste', channel: 'a:conv', team: 'tnt', platform: 'teams', deliver });
+  assert.equal(teamsW.platform, 'teams');
+  assert.deepEqual(teamsW.deliver, deliver);
+  await cancelWatch(slackW.id);
+  await cancelWatch(teamsW.id);
+});

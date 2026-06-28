@@ -16,9 +16,12 @@ let counter = 0;
 // resolves back to the committed state before it ever matures into a notification.
 export const WATCH_DWELL_MS = Number(process.env.WATCH_DWELL_MS) || 30 * 60_000;
 
-export async function createWatch({ type, target, channel, thread, createdBy, team, condition = 'any' }, now = Date.now()) {
+export async function createWatch({ type, target, channel, thread, createdBy, team, condition = 'any', platform = 'slack', deliver }, now = Date.now()) {
   const id = `w_${now.toString(36)}_${(counter++).toString(36)}`;
-  const watch = { id, type, target, channel, thread, createdBy, team, condition, lastState: null, pendingState: null, pendingSince: null, createdTs: now };
+  // `platform` + `deliver` let the ticker deliver an alert without a per-platform install
+  // lookup: Slack resolves the workspace token by `team`; Teams has no per-tenant token, so
+  // it carries its conversation reference (serviceUrl + accounts) here, captured at creation.
+  const watch = { id, type, target, channel, thread, createdBy, team, condition, platform, deliver, lastState: null, pendingState: null, pendingSince: null, createdTs: now };
   await kvSet(key(id), watch);
   await setAdd(INDEX, id);
   return watch;
