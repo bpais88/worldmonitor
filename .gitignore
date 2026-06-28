@@ -55,3 +55,6 @@ reports/
 .slack-signing-secret
 .upstash-url
 .upstash-token
+
+# Teams app package — built artifact (zip of manifest.json + icons; see assistant/teams/TEAMS_SETUP.md)
+assistant/teams/marco-teams.zip
