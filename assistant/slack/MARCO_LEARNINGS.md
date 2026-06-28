@@ -14,7 +14,7 @@ The system decomposes into three concentric layers:
 - **Slack adapter** — `assistant/slack/server.mjs` (the HTTP backbone), `verify.mjs`, `oauth.mjs`, `installations.mjs`, `pending.mjs`, `permissions.mjs`, `memory.mjs`, `onboarding.mjs`, `legal.mjs`, and `marco-app-manifest.json`.
 - **Domain (worldmonitor) data plane** — `relay.mjs` (authenticated GET client to the AIS/ports backend), `tools/freight.mjs`, `tools/weather.mjs`, `tools/watches.mjs`, `tools/actions.mjs`, plus the shared freshness module (`scripts/freshness.cjs` / `src/services/logistics/freshness.ts`).
 
-Key architectural principle (`MULTI_PLATFORM.md`): **one brain, thin per-platform adapters.** Only message *receive → run → send* is platform-specific; everything else is keyed by an opaque tenant id so a second platform (Teams) is roughly a day of adapter work rather than a rewrite.
+Key architectural principle (`MULTI_PLATFORM.md`): **one brain, thin per-platform adapters.** Only message *receive → run → send* is platform-specific; everything else is keyed by an opaque tenant id so a second platform (Teams) is roughly a day of adapter work rather than a rewrite. **Now realized — Marco runs on Microsoft Teams in production from the same core; see §14.**
 
 The guardrail has **two consumers** that prove this decoupling: the Slack adapter (which force-proposes every action) and the CLI (`cli.mjs`), which exposes a graduated `blocked → --allow-actions (dry-run) → --execute` flag escalation over the *same* pure policy. The policy logic never knows which surface it's serving.
 
@@ -412,7 +412,7 @@ onboarding.mjs  +  legal.mjs  +  manifest   (lifecycle / distribution)
 - [ ] **Tunables** — `MAX_STEPS`, `max_tokens`, watch TTL/interval (`WATCH_TICK_MS`), memory window (8 pairs / 1h), usage TTL (~40d), pending TTL (30m), dedupe cap (1000).
 - [ ] **Audience timezone** — the hardcoded `Europe/Amsterdam` IANA zone is worldmonitor-specific; expose as config.
 - [ ] **`assistant/config.mjs`** — the **env-binding seam**: `RELAY_*` / `SLACK_*` / `UPSTASH_*` / `ANTHROPIC_*` are all read here (e.g. `relay.mjs` imports from it). This file *is* the env contract; re-point the domain-data vars and keep the platform ones. The full env list lives in **§11** — that env contract (`SLACK_*` / `UPSTASH_*` / `ANTHROPIC_*` / domain `RELAY_*` / `MARINESIA_*`) is part of the configuration surface, not an afterthought.
-- [ ] **Generalized delivery record (planned, `MULTI_PLATFORM.md`)** — replace Slack-specific `{teamId, botToken}` with `{platform, tenantId, deliver, installedBy, installedAt}` and a single `send(install, {channelId, threadId, text, blocks})` that branches on `install.platform`. The watch ticker and approval flow should call `send()` instead of `slackApi` directly. **This is the seam for a Teams adapter, and Teams is *not* a clone of Slack's token model:**
+- [x] **Generalized delivery record (BUILT — see §14; `MULTI_PLATFORM.md`)** — replaced Slack-specific `{teamId, botToken}` with `{platform, tenantId, deliver, installedBy, installedAt}` and a single `send(install, {channelId, threadId, text, blocks})` that branches on `install.platform`. The watch ticker and approval flow now call `send()` instead of `slackApi` directly. **This is the seam the Teams adapter plugs into, and Teams is *not* a clone of Slack's token model:**
   - Teams has **no per-tenant token** — there's a single app credential plus a **stored conversation reference** per channel; you cannot "post to a channel by id" without that reference.
   - Teams' `serviceUrl` is **regional and can change** — always store the latest `serviceUrl` seen on inbound activity and use it (plus the stored conversation reference) for proactive sends; never hardcode it.
   - Approve/Reject buttons map to Teams **Adaptive Cards** (the pending-action flow in `pending.mjs` is otherwise unchanged).
@@ -440,3 +440,95 @@ These are the high-severity gotchas that **silently break on copy**. Re-verify e
 7. **Memory stores simplified text turns, not raw `convo`** — confirm replay history never contains a dangling `tool_use` block (Anthropic 400). (§6)
 
 **Net:** the entire `assistant/slack/*` adapter (minus tool wiring), `agent.mjs`, `guardrails.mjs`, `store.mjs`, `usage.mjs`, `memory.mjs`, `permissions.mjs`, `pending.mjs`, and the `watches.mjs` machinery form the reusable Slack-agent skill. The single configuration surface is: persona/prompt, manifest scopes/events, legal constants, config schema, tunables, audience timezone, the env contract (`config.mjs` + §11), and a `send()` delivery abstraction. The data plane (`relay.mjs` + `tools/*` + freshness) is the swappable domain.
+
+---
+
+## 14. Teams Adapter — The Second Platform (built + validated, 2026-06)
+
+Marco now answers on **Microsoft Teams** from the *same* brain that serves Slack — the `MULTI_PLATFORM.md` "one brain, two thin adapters" bet, realized and verified live in production. The platform-neutral core (`agent.mjs`, `tools/*`, `guardrails.mjs`, `watches.mjs`, `usage.mjs`, `store.mjs`, conversation memory) was reused **unchanged**; only *receive → run → send* is Teams-specific. Building it surfaced a cluster of Bot Framework gotchas worth their own chapter. Teams-portable items are tagged `generalizable-teams`.
+
+### 14.1 Neutral host + the delivery seam (what made two platforms cheap) `[generalizable-any-agent]`
+
+The two refactors that made Teams a **peer** of Slack rather than a fork:
+- **`assistant/server.mjs`** — a neutral HTTP host owns `http.createServer`, `readBody`, dispatch (GET → Slack browser/OAuth/legal; `POST /api/messages` → Teams; other signed POST → Slack events/interactions), the watch ticker, and `/health`. Entry point is now `node assistant/server.mjs`.
+- **`assistant/slack/adapter.mjs`** (renamed from the old `slack/server.mjs`) and **`assistant/teams/router.mjs`** export handlers the host mounts; neither owns the listener. This inversion is what makes "neutral core, two peer adapters" literally true in the file layout.
+- **`assistant/send.mjs`** — the one delivery seam: `send/update/dm(install, {channelId, threadId, text, blocks})` branch on `install.platform`. The agent reply path, approval flow, and watch ticker call `send()` and never touch a platform API directly.
+
+**Lesson:** the cost of a second platform is set *before* you add it — by whether delivery and the HTTP host are already abstracted. Do the neutral-host + `send()` seam refactors **first** (their own PRs); then the adapter is ~4 files (`teams/{verify,normalize,connector,router}.mjs`).
+
+### 14.2 Teams ≠ Slack: the identity & token model `[generalizable-teams]`
+
+The biggest conceptual difference from Slack's per-workspace OAuth token:
+- **No per-tenant token.** Teams has **one global bot credential** (`MS_APP_ID` + `MS_APP_SECRET`). You don't store a token per customer; you store a **conversation reference** (serviceUrl + the channel accounts) captured from inbound activity, and resume it to send.
+- **`serviceUrl` is regional and can change** — always use the `serviceUrl` from the latest inbound activity; never hardcode it (`smba.trafficmanager.net/<region>/…` for real Teams; Direct Line host for Web Chat).
+- A Slack `deliver` is a bot token; a Teams `deliver` is a **conversation reference** `{ serviceUrl, from (bot), recipient (user), locale }`. `pending.mjs`, guardrails, memory, usage — all unchanged.
+
+### 14.3 Receiving: JWT verify + normalize `[generalizable-teams]`
+
+**`teams/verify.mjs`** — inbound activities are Microsoft-signed; verify before processing:
+- Verify with **`jose` directly** (`createRemoteJWKSet` over the BF OpenID metadata + `jwtVerify`). **RS256 pinned** (reject `alg:none`/HS256 — algorithm confusion), `iss = https://api.botframework.com`, `aud = MS_APP_ID`.
+- **serviceUrl anti-spoof:** require the token's `serviceurl` claim to equal the activity's `serviceUrl` (both trailing-slash-normalized); reject if either is missing. **Fail-closed** on unset `MS_APP_ID`.
+- Then **ack within 5s** (Bot Framework's deadline) and dispatch async — same ack-fast discipline as Slack's 3s rule.
+
+**`teams/normalize.mjs`** — pure mapping of an Activity to the neutral shape `{tenantId, channelId, threadId, userId, text, …}`:
+- **Strip `<at>…</at>` mention spans** so the model sees a clean prompt (the Teams analog of stripping `<@U…>`).
+- **`shouldRespond`:** personal (1:1) chat always answers; channel/groupChat only when the bot is **@mentioned**, verified against the bot's id in `activity.entities` (a `mention` whose `mentioned.id === recipient.id`) — **not** by parsing text (forgeable).
+- Capture the **channel accounts** here (`botAccount = activity.recipient`, `userAccount = activity.from`, `locale`) — needed to build a valid reply (§14.4) and the seed of the proactive conversation reference (§14.11).
+
+### 14.4 Replying: the connector + the "complete Activity" 400 `[generalizable-teams]`
+
+**`teams/connector.mjs`** mints a client-credentials token (scope `https://api.botframework.com/.default`, cached + refreshed early) and POSTs the reply to `{serviceUrl}/v3/conversations/{conversationId}/activities/{activityId}`. Two gotchas, **both of which silently drop every reply while receive+ack succeed:**
+
+- **(high) Token authority is tenant-specific for single-tenant bots.** A single-tenant bot must mint the Connector token from its **own tenant authority** (`login.microsoftonline.com/<MS_APP_TENANT_ID>/oauth2/v2.0/token`), **not** the `botframework.com` authority. Wrong authority → `unauthorized_client` → reply drops though inbound verified. (See also §14.7 — this same authority choice is the multitenant trap.)
+- **(high) A reply must be a COMPLETE Activity.** The Connector does **not** infer `from`/`recipient`/`conversation` for a raw REST POST (no Bot Builder SDK) — a minimal `{type, text, replyToId}` body returns **HTTP 400**. Build it by **swapping the inbound accounts:** outbound `from` = inbound `recipient` (the bot), `recipient` = inbound `from` (the user), plus `conversation:{id}` and `replyToId`. (Fixed in #40; not Web-Chat-specific — 400s on real Teams too.)
+- **URL hygiene:** strip a trailing slash from `serviceUrl` before appending `/v3/...` (the BF base URI ends in `/`), and `encodeURIComponent` the conversationId/activityId (Teams conversation ids contain `;`/`@`/`=`). **Log the response body** on a non-2xx send — the `AADSTS…`/error text is what tells you which gotcha bit.
+
+### 14.5 The dependency crash that taught the clean-install gate `[generalizable-any-agent]` (severity high)
+
+The first receive+verify PR **crashed production at boot** with `ERR_REQUIRE_ESM`: the JWT libs `jwks-rsa` (CommonJS) did `require('jose')`, but installed `jose` v6 is **ESM-only**. Local tests passed only because a *warm* `node_modules` still had a CJS-compatible jose; prod's **clean install** pulled ESM-only v6 → crash-loop.
+- **Fix:** dropped `jsonwebtoken` + `jwks-rsa`; verify with **`jose` directly** (ESM-native, pure JS, no native build, one dep).
+- **Lesson:** **gate every dependency change on a clean install + import-load check** (`rm -rf node_modules && npm ci`, then actually import the module), not a warm-`node_modules` run. (Saved as the `clean-install-gate-for-deps` memory.) *Local caveat:* a full clean install fails here on the frontend's `sharp` native build — use `npm install --ignore-scripts` (jose has no native build, so it's unaffected).
+- **Recovery discipline under a prod crash:** **revert via PR** (don't push main directly), then re-land the fix on a clean branch.
+
+### 14.6 Azure setup + the account-type wall `[generalizable-teams]`
+
+From code-in-prod to a usable bot:
+1. **Register an Azure Bot**, **Bot Type: Single Tenant**; messaging endpoint = `…/api/messages`.
+2. Create a **client secret** (App Registration → Certificates & secrets) → `MS_APP_SECRET`. Capture `MS_APP_ID` + the home tenant id → `MS_APP_TENANT_ID`.
+3. Add the **Microsoft Teams** channel.
+4. Set the three env vars; the boot banner `[teams] Bot Framework endpoint on /api/messages` prints **only when `MS_APP_ID` is set** (the dormant/armed fingerprint).
+
+**The wall (high):** **custom Teams apps can only be sideloaded in a *work/school* (Entra/M365) tenant.** A **personal** Microsoft account can't — the Teams Admin Center literally rejects it ("you can't sign in here with a personal account"). Testing in the real Teams client needs a work tenant (a free **Microsoft 365 Developer** sandbox, or a licensed user in your own tenant). The Azure portal has TWO same-named objects — the **Azure Bot resource** (Channels / Test in Web Chat / Configuration) and the **App Registration** (Authentication / Certificates & secrets); the "Manage Password" link bridges from the former to the latter.
+
+### 14.7 The multitenant flip + the converted-bot authority trap `[generalizable-teams]`
+
+To let *any* org install Marco (Viktor-parity distribution):
+- **App Registration → Multitenant** (`signInAudience: AzureADMultipleOrgs`). The Authentication-blade radio **fails** with `api.requestedAccessTokenVersion is invalid` unless you also set **`requestedAccessTokenVersion: 2`** — edit the **Manifest** and change *both* fields in one save (multitenant requires access-token v2).
+- **(high) Don't switch the connector to the `botframework.com` authority.** A bot **converted** single→multi has **no service principal in Microsoft's `botframework.com` tenant**, so that authority returns **`AADSTS700016 / unauthorized_client`** (properly-*created* MT bots get provisioned there; you can't admin-consent into Microsoft's tenant). **Keep `MS_APP_TENANT_ID` set** and mint from the **home-tenant** authority — the Connector token is **app-only for `api.botframework.com`** (validated by appId, not tenant-scoped), so per MS docs it delivers replies to any org's conversation. The `|| 'botframework.com'` default in `connector.mjs` is therefore a **footgun**: dropping the env var silently breaks every reply.
+- For a **hand-rolled** bot the Azure Bot *resource's* type is largely cosmetic — only the **App Registration** audience (who can install) and **our** token authority (how we mint) matter.
+- **Deprecation:** Microsoft deprecated *new* multi-tenant bot creation after **2025-07-31** (existing/converted keep working; modern path = single-tenant + user-assigned managed identity).
+
+### 14.8 Validating without a work tenant — Test in Web Chat
+
+The Azure Bot's **Test in Web Chat** (Direct Line) exercises the **same** `/api/messages` path — receive → JWT verify → agent → tools → generate → send — against prod, with **no Teams client or work tenant needed**. It's the fastest end-to-end probe; the server logs (`[teams] msg …`, `→ tools: … · replied N chars`, and any `send failed` / `bot token failed`) are ground truth. Every gotcha above was caught this way.
+
+### 14.9 Teams rendering + persona `[generalizable-teams]`
+
+Teams renders **standard Markdown** — `**bold**`, bullet lists, and small **tables** all work (Marco answers with vessel tables) — *unlike* Slack's mrkdwn (§4). `TEAMS_SYSTEM` reuses `MARCO_PERSONA` + the data-discipline base prompt with a Teams-markdown instruction. (TODO flagged in `teams/router.mjs`: `MARCO_PERSONA` + thread memory currently import from `slack/`; move them to neutral `persona.mjs` / `assistant/memory.mjs` now that Teams is the 2nd consumer.)
+
+### 14.10 Distribution ladder + deploy fingerprinting
+
+- **Sideload** (flat zip: `manifest.json` + `color.png` 192×192 + `outline.png` 32×32 at the root) → **Org catalog** (Teams Admin Center) → **AppSource** (Microsoft review). The one-click **"Add to Teams"** deep link (the "Add to Slack" analog) is `https://teams.microsoft.com/l/app/<AppId>`; reuses the same `/privacy` + `/support` pages. Runbook + the gotchas above live in `assistant/teams/TEAMS_SETUP.md`; the built zip is a gitignored artifact.
+- **Deploy fingerprint (Railway):** `railway status --json` exposes each service's `latestDeployment.{status, meta.commitHash}` — watch `SUCCESS` on the new commit + `/health` 200. For **env-only** changes (same commit) fingerprint by the new deployment's `createdAt`, not the commit. (zsh gotcha: `status` is a read-only var — don't `read status …`.)
+
+### 14.11 What's still ahead (not yet built)
+- **④ Adaptive-card approval** — the propose-then-approve flow (`pending.mjs`, unchanged) rendered as Teams **Adaptive Cards** instead of Block Kit; `send.mjs` `update()`/`dm()` still throw `teams delivery not wired` until then.
+- **⑤ Conversation-reference capture → onboarding DM + proactive watches** — persist the reference (a `conversationUpdate` is already logged on first contact) into a Teams install record so the watch ticker can `send()` proactively, and DM the installer the "Ciao…" magic-moment.
+- **Cross-tenant delivery proof** — sideload in a work/dev tenant and confirm a home-tenant token delivers into *another* org's conversation (docs say yes; empirically unverified).
+
+### Teams load-bearing invariants to re-test (the silent breakers)
+1. **Verify before dispatch, fail-closed** — RS256-pinned, `iss`/`aud`/serviceUrl checked; reject on unset `MS_APP_ID`. (§14.3)
+2. **Connector token from the HOME tenant authority** — not `botframework.com` (AADSTS700016). Keep `MS_APP_TENANT_ID`. (§14.4, §14.7)
+3. **Reply is a COMPLETE Activity** — `from`/`recipient`/`conversation` present, or 400. (§14.4)
+4. **Clean-install + import-load gate** before any dep change — the ESM crash class. (§14.5)
+5. **serviceUrl from the latest inbound, never hardcoded** — regional + mutable. (§14.2)
