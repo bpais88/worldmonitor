@@ -101,10 +101,17 @@ async function onConversationUpdate(activity) {
       deliver: toTeamsDeliver(n),
     });
     if (shouldGreet(activity) && !rec.onboarded) {
-      await send({ platform: 'teams', deliver: rec.deliver }, { channelId: n.channelId, text: teamsOnboardingText(n.conversationType) })
-        .catch((e) => console.warn('[teams] onboarding send failed:', e.message));
-      await markTeamsOnboarded(rec);
-      console.log(`[teams] onboarded ${n.channelId} (welcome sent)`);
+      // Mark onboarded ONLY after a confirmed-delivered (2xx) welcome, so a transient
+      // token/network/non-2xx failure leaves onboarded=false and retries on the next add
+      // — rather than silently burning the one-shot greeting.
+      const res = await send({ platform: 'teams', deliver: rec.deliver }, { channelId: n.channelId, text: teamsOnboardingText(n.conversationType) })
+        .catch((e) => { console.warn('[teams] onboarding send failed:', e.message); return null; });
+      if (res && res.ok) {
+        await markTeamsOnboarded(rec);
+        console.log(`[teams] onboarded ${n.channelId} (welcome sent)`);
+      } else {
+        console.warn(`[teams] onboarding deferred for ${n.channelId} (welcome not delivered) — will retry on next add`);
+      }
     } else {
       console.log(`[teams] conversationUpdate in ${n.channelId} (type=${n.conversationType})`);
     }
