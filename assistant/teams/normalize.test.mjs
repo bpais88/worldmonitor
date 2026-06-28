@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { normalizeTeamsActivity, shouldRespond } from './normalize.mjs';
+import { normalizeTeamsActivity, shouldRespond, toTeamsDeliver } from './normalize.mjs';
 
 test('channel message: strips the <at> mention and maps every id', () => {
   const n = normalizeTeamsActivity({
@@ -53,4 +53,9 @@ test('shouldRespond: in a channel only when the bot itself is @mentioned', () =>
   assert.equal(shouldRespond(base), false); // no mention
   assert.equal(shouldRespond({ ...base, entities: [{ type: 'mention', mentioned: { id: '28:bot' } }] }), true);
   assert.equal(shouldRespond({ ...base, entities: [{ type: 'mention', mentioned: { id: '28:someone-else' } }] }), false);
+});
+
+test('toTeamsDeliver: maps a normalized activity to the send.mjs deliver handle (from=bot, recipient=user)', () => {
+  const n = { serviceUrl: 'https://smba/', botAccount: { id: '28:bot' }, userAccount: { id: '29:user' }, locale: 'it' };
+  assert.deepEqual(toTeamsDeliver(n), { serviceUrl: 'https://smba/', from: { id: '28:bot' }, recipient: { id: '29:user' }, locale: 'it' });
 });

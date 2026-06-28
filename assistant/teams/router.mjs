@@ -6,13 +6,15 @@
 // same brain as Slack. Approval-gated ACTIONS (Adaptive cards) and proactive watch alerts
 // (which need a stored conversation reference + a Teams install record) land in later PRs.
 import { verifyTeamsToken } from './verify.mjs';
-import { normalizeTeamsActivity, shouldRespond } from './normalize.mjs';
+import { normalizeTeamsActivity, shouldRespond, toTeamsDeliver } from './normalize.mjs';
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { recordUsage } from '../usage.mjs';
 import { send } from '../send.mjs';
+import { recordTeamsConversation, markTeamsOnboarded } from './installations.mjs';
+import { shouldGreet, teamsOnboardingText } from './onboarding.mjs';
 // TODO: MARCO_PERSONA + thread memory are platform-neutral but currently live under slack/;
 // Teams is now their 2nd consumer, so they should move to neutral modules in a follow-up.
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
@@ -46,8 +48,7 @@ export async function handleTeamsRequest(req, res, body) {
 
 async function dispatch(activity) {
   if (activity.type === 'conversationUpdate') {
-    // First contact / install — the conversation-reference capture lands in a later PR.
-    console.log(`[teams] conversationUpdate in ${activity.conversation?.id}`);
+    await onConversationUpdate(activity);
     return;
   }
   if (activity.type !== 'message' || !shouldRespond(activity)) return;
@@ -56,9 +57,8 @@ async function dispatch(activity) {
   if (!n.text) return;
   console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
 
-  // The conversation reference for this turn's reply: serviceUrl + the channel accounts
-  // the Connector requires on a reply (outbound from = the bot, recipient = the user).
-  const install = { platform: 'teams', deliver: { serviceUrl: n.serviceUrl, from: n.botAccount, recipient: n.userAccount, locale: n.locale } };
+  // The conversation reference for this turn's reply (the same handle the proactive path persists).
+  const install = { platform: 'teams', deliver: toTeamsDeliver(n) };
   const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
 
   try {
@@ -81,5 +81,34 @@ async function dispatch(activity) {
     console.error('[teams] agent error:', e.message);
     // Mirror Slack: tell the user instead of staying silent (best-effort).
     await send(install, { channelId: n.channelId, threadId: n.activityId, text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
+  }
+}
+
+// First contact: capture/refresh the conversation reference (the unit proactive watch
+// alerts will resume — see installations.mjs), and greet exactly once when the bot itself
+// was just added to a 1:1. The welcome posts straight to the conversationUpdate's own
+// conversation, so no Bot Framework "create conversation" call is needed.
+async function onConversationUpdate(activity) {
+  const n = normalizeTeamsActivity(activity);
+  if (!n.channelId) return;
+  try {
+    // Capture/refresh the conversation reference through the SAME extraction the reply path
+    // uses (normalize + toTeamsDeliver), so the persisted, proactive-only reference can't drift.
+    const rec = await recordTeamsConversation({
+      conversationId: n.channelId,
+      tenantId: n.tenantId,
+      conversationType: n.conversationType,
+      deliver: toTeamsDeliver(n),
+    });
+    if (shouldGreet(activity) && !rec.onboarded) {
+      await send({ platform: 'teams', deliver: rec.deliver }, { channelId: n.channelId, text: teamsOnboardingText(n.conversationType) })
+        .catch((e) => console.warn('[teams] onboarding send failed:', e.message));
+      await markTeamsOnboarded(rec);
+      console.log(`[teams] onboarded ${n.channelId} (welcome sent)`);
+    } else {
+      console.log(`[teams] conversationUpdate in ${n.channelId} (type=${n.conversationType})`);
+    }
+  } catch (e) {
+    console.warn('[teams] conversationUpdate handling failed:', e.message);
   }
 }
