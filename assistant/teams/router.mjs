@@ -11,10 +11,12 @@ import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { watchTools } from '../tools/watches.mjs';
+import { cancelWatchesByConversation } from '../watches.mjs';
 import { recordUsage } from '../usage.mjs';
 import { send } from '../send.mjs';
-import { recordTeamsConversation, markTeamsOnboarded } from './installations.mjs';
-import { shouldGreet, teamsOnboardingText } from './onboarding.mjs';
+import { recordTeamsConversation, markTeamsOnboarded, removeTeamsInstall } from './installations.mjs';
+import { shouldGreet, teamsOnboardingText, botWasRemoved } from './onboarding.mjs';
 // TODO: MARCO_PERSONA + thread memory are platform-neutral but currently live under slack/;
 // Teams is now their 2nd consumer, so they should move to neutral modules in a follow-up.
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
@@ -22,9 +24,10 @@ import { threadKey, getHistory, appendTurn } from '../slack/memory.mjs';
 
 const MS_APP_ID = process.env.MS_APP_ID || '';
 
-// Read-class tools only for now (Q&A). Action tools (post report) need the Adaptive-card
-// approval flow (next PR); watches need a Teams install record for proactive delivery.
-const TEAMS_TOOLS = [...freightTools, ...weatherTools];
+// Read-class tools: freight/weather Q&A + proactive watches (watch creation is read-class —
+// no approval gate). Side-effecting ACTION tools (post report) still need the Adaptive-card
+// approval flow (PR④).
+const TEAMS_TOOLS = [...freightTools, ...weatherTools, ...watchTools];
 
 // Marco's voice + the analyst base, with Teams markdown rules (Teams renders standard
 // Markdown — no Slack mrkdwn quirks).
@@ -57,8 +60,10 @@ async function dispatch(activity) {
   if (!n.text) return;
   console.log(`[teams] msg @${n.userId} in ${n.tenantId}/${n.channelId}: "${n.text.slice(0, 100)}"`);
 
-  // The conversation reference for this turn's reply (the same handle the proactive path persists).
-  const install = { platform: 'teams', deliver: toTeamsDeliver(n) };
+  // The conversation reference for this turn — used for the reply AND stamped on any watch
+  // created this turn (so the proactive ticker can alert this conversation later). Built once.
+  const deliver = toTeamsDeliver(n);
+  const install = { platform: 'teams', deliver };
   const key = threadKey(`${n.tenantId}:${n.channelId}`, n.threadId);
 
   try {
@@ -67,8 +72,10 @@ async function dispatch(activity) {
       history: await getHistory(key),
       tools: TEAMS_TOOLS,
       system: TEAMS_SYSTEM,
-      policy: DEFAULT_POLICY, // read-only on Teams for now (no action tools wired)
-      context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId },
+      policy: DEFAULT_POLICY, // read-class tools only (Q&A + watches); no side-effecting actions yet
+      // platform + deliver let a watch created here carry its own delivery handle (Teams has
+      // no per-tenant token), so the proactive ticker can alert this conversation later.
+      context: { channel: n.channelId, thread: n.threadId, user: n.userId, team: n.tenantId, platform: 'teams', deliver },
     });
     const reply = text || '(no answer)';
     const day = await recordUsage(n.tenantId, usage);
@@ -92,6 +99,14 @@ async function onConversationUpdate(activity) {
   const n = normalizeTeamsActivity(activity);
   if (!n.channelId) return;
   try {
+    // Bot removed from this conversation → Slack-parity cleanup: drop the install record and
+    // cancel any watches bound here, so the ticker stops evaluating + alerting a dead chat.
+    if (botWasRemoved(activity)) {
+      await removeTeamsInstall(n.channelId);
+      const cancelled = await cancelWatchesByConversation({ team: n.tenantId, conversationId: n.channelId });
+      console.log(`[teams] removed ${n.channelId} (install cleared, ${cancelled} watch(es) cancelled)`);
+      return;
+    }
     // Capture/refresh the conversation reference through the SAME extraction the reply path
     // uses (normalize + toTeamsDeliver), so the persisted, proactive-only reference can't drift.
     const rec = await recordTeamsConversation({
