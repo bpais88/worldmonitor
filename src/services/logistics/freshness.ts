@@ -34,13 +34,15 @@ export function clockAmsterdam(epochMs: number): string {
 
 /**
  * Decide the freshness badge from feed meta. Time is shown in Amsterdam time.
- * - warming  → amber "warming up…" (count still filling after a relay restart)
+ * - warming  → amber "warming up — vessel count still filling" (sets the
+ *              expectation that the low/rising count right after a relay restart
+ *              is temporary and climbing, not the full picture)
  * - stale    → amber "stale · last update Xm ago" (ingest stalled)
  * - otherwise→ green "as of HH:MM CEST"
  */
 export function describeFreshness(meta: FeedMeta | undefined): FreshnessBadge {
   if (!meta) return { state: 'live', detail: '' };
-  if (meta.warming) return { state: 'cached', detail: 'warming up…' };
+  if (meta.warming) return { state: 'cached', detail: 'warming up — vessel count still filling' };
   if (meta.stale) return { state: 'cached', detail: `stale · last update ${agoLabel(meta.ageSec)}` };
   return { state: 'live', detail: meta.generatedAt ? `as of ${clockAmsterdam(meta.generatedAt)}` : '' };
 }

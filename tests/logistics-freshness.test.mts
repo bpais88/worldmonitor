@@ -14,7 +14,7 @@ describe('describeFreshness', () => {
   it('flags warming up (amber) when the relay has not finished its first sweep', () => {
     const b = describeFreshness({ warming: true, stale: false, generatedAt: Date.now() });
     assert.equal(b.state, 'cached');
-    assert.equal(b.detail, 'warming up…');
+    assert.equal(b.detail, 'warming up — vessel count still filling');
   });
 
   it('flags stale (amber) with the data age when ingest has stalled', () => {
@@ -24,7 +24,7 @@ describe('describeFreshness', () => {
   });
 
   it('warming takes precedence over stale', () => {
-    assert.equal(describeFreshness({ warming: true, stale: true }).detail, 'warming up…');
+    assert.equal(describeFreshness({ warming: true, stale: true }).detail, 'warming up — vessel count still filling');
   });
 
   it('no meta → plain live badge', () => {
