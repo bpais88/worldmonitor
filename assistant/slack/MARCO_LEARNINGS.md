@@ -39,6 +39,7 @@ The core of multi-tenancy: **key everything by `team_id`** and look up the bot t
 **CSRF state** must survive across replicas — see §3. The `/install` and `/callback` halves can land on different Railway replicas.
 
 **`CLIENT_ID` presence is the mode switch:**
+
 - With `CLIENT_ID` → multi-tenant: landing page shows "Add to Slack"; action-users come from per-workspace `cfg.actionUsers`.
 - Without `CLIENT_ID` → single-tenant/legacy: landing page returns JSON health; action-users come from env (`ENV_ACTION_USERS`). `[generalizable-slack]`
 
@@ -77,6 +78,7 @@ All persistence flows through a tiny KV abstraction (`assistant/store.mjs`):
 **Why raw `node:http` instead of Express/Bolt:** Slack signature verification needs the **exact raw request body**; a framework's body parser mutates/re-serializes it and breaks the HMAC. Read the raw string once (`readBody`), verify **before** any `JSON.parse`/`URLSearchParams`, keep the dependency surface tiny.
 
 **Route split (explicit trust boundary):**
+
 - **Unsigned GET** — browser/health/OAuth/legal (`/`, `/health`, `/slack/install`, `/slack/oauth/callback`, `/privacy`, `/support`).
 - **Signed POST** — Slack events (`/slack/events`) + interactions (`/slack/interactions`). `verified()` is called once after `readBody`, gating both handlers. `[generalizable-slack]`
 
@@ -85,6 +87,7 @@ All persistence flows through a tiny KV abstraction (`assistant/store.mjs`):
 ### Signature verification (`assistant/slack/verify.mjs`) `[generalizable-slack]`
 
 Self-contained `verifySlackSignature({signingSecret, signature, timestamp, body, now})`:
+
 1. **Staleness check first** — reject if `x-slack-request-timestamp` is more than **5 minutes** from `now` (replay protection). The timestamp is part of the signed string so it can't be forged independently.
 2. HMAC-SHA256 over `v0:<ts>:<body>`; the header is `x-slack-signature = 'v0=' + HMAC`.
 3. **`crypto.timingSafeEqual`** with a length guard (it throws on length mismatch) wrapped in try/catch — avoids timing leaks from `===`.
@@ -106,6 +109,7 @@ The bot sees its own posts and other bots' messages. Before replying, drop event
 ### `team_id` resolution (defensive fallback chains)
 
 `team_id` lives in different places across payload shapes:
+
 - Events: `payload.team_id || ev.team || payload.team?.id || ''`
 - Interactions: `payload.team?.id || payload.user?.team_id`
 - **Background jobs have no payload** — the team must be stored on the work item (`watch.team`) at creation time.
@@ -121,6 +125,7 @@ The token lookup depends entirely on getting this right.
 **Manifest-as-code** — one paste sets display info, `bot_user`, App Home, all bot scopes, OAuth redirect, every event subscription, and interactivity; reproducible and reviewable in git. `[generalizable-slack]`
 
 **Minimal bot scopes** (least privilege — backs the "we don't read other channel messages" privacy claim):
+
 - `app_mentions:read` — hear @mentions
 - `chat:write` — reply + post alerts
 - `im:history` — read DM thread
@@ -237,6 +242,7 @@ Stores **simplified text turns** (`[{role:'user'},{role:'assistant'}]` — user 
 ### Onboarding — `assistant/slack/onboarding.mjs` `[generalizable-slack]`
 
 **Dual-trigger, idempotent welcome DM:**
+
 - The **OAuth callback** greets the installer (only fires for the installer).
 - **`app_home_opened`** greets any teammate who opens the Home tab (catches those who never ran the install — the key non-obvious trigger).
 - Both gated by a persisted per-workspace **`cfg.onboarded`** flag (set via `setConfig` after either path) so nobody is DM'd twice. (`server.mjs` ~174–181 and ~302–307.)
@@ -289,11 +295,13 @@ These came directly from live use and the fix PRs (#30).
 ### Shared freshness module (cross-surface consistency) `[generalizable-any-agent]`
 
 Freshness decision logic lives in **one pure computation** consumed by three surfaces so they can never disagree:
+
 - `scripts/freshness.cjs` — `relayFreshness({lastPollAt, tilesSeen, tileCount}) → {warming, stale, ageSec}` (relay/Node). Note `tilesSeen` is passed as a **number** (`set.size`), not the Set itself.
 - `src/services/logistics/freshness.ts` — `describeFreshness(meta) → badge` (FE), mirrors the CJS logic.
 - `assistant/tools/freight.mjs` — `feedNote(j)` turns the same meta into a one-line caveat.
 
 **The "absent meta ⇒ fresh" convention is applied at two layers, in two different files — know the distinction when reusing:**
+
 - **Disable-gate (one layer up):** `feedFreshness()` in `scripts/ais-relay.cjs` returns `{}` when the producing feed is *disabled* (no `MARINESIA_API_KEY` ⇒ no poll ⇒ `lastPollAt` null). Emitting nothing lets clients treat absent meta as fresh — see §12 for why this matters.
 - **Happy-path-absent (tool layer):** `feedNote(j)` returns `null` when data is fresh, and tools spread it as `...(feed ? { feed } : {})` so the `feed` field is simply absent on the happy path.
 
@@ -320,6 +328,7 @@ The codebase is structured so the hard logic is **pure and network-free**:
 **Hosting:** Railway, **multi-replica** — this is *the* reason OAuth CSRF state, pending approvals, install tokens, memory, and watches must live in shared KV, not process memory.
 
 **Go-live sequence (order is load-bearing) — `MARCO_SETUP.md`:**
+
 1. **Deploy the service first**, then create/update the Slack app. Pasting the Events Request URL triggers Slack's verification challenge **immediately** — the endpoint must already be live and answering `/slack/events`, or the manifest/event-subscription save fails. (severity high)
 2. Create the app from `marco-app-manifest.json` (one paste sets scopes/events/redirect/interactivity/App Home).
 3. Set env vars on Railway (see below).
@@ -327,6 +336,7 @@ The codebase is structured so the hard logic is **pure and network-free**:
 5. Customers self-install via the public "Add to Slack" link.
 
 **Environment variables** (centralized binding in `assistant/config.mjs`):
+
 - Multi-tenant: `SLACK_CLIENT_ID`, `SLACK_CLIENT_SECRET`, `SLACK_SIGNING_SECRET`, optional `SLACK_REDIRECT_URI` (else derived from request host).
 - Legacy single-tenant fallback: `SLACK_BOT_TOKEN`, `SLACK_BOT_USER_ID`, `SLACK_ACTION_USERS`.
 - Persistence: `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` — **required** once multi-workspace (without them, every redeploy logs out all customers — severity high).
@@ -335,6 +345,7 @@ The codebase is structured so the hard logic is **pure and network-free**:
 - Misc: `WATCH_TICK_MS`, `PORT` (default 3010).
 
 **Ops gotchas:**
+
 - After editing scopes/events, **reinstall** the app to the workspace or changes don't take effect (silent failure). (severity low)
 - Local dev can use ngrok to expose a public Request URL.
 
@@ -450,6 +461,7 @@ Marco now answers on **Microsoft Teams** from the *same* brain that serves Slack
 ### 14.1 Neutral host + the delivery seam (what made two platforms cheap) `[generalizable-any-agent]`
 
 The two refactors that made Teams a **peer** of Slack rather than a fork:
+
 - **`assistant/server.mjs`** — a neutral HTTP host owns `http.createServer`, `readBody`, dispatch (GET → Slack browser/OAuth/legal; `POST /api/messages` → Teams; other signed POST → Slack events/interactions), the watch ticker, and `/health`. Entry point is now `node assistant/server.mjs`.
 - **`assistant/slack/adapter.mjs`** (renamed from the old `slack/server.mjs`) and **`assistant/teams/router.mjs`** export handlers the host mounts; neither owns the listener. This inversion is what makes "neutral core, two peer adapters" literally true in the file layout.
 - **`assistant/send.mjs`** — the one delivery seam: `send/update/dm(install, {channelId, threadId, text, blocks})` branch on `install.platform`. The agent reply path, approval flow, and watch ticker call `send()` and never touch a platform API directly.
@@ -459,6 +471,7 @@ The two refactors that made Teams a **peer** of Slack rather than a fork:
 ### 14.2 Teams ≠ Slack: the identity & token model `[generalizable-teams]`
 
 The biggest conceptual difference from Slack's per-workspace OAuth token:
+
 - **No per-tenant token.** Teams has **one global bot credential** (`MS_APP_ID` + `MS_APP_SECRET`). You don't store a token per customer; you store a **conversation reference** (serviceUrl + the channel accounts) captured from inbound activity, and resume it to send.
 - **`serviceUrl` is regional and can change** — always use the `serviceUrl` from the latest inbound activity; never hardcode it (`smba.trafficmanager.net/<region>/…` for real Teams; Direct Line host for Web Chat).
 - A Slack `deliver` is a bot token; a Teams `deliver` is a **conversation reference** `{ serviceUrl, from (bot), recipient (user), locale }`. `pending.mjs`, guardrails, memory, usage — all unchanged.
@@ -466,11 +479,13 @@ The biggest conceptual difference from Slack's per-workspace OAuth token:
 ### 14.3 Receiving: JWT verify + normalize `[generalizable-teams]`
 
 **`teams/verify.mjs`** — inbound activities are Microsoft-signed; verify before processing:
+
 - Verify with **`jose` directly** (`createRemoteJWKSet` over the BF OpenID metadata + `jwtVerify`). **RS256 pinned** (reject `alg:none`/HS256 — algorithm confusion), `iss = https://api.botframework.com`, `aud = MS_APP_ID`.
 - **serviceUrl anti-spoof:** require the token's `serviceurl` claim to equal the activity's `serviceUrl` (both trailing-slash-normalized); reject if either is missing. **Fail-closed** on unset `MS_APP_ID`.
 - Then **ack within 5s** (Bot Framework's deadline) and dispatch async — same ack-fast discipline as Slack's 3s rule.
 
 **`teams/normalize.mjs`** — pure mapping of an Activity to the neutral shape `{tenantId, channelId, threadId, userId, text, …}`:
+
 - **Strip `<at>…</at>` mention spans** so the model sees a clean prompt (the Teams analog of stripping `<@U…>`).
 - **`shouldRespond`:** personal (1:1) chat always answers; channel/groupChat only when the bot is **@mentioned**, verified against the bot's id in `activity.entities` (a `mention` whose `mentioned.id === recipient.id`) — **not** by parsing text (forgeable).
 - Capture the **channel accounts** here (`botAccount = activity.recipient`, `userAccount = activity.from`, `locale`) — needed to build a valid reply (§14.4) and the seed of the proactive conversation reference (§14.11).
@@ -486,6 +501,7 @@ The biggest conceptual difference from Slack's per-workspace OAuth token:
 ### 14.5 The dependency crash that taught the clean-install gate `[generalizable-any-agent]` (severity high)
 
 The first receive+verify PR **crashed production at boot** with `ERR_REQUIRE_ESM`: the JWT libs `jwks-rsa` (CommonJS) did `require('jose')`, but installed `jose` v6 is **ESM-only**. Local tests passed only because a *warm* `node_modules` still had a CJS-compatible jose; prod's **clean install** pulled ESM-only v6 → crash-loop.
+
 - **Fix:** dropped `jsonwebtoken` + `jwks-rsa`; verify with **`jose` directly** (ESM-native, pure JS, no native build, one dep).
 - **Lesson:** **gate every dependency change on a clean install + import-load check** (`rm -rf node_modules && npm ci`, then actually import the module), not a warm-`node_modules` run. (Saved as the `clean-install-gate-for-deps` memory.) *Local caveat:* a full clean install fails here on the frontend's `sharp` native build — use `npm install --ignore-scripts` (jose has no native build, so it's unaffected).
 - **Recovery discipline under a prod crash:** **revert via PR** (don't push main directly), then re-land the fix on a clean branch.
@@ -493,6 +509,7 @@ The first receive+verify PR **crashed production at boot** with `ERR_REQUIRE_ESM
 ### 14.6 Azure setup + the account-type wall `[generalizable-teams]`
 
 From code-in-prod to a usable bot:
+
 1. **Register an Azure Bot**, **Bot Type: Single Tenant**; messaging endpoint = `…/api/messages`.
 2. Create a **client secret** (App Registration → Certificates & secrets) → `MS_APP_SECRET`. Capture `MS_APP_ID` + the home tenant id → `MS_APP_TENANT_ID`.
 3. Add the **Microsoft Teams** channel.
@@ -503,6 +520,7 @@ From code-in-prod to a usable bot:
 ### 14.7 The multitenant flip + the converted-bot authority trap `[generalizable-teams]`
 
 To let *any* org install Marco (Viktor-parity distribution):
+
 - **App Registration → Multitenant** (`signInAudience: AzureADMultipleOrgs`). The Authentication-blade radio **fails** with `api.requestedAccessTokenVersion is invalid` unless you also set **`requestedAccessTokenVersion: 2`** — edit the **Manifest** and change *both* fields in one save (multitenant requires access-token v2).
 - **(high) Don't switch the connector to the `botframework.com` authority.** A bot **converted** single→multi has **no service principal in Microsoft's `botframework.com` tenant**, so that authority returns **`AADSTS700016 / unauthorized_client`** (properly-*created* MT bots get provisioned there; you can't admin-consent into Microsoft's tenant). **Keep `MS_APP_TENANT_ID` set** and mint from the **home-tenant** authority — the Connector token is **app-only for `api.botframework.com`** (validated by appId, not tenant-scoped), so per MS docs it delivers replies to any org's conversation. The `|| 'botframework.com'` default in `connector.mjs` is therefore a **footgun**: dropping the env var silently breaks every reply.
 - For a **hand-rolled** bot the Azure Bot *resource's* type is largely cosmetic — only the **App Registration** audience (who can install) and **our** token authority (how we mint) matter.
@@ -522,11 +540,13 @@ Teams renders **standard Markdown** — `**bold**`, bullet lists, and small **ta
 - **Deploy fingerprint (Railway):** `railway status --json` exposes each service's `latestDeployment.{status, meta.commitHash}` — watch `SUCCESS` on the new commit + `/health` 200. For **env-only** changes (same commit) fingerprint by the new deployment's `createdAt`, not the commit. (zsh gotcha: `status` is a read-only var — don't `read status …`.)
 
 ### 14.11 What's still ahead (not yet built)
+
 - **④ Adaptive-card approval** — the propose-then-approve flow (`pending.mjs`, unchanged) rendered as Teams **Adaptive Cards** instead of Block Kit; `send.mjs` `update()`/`dm()` still throw `teams delivery not wired` until then.
 - **⑤ Conversation-reference capture → onboarding DM + proactive watches** — persist the reference (a `conversationUpdate` is already logged on first contact) into a Teams install record so the watch ticker can `send()` proactively, and DM the installer the "Ciao…" magic-moment.
 - **Cross-tenant delivery proof** — sideload in a work/dev tenant and confirm a home-tenant token delivers into *another* org's conversation (docs say yes; empirically unverified).
 
 ### Teams load-bearing invariants to re-test (the silent breakers)
+
 1. **Verify before dispatch, fail-closed** — RS256-pinned, `iss`/`aud`/serviceUrl checked; reject on unset `MS_APP_ID`. (§14.3)
 2. **Connector token from the HOME tenant authority** — not `botframework.com` (AADSTS700016). Keep `MS_APP_TENANT_ID`. (§14.4, §14.7)
 3. **Reply is a COMPLETE Activity** — `from`/`recipient`/`conversation` present, or 400. (§14.4)

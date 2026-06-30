@@ -20,6 +20,7 @@ An adapter does exactly three things: (1) receive platform events → normalize 
 This must ship **first, alone, with no observable change to Slack.** It generalizes the install record and introduces the send abstraction; every existing Slack call site is rerouted through it. The current Slack surface lives almost entirely in `slack/server.mjs`.
 
 ### 3a. Generalize the install record — `slack/installations.mjs`
+
 Target shape (from `MULTI_PLATFORM.md`): `{ platform, tenantId, deliver, installedBy, installedAt }`, where for Slack `deliver = botToken`, and for Teams `deliver = { serviceUrl, conversation, bot, user, tenantId }` (the conversation reference). Do this **additively** so the pinned tests stay green:
 
 - `saveInstallation` (`installations.mjs:16–21`): default `platform = 'slack'`, set `deliver = inst.botToken` when absent, accept `inst.tenantId || inst.teamId` for the required-id check. **Keep** the existing `teamId required` error message and keep `botToken` readable (pinned by `installations.test.mjs:9–11,36`).
@@ -28,7 +29,9 @@ Target shape (from `MULTI_PLATFORM.md`): `{ platform, tenantId, deliver, install
 - `oauth.mjs:40–47` (`exchangeCode`, Slack-only) additionally stamps `platform:'slack'` and `deliver: j.access_token` so new installs are already in the generalized shape. **Add fields only** — `oauth.test.mjs:34–39` still asserts the six current fields.
 
 ### 3b. New `send.mjs` (platform-neutral wire layer)
+
 Three functions, each branching on `install.platform`:
+
 - `send(install, { channelId, threadId, text, blocks })`
 - `update(install, { channelId, messageId, text })`
 - `dm(install, { userId, text })`
@@ -36,7 +39,9 @@ Three functions, each branching on `install.platform`:
 The **Slack branch is literally the current code**: `send` = `slackApi('chat.postMessage', …)` (`server.mjs:88–97, 101–102`), `update` = `chat.update` re-wrapping `text` into the single `section` block (`:103–104`), `dm` = `conversations.open` + `chat.postMessage` (`:105–109`). The **Teams branch** delegates to `teams/connector.mjs` (§4). The bot token (`deliver`) must never be read outside this layer.
 
 ### 3c. Reroute every Slack wire call site — `slack/server.mjs`
+
 Replace each `apiFor(...)`/`slackApi(...)` with `send`/`update`/`dm`:
+
 - `:169–172`, `:243–245` — drop `inst?.botToken || BOT_TOKEN` + `apiFor`; resolve `install` and call the abstraction.
 - `:218` reply, `:224` approval card, `:228` error, `:178`/`:305` onboarding DM → `send`/`dm`.
 - `:248,252,262,266,268` card updates → `update`.
@@ -44,9 +49,11 @@ Replace each `apiFor(...)`/`slackApi(...)` with `send`/`update`/`dm`:
 - **Tool send path** (`:64–68` `post_report_to_channel` → `ctx.postMessage`, wired at `:210` and `:264`): pass a `send`-bound closure into the tool context instead of the raw Slack `post`. Rename the neutral context keys to `channelId`/`threadId` (currently `channel`/`thread`).
 
 ### 3d. Card builder seam
+
 Move `approvalBlocks` (`server.mjs:140–151`) and `summarizeInput` (`:131–138`) behind a per-adapter card builder. Recommended: a neutral `buildApprovalCard(id, tool, input)` that returns `{ id, tool, input }` (structured), with each adapter rendering it to Block Kit (Slack) or Adaptive Card (Teams). Keep `summarizeInput` neutral by returning `{ key, value }` pairs and letting each adapter format.
 
 ### 3e. Inbound normalization seam (same wave)
+
 Extract `normalizeSlackEvent(payload) → { tenantId, channelId, threadId, userId, text }` from the Slack-shaped reads in `handleEvent` (`:155–193`: `payload.event`, `team_id`, `app_mention`/`message.im`, `<@U…>` cleaning at `:122`, bot-loop suppression via `botUserId` at `:184`). The Teams adapter mirrors this with `normalizeTeamsActivity`.
 
 **Untouched in Step 0:** `watches.mjs`, `pending.mjs`, `memory.mjs`, `usage.mjs`, `store.mjs`, `agent.mjs`, `tools/`, `MARCO_PERSONA`.
@@ -70,6 +77,7 @@ The Teams adapter imports the **same** `TOOLS`, `runAgent`, `getHistory`/`append
 **Inbound (verify-on-receive).** Unlike Slack's hand-rolled HMAC, Teams requires verifying a Microsoft-signed RS256 JWT against a rotating JWKS. Rules (Findings 2): `iss == https://api.botframework.com`; `aud == <MS_APP_ID>`; within validity, 5-min clock skew; signature against a JWKS key (cache, refresh ≤24h); and the **`serviceUrl`-claim-equals-body** check (anti-spoofing, hand-written). Any failure → **403**. (Emulator path is optional, local-testing only — different issuers/metadata; skip for production.)
 
 **Outbound (token-on-send).** One global bot credential, **no per-tenant token**. Mint a service-to-service token: `POST https://login.microsoftonline.com/botframework.com/oauth2/v2.0/token` with `grant_type=client_credentials`, `client_id=MS_APP_ID`, `client_secret=MS_APP_SECRET`, `scope=https://api.botframework.com/.default` → ~3600 s token, **cached bot-wide** and refreshed ~5 min early. The `botframework.com` segment is a literal string (we register single-tenant; see §7). Send/reply/update against the stored `serviceUrl`:
+
 - Reply in thread: `POST {serviceUrl}/v3/conversations/{conversationId}/activities/{activityId}` with `replyToId` set.
 - Proactive / new: `POST {serviceUrl}/v3/conversations/{conversationId}/activities`.
 - Update card in place (the `chat.update` mirror): **`PUT {serviceUrl}/v3/conversations/{conversationId}/activities/{activityId}`**.
@@ -83,6 +91,7 @@ Handle 429 with exponential backoff (respect `Retry-After`), cap activities at 2
 ## 6. Approval flow on Teams (reusing `pending.mjs` unchanged)
 
 The Slack flow maps 1:1; only the card JSON and the inbound shape differ.
+
 1. Agent proposes a dry-run action → `putPending({ tool, input, requestedBy, team:tenantId, channel:conversationId, thread })` (**`pending.mjs` unchanged**), then `send(install, { …, blocks: approvalCard(id, tool, input) })`.
 2. The card carries the pending id in each `Action.Submit`'s `data` (`{ marco:'approve'|'reject', actionId: id }`). Object `data` produces an **invisible** message — no chat noise.
 3. The click returns a normal `message` activity with the payload under **`activity.value`** (`value.actionId` = Slack's `payload.actions[0].value`; `from.aadObjectId` = Slack's `clicker`) and `replyToId` = the card's message id. Respond within ~5 s.
@@ -107,6 +116,7 @@ The Slack flow maps 1:1; only the card JSON and the inbound shape differ.
 ## 9. Env vars & deploy
 
 New Teams env (global, **not** per-tenant):
+
 - `MS_APP_ID` — Bot Framework App ID (also the JWT `aud`, the manifest `botId`, the bot channel id prefix `28:`).
 - `MS_APP_SECRET` — bot secret (client-credentials password).
 - `TEAMS_MESSAGING_PATH` — default `/api/messages` (optional override).
@@ -114,6 +124,7 @@ New Teams env (global, **not** per-tenant):
 Unchanged/shared: `ANTHROPIC_API_KEY`, `RELAY_URL`, `RELAY_SHARED_SECRET`, Upstash, `WATCH_TICK_MS`.
 
 **Deploy shape.** Two clean options:
+
 - **(Recommended) Same Railway process, mount `/api/messages`** alongside the Slack routes in one HTTP server. Pros: one watch ticker (the existing `tickWatches` already resolves the install per alert and, post-Step-0, `send` branches on platform — so it serves Slack and Teams in one loop), one process to operate, shared in-memory caches (event dedupe, token). This is the natural fit.
 - **(Alt) Separate `teams/server.mjs` process / Railway service** if you want isolation of the JWT-verify path or independent scaling. Cost: the watch ticker must run in exactly one place — either keep it Slack-side and have it `send` to Teams installs too (works, since `getInstallation`/`send` are platform-aware after Step 0), or split tickers by platform. Prefer the single-process option unless there's an operational reason to split.
 

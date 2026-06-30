@@ -5,7 +5,7 @@ import {
   buildFerryBoard,
   toTrackedFerry,
   sortFerries,
-  getTrackedItalianFerries,
+  getTrackedFreightVessels,
 } from '../src/services/logistics/ferry-tracker.ts';
 import type { LiveVessel } from '../src/services/logistics/providers/types.ts';
 import type { VesselDataProvider } from '../src/services/logistics/providers/types.ts';
@@ -88,8 +88,8 @@ describe('sortFerries', () => {
   });
 });
 
-describe('getTrackedItalianFerries', () => {
-  it('queries the provider with the Italy bbox + freight categories', async () => {
+describe('getTrackedFreightVessels', () => {
+  it('queries the provider with the Europe-wide bbox + freight categories', async () => {
     let captured: unknown;
     const mockProvider: VesselDataProvider = {
       id: 'mock',
@@ -98,10 +98,11 @@ describe('getTrackedItalianFerries', () => {
         return [vessel({ name: 'GNV RHAPSODY', speedKnots: 16, destination: 'PORTO TORRES' })];
       },
     };
-    const board = await getTrackedItalianFerries(mockProvider);
+    const board = await getTrackedFreightVessels(mockProvider);
     assert.equal(board.length, 1);
     assert.equal(board[0]!.destinationPortId, 'porto_torres');
-    assert.deepEqual((captured as { bbox: number[] }).bbox, [35.0, 6.0, 46.5, 19.5]);
+    // The union box across Italy + UK + Spain + Netherlands (see EUROPE_BBOX).
+    assert.deepEqual((captured as { bbox: number[] }).bbox, [34.0, -11.5, 61.0, 20.0]);
     assert.deepEqual((captured as { categories: string[] }).categories, ['cargo', 'passenger']);
     assert.equal((captured as { freight: boolean }).freight, true);
   });
