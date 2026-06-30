@@ -12,6 +12,7 @@ import {
   regionOf,
   bboxForRegion,
   REGION_LABELS,
+  REGION_ORDER,
   type FreightRegion,
 } from '@/config/italy-ferries';
 import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
@@ -31,12 +32,10 @@ const CONGESTION_LABEL: Record<PortStatus['congestion'], string> = {
   clear: 'Clear', busy: 'Busy', congested: 'Congested',
 };
 
-// Region filter chips, in display order ('all' = the Europe-wide union).
-const REGION_ORDER: FreightRegion[] = ['all', 'it', 'gb', 'es', 'nl'];
-
 /**
- * Live board of Italian freight vessels derived from AIS, with a Vessels/Ports
- * toggle. Self-contained: call start() after mounting to begin polling.
+ * Live board of European freight vessels (Italy, UK, Spain, Netherlands) derived
+ * from AIS, with a region filter and a Vessels/Ports toggle. Self-contained: call
+ * start() after mounting to begin polling.
  */
 export class ItalyFerryPanel extends Panel {
   private ferries: TrackedFerry[] = [];
@@ -99,12 +98,20 @@ export class ItalyFerryPanel extends Panel {
     this.ferryByMmsi.clear();
     for (const f of this.ferries) this.ferryByMmsi.set(f.mmsi, f);
 
-    // The map + headline count reflect the selected region (operator/search filters
-    // the table only — the map shows every vessel in the region, like before).
+    this.renderRegion();
+  }
+
+  /**
+   * Push the current region's vessels to the map + board (and the headline count).
+   * Computes the region slice ONCE and threads it through, so a refresh does a
+   * single filter pass — not one per consumer. Shared by render() + the region click.
+   * The map + count show every vessel in the region; operator/search filter the table.
+   */
+  private renderRegion(): void {
     const regional = this.regionFerries();
     this.setCount(regional.length);
     this.map?.setFerries(regional);
-    this.renderBoard();
+    this.renderBoard(regional);
   }
 
   /** Vessels within the selected region's bbox ('all' → the whole Europe-wide feed). */
@@ -113,7 +120,7 @@ export class ItalyFerryPanel extends Panel {
     return this.ferries.filter((f) => regionOf(f.lat, f.lon) === this.region);
   }
 
-  private renderBoard(): void {
+  private renderBoard(regional: TrackedFerry[] = this.regionFerries()): void {
     const board = this.content.querySelector('.ferry-board');
     if (!board) return;
     // The operator filter bar belongs to the vessels view only.
@@ -122,10 +129,10 @@ export class ItalyFerryPanel extends Panel {
 
     if (this.mode === 'ports') { board.innerHTML = this.portsTableHtml(); return; }
 
-    this.refreshChips();
-    const shown = this.filteredFerries();
+    this.refreshChips(regional);
+    const shown = this.filteredFerries(regional);
     this.setCount(shown.length);
-    if (this.regionFerries().length === 0) {
+    if (regional.length === 0) {
       const where = this.region === 'all' ? '' : ` in ${REGION_LABELS[this.region]}`;
       board.innerHTML = `<div class="economic-empty">No freight vessels currently in view${where}.</div>`;
       return;
@@ -137,10 +144,10 @@ export class ItalyFerryPanel extends Panel {
     board.innerHTML = this.vesselsTableHtml(shown);
   }
 
-  /** Apply the region + operator chip + free-text search filters to the ferry list. */
-  private filteredFerries(): TrackedFerry[] {
+  /** Apply the operator chip + free-text search filters to a region's ferries. */
+  private filteredFerries(regional: TrackedFerry[]): TrackedFerry[] {
     const q = this.searchText.trim().toLowerCase();
-    return this.regionFerries().filter((f) => {
+    return regional.filter((f) => {
       if (this.operatorFilter && f.operatorId !== this.operatorFilter) return false;
       if (q) {
         const hay = `${f.name} ${f.operatorName ?? ''}`.toLowerCase();
@@ -150,22 +157,26 @@ export class ItalyFerryPanel extends Panel {
     });
   }
 
-  /** Rebuild operator chips from the operators currently present in the data. */
-  private refreshChips(): void {
+  /** Rebuild operator chips from the operators present in the region's ferries. */
+  private refreshChips(regional: TrackedFerry[]): void {
     const host = this.content.querySelector<HTMLElement>('.ferry-chips');
     if (!host) return;
-    const list = this.regionFerries();
+    // One pass: collect operator names + tally counts together (avoids a filter per chip).
     const byId = new Map<string, string>();
-    for (const f of list) {
-      if (f.operatorId && f.operatorName) byId.set(f.operatorId, f.operatorName);
+    const counts = new Map<string, number>();
+    for (const f of regional) {
+      if (f.operatorId && f.operatorName) {
+        byId.set(f.operatorId, f.operatorName);
+        counts.set(f.operatorId, (counts.get(f.operatorId) ?? 0) + 1);
+      }
     }
     const ops = [...byId.entries()].sort((a, b) => a[1].localeCompare(b[1]));
     const chip = (id: string | null, label: string, count: number) => {
       const active = (this.operatorFilter ?? null) === id ? ' is-active' : '';
       return `<button type="button" class="ferry-chip${active}" data-op="${id ?? ''}">${escapeHtml(label)}${count >= 0 ? ` <span class="ferry-chip-n">${count}</span>` : ''}</button>`;
     };
-    const chips = [chip(null, 'All', list.length)]
-      .concat(ops.map(([id, name]) => chip(id, name, list.filter((f) => f.operatorId === id).length)));
+    const chips = [chip(null, 'All', regional.length)]
+      .concat(ops.map(([id, name]) => chip(id, name, counts.get(id) ?? 0)));
     host.innerHTML = chips.join('');
   }
 
@@ -278,10 +289,7 @@ export class ItalyFerryPanel extends Panel {
       this.operatorFilter = null;
       this.updateRegionActive();
       this.map?.fitBbox(bboxForRegion(region));
-      const regional = this.regionFerries();
-      this.setCount(regional.length);
-      this.map?.setFerries(regional);
-      this.renderBoard();
+      this.renderRegion();
     });
     this.updateRegionActive();
 
