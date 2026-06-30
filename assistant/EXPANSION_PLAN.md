@@ -11,6 +11,7 @@ routes) — UK/ES/NL are container-dominant, not RoPax-island hubs. Add later on
 asks for passenger-ferry schedules.
 
 ## Why this is config + data, not a rewrite
+
 - **Two services, same repo:** `worldmonitor-relay` (runs `scripts/ais-relay.cjs` + `marinesia.cjs`
   — owns the AIS feed, `/ais/ports` congestion, `/ais/vessels`) and `italy-freight-assistant` (Marco,
   queries the relay). The expansion is **mostly a relay change**; the assistant only needs copy.
@@ -21,6 +22,7 @@ asks for passenger-ferry schedules.
 - **Italy is a query-time bbox filter, not an ingestion wall** (`ITALY_BBOX [35,6,46.5,19.5]`).
 
 ## Prerequisite — Marinesia procurement (USER ACTION, parallel)
+
 The reliable feed needs a **Marinesia API key + quota** sized for the new regions. Italy is 9 tiles
 (3×3 grid); UK/ES/NL add **~25–30 more tiles** (more coastline). **Pricing isn't public — contact
 Marinesia sales.** Then set `MARINESIA_API_KEY` on the **`worldmonitor-relay`** service. Until then,
@@ -30,6 +32,7 @@ validate the data before the feed swap.
 ## Sequenced PRs (each additive — must not regress live Italy)
 
 ### PR-1 — Ports + bbox (relay + shared data) · *no Marinesia key needed*
+
 - Add the major UK/ES/NL **container ports** to the dataset: `id, name, lat, lon, aisNames[],
   region, commercial:true` + their **UN/LOCODEs**. **Coords/LOCODEs verified against an
   authoritative source (UN/LOCODE + port authority), not from memory.**
@@ -42,6 +45,7 @@ validate the data before the feed swap.
 - Deploys to BOTH services (shared data file). Regression-test that Italy ports still report the same.
 
 **Proposed port list (verify coords/LOCODEs in the PR):**
+
 - **UK:** Felixstowe (GBFXT), Southampton (GBSOU), London Gateway (GBLGP), Liverpool (GBLIV),
   Immingham (GBIMM), Tilbury (GBTIL), Teesport (GBTEE), Hull (GBHUL)
 - **Spain:** Valencia (ESVLC), Algeciras (ESALG), Barcelona (ESBCN), Bilbao (ESBIO),
@@ -50,25 +54,30 @@ validate the data before the feed swap.
   Eemshaven (NLEEM)
 
 ### PR-2 — Marinesia multi-region feed (relay) · *needs the key*
+
 - Refactor `scripts/marinesia.cjs`: `ITALY_TILES` → `REGION_TILES = { it, gb, es, nl }`, each a
   `makeGrid(bbox)`; env to select active regions (`MARINESIA_REGIONS=it,gb,es,nl`).
 - `scripts/ais-relay.cjs` polls all active regions round-robin (mind the 5 req/min rate + 2000/tile cap).
 - Set `MARINESIA_API_KEY` (+ regions) on `worldmonitor-relay`; the reliability swap from aisstream.
 
 ### PR-3 — Assistant copy/prompts (assistant only)
+
 - Generalize ~12 strings from "Italian ports" → "Italy, UK, Spain & the Netherlands": `DEFAULT_SYSTEM`
   (`assistant/agent.mjs`), `MARCO_PERSONA`, tool descriptions (`tools/freight.mjs`), onboarding
   (slack + teams), the Slack/Teams **manifests**, legal pages, landing copy.
 
 ### PR-4 (optional, later) — Frontend map + weather alerts
+
 - Generalize the Italy-bbox ferry map to multi-region; extend Meteoalarm regions (it already covers
   ES/NL/UK — mostly config). Lower priority for the assistant's freight value.
 
 ## What does NOT change
+
 Congestion thresholds (clear<4 / busy / congested≥8), watch evaluation, port-call detection, the
 agent loop, the approval flow, the Slack/Teams adapters. All port-agnostic — they just see more ports.
 
 ## Risks / safety
+
 - The relay serves the **live Italy pipeline** — every change is additive; regression-test Italy.
 - **Stage on aisstream first** (PR-1) to validate the port data before the Marinesia swap (PR-2).
 - Data curation (coords/aliases/LOCODEs) is the long pole — verify each port; wrong coords → wrong congestion.
@@ -76,5 +85,6 @@ agent loop, the approval flow, the Slack/Teams adapters. All port-agnostic — t
   in PR-1, or keep it (less churn) and just add ports.
 
 ## Effort
+
 PR-1 ~2–3 days (mostly verified data curation) · PR-2 ~1–2 days (relay tiles) + the Marinesia
 procurement (user, lead time unknown) · PR-3 ~half a day. First customer-demoable slice = PR-1 + PR-3.
