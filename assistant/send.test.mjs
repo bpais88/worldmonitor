@@ -72,7 +72,41 @@ test('send → Teams: routes through the connector to the Bot Framework reply UR
   } finally { globalThis.fetch = real; }
 });
 
-test('update/dm still throw for Teams (Adaptive-card update + onboarding DM land in later PRs)', async () => {
-  await assert.rejects(() => update({ platform: 'teams' }, { channelId: 'c', messageId: 'm', text: 't' }), /teams delivery not wired/);
+test('send → Teams card: posts an adaptive-card attachment with no sibling text', async () => {
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    if (url.includes('/oauth2/v2.0/token')) return { ok: true, json: async () => ({ access_token: 'tok', expires_in: 3600 }) };
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    const install = { platform: 'teams', deliver: { serviceUrl: 'https://smba/', from: { id: '28:b' }, recipient: { id: '29:u' } } };
+    const card = { type: 'AdaptiveCard', version: '1.5', actions: [] };
+    await send(install, { channelId: 'conv', threadId: 'act', card });
+    const body = JSON.parse(calls.find((c) => c.url.includes('/v3/conversations/')).opts.body);
+    assert.equal(body.attachments[0].contentType, 'application/vnd.microsoft.card.adaptive');
+    assert.deepEqual(body.attachments[0].content, card);
+    assert.equal(body.text, undefined);
+  } finally { globalThis.fetch = real; }
+});
+
+test('update → Teams: PUTs the card activity in place to resolve it', async () => {
+  const calls = [];
+  const real = globalThis.fetch;
+  globalThis.fetch = async (url, opts) => {
+    calls.push({ url, opts });
+    if (url.includes('/oauth2/v2.0/token')) return { ok: true, json: async () => ({ access_token: 'tok', expires_in: 3600 }) };
+    return { ok: true, json: async () => ({}) };
+  };
+  try {
+    await update({ platform: 'teams', deliver: { serviceUrl: 'https://smba/' } }, { channelId: 'conv', messageId: 'card-1', text: '✅ done' });
+    const put = calls.find((c) => c.url.includes('/v3/conversations/'));
+    assert.equal(put.opts.method, 'PUT');
+    assert.deepEqual(JSON.parse(put.opts.body), { type: 'message', text: '✅ done' });
+  } finally { globalThis.fetch = real; }
+});
+
+test('dm still throws for Teams (onboarding uses send() to the conversation; create-conversation later)', async () => {
   await assert.rejects(() => dm({ platform: 'teams' }, { userId: 'u', text: 't' }), /teams delivery not wired/);
 });
