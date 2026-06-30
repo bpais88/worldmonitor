@@ -990,7 +990,6 @@
     "ESBCN": "barcelona",
     "ESBIO": "bilbao",
     "ESTAR": "tarragona",
-    "ESCAR": "cartagena_es",
     "ESVGO": "vigo",
     "NLRTM": "rotterdam",
     "NLAMS": "amsterdam",
@@ -1130,7 +1129,7 @@
       "keywords": [
         "MAERSK"
       ],
-      "freight": true
+      "freight": false
     },
     {
       "id": "msc_line",
@@ -1138,7 +1137,7 @@
       "keywords": [
         "MSC"
       ],
-      "freight": true
+      "freight": false
     },
     {
       "id": "cma_cgm",
@@ -1147,7 +1146,7 @@
         "CMA CGM",
         "CMACGM"
       ],
-      "freight": true
+      "freight": false
     },
     {
       "id": "hapag_lloyd",
@@ -1155,7 +1154,7 @@
       "keywords": [
         "HAPAG"
       ],
-      "freight": true
+      "freight": false
     },
     {
       "id": "cosco",
@@ -1163,7 +1162,7 @@
       "keywords": [
         "COSCO"
       ],
-      "freight": true
+      "freight": false
     },
     {
       "id": "evergreen",
@@ -1171,7 +1170,7 @@
       "keywords": [
         "EVERGREEN"
       ],
-      "freight": true
+      "freight": false
     },
     {
       "id": "stena",
