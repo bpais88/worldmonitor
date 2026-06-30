@@ -2,12 +2,18 @@ import { Panel } from './Panel';
 import { escapeHtml } from '@/utils/sanitize';
 import { ItalyFerryMap } from './ItalyFerryMap';
 import {
-  getTrackedItalianFerries,
+  getTrackedFreightVessels,
   type TrackedFerry,
   type FerryStatus,
 } from '@/services/logistics/ferry-tracker';
 import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
 import { getPortStatus, type PortStatus } from '@/services/logistics/port-status';
+import {
+  regionOf,
+  bboxForRegion,
+  REGION_LABELS,
+  type FreightRegion,
+} from '@/config/italy-ferries';
 import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
 import { describeFreshness } from '@/services/logistics/freshness';
 
@@ -25,6 +31,9 @@ const CONGESTION_LABEL: Record<PortStatus['congestion'], string> = {
   clear: 'Clear', busy: 'Busy', congested: 'Congested',
 };
 
+// Region filter chips, in display order ('all' = the Europe-wide union).
+const REGION_ORDER: FreightRegion[] = ['all', 'it', 'gb', 'es', 'nl'];
+
 /**
  * Live board of Italian freight vessels derived from AIS, with a Vessels/Ports
  * toggle. Self-contained: call start() after mounting to begin polling.
@@ -33,6 +42,7 @@ export class ItalyFerryPanel extends Panel {
   private ferries: TrackedFerry[] = [];
   private ports: PortStatus[] = [];
   private mode: BoardMode = 'vessels';
+  private region: FreightRegion = 'all'; // country filter, or 'all' = Europe-wide
   private operatorFilter: string | null = null; // operatorId, or null = all
   private searchText = '';
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -41,7 +51,7 @@ export class ItalyFerryPanel extends Panel {
   private readonly ferryByMmsi = new Map<string, TrackedFerry>();
 
   constructor() {
-    super({ id: 'italy-ferries', title: 'Italy Freight', showCount: true });
+    super({ id: 'italy-ferries', title: 'European Freight', showCount: true });
   }
 
   public start(): void {
@@ -53,9 +63,8 @@ export class ItalyFerryPanel extends Panel {
 
   public async refresh(): Promise<void> {
     try {
-      const ferries = await getTrackedItalianFerries();
+      const ferries = await getTrackedFreightVessels();
       this.ferries = ferries;
-      this.setCount(ferries.length);
       // Freshness badge: "as of HH:MM:SS" normally, "warming up…" right after a relay
       // restart (count still filling), or "stale" if ingest has stalled.
       const { state, detail } = describeFreshness(aisStreamProvider.lastMeta);
@@ -90,8 +99,18 @@ export class ItalyFerryPanel extends Panel {
     this.ferryByMmsi.clear();
     for (const f of this.ferries) this.ferryByMmsi.set(f.mmsi, f);
 
-    this.map?.setFerries(this.ferries);
+    // The map + headline count reflect the selected region (operator/search filters
+    // the table only — the map shows every vessel in the region, like before).
+    const regional = this.regionFerries();
+    this.setCount(regional.length);
+    this.map?.setFerries(regional);
     this.renderBoard();
+  }
+
+  /** Vessels within the selected region's bbox ('all' → the whole Europe-wide feed). */
+  private regionFerries(): TrackedFerry[] {
+    if (this.region === 'all') return this.ferries;
+    return this.ferries.filter((f) => regionOf(f.lat, f.lon) === this.region);
   }
 
   private renderBoard(): void {
@@ -106,8 +125,9 @@ export class ItalyFerryPanel extends Panel {
     this.refreshChips();
     const shown = this.filteredFerries();
     this.setCount(shown.length);
-    if (this.ferries.length === 0) {
-      board.innerHTML = '<div class="economic-empty">No Italian freight vessels currently in view.</div>';
+    if (this.regionFerries().length === 0) {
+      const where = this.region === 'all' ? '' : ` in ${REGION_LABELS[this.region]}`;
+      board.innerHTML = `<div class="economic-empty">No freight vessels currently in view${where}.</div>`;
       return;
     }
     if (shown.length === 0) {
@@ -117,10 +137,10 @@ export class ItalyFerryPanel extends Panel {
     board.innerHTML = this.vesselsTableHtml(shown);
   }
 
-  /** Apply the operator chip + free-text search filters to the ferry list. */
+  /** Apply the region + operator chip + free-text search filters to the ferry list. */
   private filteredFerries(): TrackedFerry[] {
     const q = this.searchText.trim().toLowerCase();
-    return this.ferries.filter((f) => {
+    return this.regionFerries().filter((f) => {
       if (this.operatorFilter && f.operatorId !== this.operatorFilter) return false;
       if (q) {
         const hay = `${f.name} ${f.operatorName ?? ''}`.toLowerCase();
@@ -134,8 +154,9 @@ export class ItalyFerryPanel extends Panel {
   private refreshChips(): void {
     const host = this.content.querySelector<HTMLElement>('.ferry-chips');
     if (!host) return;
+    const list = this.regionFerries();
     const byId = new Map<string, string>();
-    for (const f of this.ferries) {
+    for (const f of list) {
       if (f.operatorId && f.operatorName) byId.set(f.operatorId, f.operatorName);
     }
     const ops = [...byId.entries()].sort((a, b) => a[1].localeCompare(b[1]));
@@ -143,8 +164,8 @@ export class ItalyFerryPanel extends Panel {
       const active = (this.operatorFilter ?? null) === id ? ' is-active' : '';
       return `<button type="button" class="ferry-chip${active}" data-op="${id ?? ''}">${escapeHtml(label)}${count >= 0 ? ` <span class="ferry-chip-n">${count}</span>` : ''}</button>`;
     };
-    const chips = [chip(null, 'All', this.ferries.length)]
-      .concat(ops.map(([id, name]) => chip(id, name, this.ferries.filter((f) => f.operatorId === id).length)));
+    const chips = [chip(null, 'All', list.length)]
+      .concat(ops.map(([id, name]) => chip(id, name, list.filter((f) => f.operatorId === id).length)));
     host.innerHTML = chips.join('');
   }
 
@@ -190,10 +211,13 @@ export class ItalyFerryPanel extends Panel {
   }
 
   private portsTableHtml(): string {
-    if (this.ports.length === 0) {
+    const ports = this.region === 'all'
+      ? this.ports
+      : this.ports.filter((p) => regionOf(p.lat, p.lon) === this.region);
+    if (ports.length === 0) {
       return '<div class="economic-empty">Port status unavailable.</div>';
     }
-    const rows = this.ports.map((p) => `
+    const rows = ports.map((p) => `
       <tr>
         <td class="ferry-name">${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.region ?? '—')}</td>
@@ -217,6 +241,9 @@ export class ItalyFerryPanel extends Panel {
   private ensureScaffold(): void {
     if (this.mapMounted) return;
     this.content.innerHTML = `
+      <div class="ferry-regions" role="tablist">
+        ${REGION_ORDER.map((r) => `<button type="button" class="ferry-region-btn" data-region="${r}">${escapeHtml(REGION_LABELS[r])}</button>`).join('')}
+      </div>
       <div class="ferry-toggle" role="tablist">
         <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
         <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
@@ -238,6 +265,25 @@ export class ItalyFerryPanel extends Panel {
     `;
     const host = this.content.querySelector<HTMLElement>('.ferry-map-host');
     if (host) this.map = new ItalyFerryMap(host);
+
+    // Region filter: scopes both views to one country (or the Europe-wide union),
+    // and zooms the map to that region. Switching region clears the operator filter
+    // (a carrier present in one country may be absent in another).
+    const regions = this.content.querySelector<HTMLElement>('.ferry-regions');
+    regions?.addEventListener('click', (e) => {
+      const btn = (e.target as HTMLElement).closest<HTMLElement>('button[data-region]');
+      const region = btn?.dataset.region as FreightRegion | undefined;
+      if (!region || region === this.region) return;
+      this.region = region;
+      this.operatorFilter = null;
+      this.updateRegionActive();
+      this.map?.fitBbox(bboxForRegion(region));
+      const regional = this.regionFerries();
+      this.setCount(regional.length);
+      this.map?.setFerries(regional);
+      this.renderBoard();
+    });
+    this.updateRegionActive();
 
     // Mode toggle.
     const toggle = this.content.querySelector<HTMLElement>('.ferry-toggle');
@@ -286,6 +332,11 @@ export class ItalyFerryPanel extends Panel {
   private updateToggleActive(): void {
     const btns = this.content.querySelectorAll<HTMLElement>('.ferry-toggle-btn');
     btns.forEach((b) => b.classList.toggle('is-active', b.dataset.mode === this.mode));
+  }
+
+  private updateRegionActive(): void {
+    const btns = this.content.querySelectorAll<HTMLElement>('.ferry-region-btn');
+    btns.forEach((b) => b.classList.toggle('is-active', b.dataset.region === this.region));
   }
 
   private teardownMap(): void {

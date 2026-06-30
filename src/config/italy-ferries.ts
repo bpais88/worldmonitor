@@ -23,8 +23,10 @@ export interface FerryPort {
   side: 'mainland' | 'island';
   /** Island group / region (for grouping island ports). */
   group?: string;
-  /** Italian administrative region (matches Meteoalarm cap:areaDesc, e.g. "Campania"). */
+  /** Administrative region (matches Meteoalarm cap:areaDesc, e.g. "Campania", "Catalonia"). */
   region?: string;
+  /** ISO country of the port ('IT' assumed when absent). Drives the region filter. */
+  country?: 'IT' | 'GB' | 'ES' | 'NL';
   /** True for a commercial freight port (vs an island/tourist terminal). */
   commercial?: boolean;
   /** Common AIS destination-field spellings (UPPERCASE) for text matching. */
@@ -48,8 +50,48 @@ export interface FerryRoute {
   operatorId?: string;
 }
 
-/** Bounding box covering Italy + surrounding seas: [swLat, swLon, neLat, neLon]. */
-export const ITALY_BBOX: [number, number, number, number] = [35.0, 6.0, 46.5, 19.5];
+/** A bounding box as [swLat, swLon, neLat, neLon]. */
+export type Bbox = [number, number, number, number];
+
+/** Bounding box covering Italy + surrounding seas. */
+export const ITALY_BBOX: Bbox = [35.0, 6.0, 46.5, 19.5];
+
+/** The covered freight regions — 'all' is the Europe-wide union, the rest are per-country. */
+export type FreightRegion = 'all' | 'it' | 'gb' | 'es' | 'nl';
+
+/** Per-country bounding boxes for the freight board (each [swLat, swLon, neLat, neLon]). */
+export const REGION_BBOXES: Record<Exclude<FreightRegion, 'all'>, Bbox> = {
+  it: ITALY_BBOX,
+  gb: [49.0, -11.0, 61.0, 2.5],
+  es: [35.5, -10.0, 44.5, 4.5],
+  nl: [50.5, 2.5, 54.0, 7.5],
+};
+
+/** Union box across every covered country — the default ('all') board scope. */
+export const EUROPE_BBOX: Bbox = [34.0, -11.5, 61.0, 20.0];
+
+/** Human labels for the region selector, in display order. */
+export const REGION_LABELS: Record<FreightRegion, string> = {
+  all: 'All', it: 'Italy', gb: 'UK', es: 'Spain', nl: 'Netherlands',
+};
+
+/** The bbox to query/zoom for a region ('all' → the Europe union). */
+export function bboxForRegion(region: FreightRegion): Bbox {
+  return region === 'all' ? EUROPE_BBOX : REGION_BBOXES[region];
+}
+
+/**
+ * Which covered country a coordinate falls in, or null if outside all of them.
+ * Used to filter the Europe-wide vessel/port feed down to a selected region
+ * client-side (the boxes are near-disjoint, so first-match is unambiguous).
+ */
+export function regionOf(lat: number, lon: number): Exclude<FreightRegion, 'all'> | null {
+  for (const region of ['it', 'gb', 'es', 'nl'] as const) {
+    const [s, w, n, e] = REGION_BBOXES[region];
+    if (lat >= s && lat <= n && lon >= w && lon <= e) return region;
+  }
+  return null;
+}
 
 export const ITALY_FERRY_PORTS: FerryPort[] = ferryData.ports as unknown as FerryPort[];
 

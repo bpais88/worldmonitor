@@ -8,7 +8,7 @@
 
 import maplibregl from 'maplibre-gl';
 import { escapeHtml } from '@/utils/sanitize';
-import { ITALY_BBOX } from '@/config/italy-ferries';
+import { EUROPE_BBOX, type Bbox } from '@/config/italy-ferries';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
 
@@ -18,10 +18,11 @@ const SOURCE_ID = 'ferries';
 const ARROW_ICON = 'ferry-arrow';
 
 // bbox is [latMin, lonMin, latMax, lonMax]; MapLibre wants [[w,s],[e,n]].
-const BOUNDS: [[number, number], [number, number]] = [
-  [ITALY_BBOX[1], ITALY_BBOX[0]],
-  [ITALY_BBOX[3], ITALY_BBOX[2]],
+const toMapBounds = (b: Bbox): [[number, number], [number, number]] => [
+  [b[1], b[0]],
+  [b[3], b[2]],
 ];
+const BOUNDS = toMapBounds(EUROPE_BBOX);
 
 const STATUS_MATCH = [
   'match', ['get', 'status'],
@@ -218,6 +219,11 @@ export class ItalyFerryMap {
     }
     const source = this.map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
     source?.setData(ferriesToGeoJSON(ferries) as unknown as GeoJSON.FeatureCollection);
+  }
+
+  /** Zoom/pan to a region's bounding box — used when the region filter changes. */
+  public fitBbox(bbox: Bbox): void {
+    this.map.fitBounds(toMapBounds(bbox), { padding: 24, duration: 600 });
   }
 
   public destroy(): void {

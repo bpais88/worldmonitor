@@ -8,7 +8,7 @@ import type { VesselDataProvider, LiveVessel } from './providers/types';
 import { aisStreamProvider } from './providers/aisstream';
 import type { EtaSource } from './types';
 import {
-  ITALY_BBOX,
+  EUROPE_BBOX,
   ITALY_FERRY_PORTS,
   ITALY_FERRY_OPERATORS,
 } from '../../config/italy-ferries';
@@ -138,16 +138,22 @@ export function buildFerryBoard(vessels: LiveVessel[], now: number = Date.now())
     .sort(sortFerries);
 }
 
-/** Fetch and build the live Italian ferry board from a provider. */
-export async function getTrackedItalianFerries(
+/**
+ * Fetch and build the live freight-vessel board from a provider. Queries the
+ * Europe-wide union box (Italy + UK + Spain + Netherlands); the UI filters the
+ * result down to a selected region client-side via {@link regionOf}.
+ */
+export async function getTrackedFreightVessels(
   provider: VesselDataProvider = aisStreamProvider,
   now: number = Date.now(),
 ): Promise<TrackedFerry[]> {
   const vessels = await provider.getVesselsInBounds({
-    bbox: ITALY_BBOX,
+    bbox: EUROPE_BBOX,
     categories: ['cargo', 'passenger'],
     freight: true,
-    limit: 3000,
+    // Europe-wide holds ~2.2k freight vessels (vs a few hundred for Italy alone);
+    // 5000 leaves headroom so a busy North Sea peak isn't silently truncated.
+    limit: 5000,
   });
   return buildFerryBoard(vessels, now);
 }
