@@ -28,8 +28,20 @@ const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>
 // load, matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost hoisting.
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 
+// Read a query value WITHOUT application/x-www-form-urlencoded decoding — URLSearchParams turns a
+// literal `+` into a space, which would corrupt a base64 secret. We compare the secret verbatim, so
+// the webhook URL can carry `?k=<secret>` literally (a hex/base64url secret is safe; only a raw `&`
+// or `#` inside the secret would still need avoiding).
+export function rawQueryValue(search, key) {
+  for (const pair of (search || '').replace(/^\?/, '').split('&')) {
+    const i = pair.indexOf('=');
+    if ((i < 0 ? pair : pair.slice(0, i)) === key) return i < 0 ? '' : pair.slice(i + 1);
+  }
+  return null;
+}
+
 export async function handleWhatsAppRequest(req, res, body, u) {
-  const ok = verifyWebhookSecret({ provided: u.searchParams.get('k'), expected: WEBHOOK_SECRET });
+  const ok = verifyWebhookSecret({ provided: rawQueryValue(u.search, 'k'), expected: WEBHOOK_SECRET });
   if (!ok) {
     console.warn('[whatsapp] webhook auth rejected');
     res.writeHead(403);
