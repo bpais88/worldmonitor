@@ -8,7 +8,11 @@ const LOCAL_RELAY_PORTS_URL = 'http://localhost:3004/ais/ports';
 
 export type PortCongestion = 'clear' | 'busy' | 'congested';
 
-/** Cumulative inbound-arrival counts by geometric ETA (a vessel <6 h out is in all four). */
+/**
+ * Cumulative inbound-arrival counts by geometric ETA (a vessel <6 h out is in all four).
+ * All-zero means "absent / no data" (e.g. before the relay serves the field) — the UI
+ * renders that as "—" rather than a misleading "0 arrivals".
+ */
 export interface InboundEta {
   h6: number;
   h12: number;
