@@ -27,11 +27,14 @@ const WHATSAPP_SYSTEM =
   'answer freight/port/weather questions; you cannot take actions.';
 const MAX_REPLY = 1500; // WhatsApp per-message limit is 1600 — keep a margin.
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
+// The shared secret Twilio sends as the Basic-auth password (see verify.mjs). Read once at load,
+// matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost by hoisting.
+const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 
 export async function handleWhatsAppRequest(req, res, body) {
   const ok = verifyWebhookBasicAuth({
     header: req.headers['authorization'],
-    expectedSecret: process.env.WHATSAPP_WEBHOOK_SECRET || '',
+    expectedSecret: WEBHOOK_SECRET,
   });
   if (!ok) {
     console.warn('[whatsapp] webhook auth rejected');

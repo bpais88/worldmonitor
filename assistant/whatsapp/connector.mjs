@@ -4,10 +4,13 @@
 // only through send.mjs's whatsapp branch.
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
-// REST auth: a scoped API key (SK…:secret) is preferred over the account-wide Auth Token, but
-// either pair is valid Basic auth for the Twilio API — the URL still addresses the account SID.
-const AUTH_USER = process.env.TWILIO_API_KEY_SID || TWILIO_ACCOUNT_SID;
-const AUTH_PASS = process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN || '';
+// REST auth: prefer a scoped API key (SK…:secret) over the account-wide Auth Token; either pair is
+// valid Basic auth for the Twilio API (the URL still addresses the account SID). Select the pair
+// ATOMICALLY — a half-set API key must not borrow the Auth Token as its password, which would form
+// a mismatched pair Twilio 401s while slipping past the local guard.
+const [AUTH_USER, AUTH_PASS] = process.env.TWILIO_API_KEY_SID
+  ? [process.env.TWILIO_API_KEY_SID, process.env.TWILIO_API_KEY_SECRET || '']
+  : [TWILIO_ACCOUNT_SID, process.env.TWILIO_AUTH_TOKEN || ''];
 // The WhatsApp sender, e.g. "whatsapp:+14155238886" (the Twilio sandbox or your approved sender).
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || '';
 

@@ -25,7 +25,7 @@ function safeEqual(a, b) {
  * Verify the HTTP Basic credential Twilio sends for a userinfo-authenticated webhook URL.
  * `header` is the raw `Authorization` header. Fail-closed on any missing/malformed input.
  */
-export function verifyWebhookBasicAuth({ header, expectedUser = WEBHOOK_USER, expectedSecret }) {
+export function verifyWebhookBasicAuth({ header, expectedSecret }) {
   if (!expectedSecret || !header) return false;
   const m = /^Basic\s+(.+)$/i.exec(header.trim());
   if (!m) return false;
@@ -34,5 +34,5 @@ export function verifyWebhookBasicAuth({ header, expectedUser = WEBHOOK_USER, ex
   const i = decoded.indexOf(':');
   if (i < 0) return false;
   // Username isn't secret (it's in the URL), so its compare needn't be constant-time; the secret's must be.
-  return decoded.slice(0, i) === expectedUser && safeEqual(decoded.slice(i + 1), expectedSecret);
+  return decoded.slice(0, i) === WEBHOOK_USER && safeEqual(decoded.slice(i + 1), expectedSecret);
 }
