@@ -4,8 +4,10 @@
 // API through the neutral send() seam.
 //
 // Scope: reactive Q&A only — we always reply inside WhatsApp's 24h free-form window, so no
-// message templates are needed. Proactive alerts (which require Meta-approved templates) are
-// a later phase; that's why watches + action tools are excluded here.
+// message templates are needed. Watches + action tools are excluded: actions have no approval
+// affordance in plain text, and watches need BOTH proactive delivery (approved templates) AND
+// a per-user scope (today's single team:'whatsapp' tenant would cross-leak list/cancel across
+// users) — both land together in the proactive phase.
 import { verifyTwilioSignature } from './verify.mjs';
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
@@ -26,18 +28,11 @@ const WHATSAPP_SYSTEM =
 const MAX_REPLY = 1500; // WhatsApp per-message limit is 1600 — keep a margin.
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 
-/** Parse a form-encoded webhook body into a plain params object. */
-function parseForm(body) {
-  const params = {};
-  for (const [k, v] of new URLSearchParams(body || '')) params[k] = v;
-  return params;
-}
-
 /**
  * The public URL Twilio signed against — reconstructed from the forwarded headers Railway
  * sets, overridable via WHATSAPP_PUBLIC_URL for an exact match if the proxy rewrites host.
  */
-export function webhookUrl(req, u) {
+function webhookUrl(req, u) {
   const base = process.env.WHATSAPP_PUBLIC_URL;
   if (base) return `${base.replace(/\/+$/, '')}${u.pathname}${u.search}`;
   const proto = req.headers['x-forwarded-proto'] || 'https';
@@ -46,7 +41,7 @@ export function webhookUrl(req, u) {
 }
 
 export async function handleWhatsAppRequest(req, res, body, u) {
-  const params = parseForm(body);
+  const params = Object.fromEntries(new URLSearchParams(body || ''));
   const ok = verifyTwilioSignature({
     authToken: process.env.TWILIO_AUTH_TOKEN || '',
     signature: req.headers['x-twilio-signature'],
@@ -88,10 +83,10 @@ async function dispatch(params) {
     const day = await recordUsage('whatsapp', usage);
     console.log(`[whatsapp]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${out.length} chars` +
       (day ? ` · today ${day.messages} msg` : ''));
-    await send(install, { channelId: user, text: out });
+    await send(install, { text: out }); // WhatsApp routes by install.deliver.to, not channelId
     await appendTurn(key, text, out);
   } catch (e) {
     console.error('[whatsapp] agent error:', e.message);
-    await send(install, { channelId: user, text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
+    await send(install, { text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
   }
 }
