@@ -1723,11 +1723,169 @@ const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { ITALY_TILES, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
-const { computeAllPortStatus, smoothPortStatus } = require('./port-status.cjs');
+const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
 const portStatusHistory = new Map();
 const ITALY_PORTS_BY_ID = require('../src/config/italy-ferries.data.json').ports;
+
+// ── Geofence engine + port-history sampler ─────────────────────────────────
+// One circular geofence per commercial port (seeded from the ports dataset,
+// radius = the "atPort" 8 km). A periodic sampler diffs vessel-in-zone
+// membership into enter/exit events and logs a congestion snapshot, persisting
+// both to Upstash — the arrivals/departures/dwell + baseline history a port-
+// congestion forecast is built on, and the event stream a geofence-alert layer
+// will consume. Served read-only at /ais/geofences (zone shapes for the map)
+// and /ais/port-history (the time-series).
+const { buildPortGeofences, computeMembership, diffMembership } = require('./geofence-engine.cjs');
+const PORT_GEOFENCES = buildPortGeofences(ITALY_PORTS_BY_ID);
+
+const PORT_HISTORY_ENABLED = process.env.PORT_HISTORY_ENABLED !== '0';
+const GEOFENCE_TICK_MS = safeInt(process.env.GEOFENCE_TICK_MS, 60_000, 15_000); // in-memory membership/event cadence
+const PORT_SNAPSHOT_MS = safeInt(process.env.PORT_SNAPSHOT_MS, 5 * 60_000, 60_000); // congestion snapshot cadence
+const PORT_PERSIST_MS = safeInt(process.env.PORT_PERSIST_MS, 5 * 60_000, 60_000); // Redis flush cadence (decoupled from sampling)
+const PORT_HISTORY_REDIS_KEY = `${RELAY_ENV_PREFIX}relay:port-history:v1`;
+const PORT_HISTORY_TTL_SECONDS = 30 * 24 * 60 * 60; // 30d
+const PORT_HISTORY_MAX_SNAPSHOTS = safeInt(process.env.PORT_HISTORY_MAX_SNAPSHOTS, 4032, 100); // ~14d @5min
+const PORT_HISTORY_MAX_EVENTS = safeInt(process.env.PORT_HISTORY_MAX_EVENTS, 20000, 100);
+
+const portHistoryState = {
+  snapshots: [], // { ts, ports: [{ portId, atPort, inbound, congestion }] }
+  events: [], // { ts, gfId, portId, mmsi, kind: 'enter'|'exit', dwellMin? }
+  membership: new Map(), // gfId -> Set<mmsi> from the last tick
+  enterTimes: new Map(), // `${gfId}:${mmsi}` -> entry ts (for dwell on exit)
+  _persistVersion: 0,
+  _lastPersistedVersion: 0,
+  _persistInFlight: false,
+};
+
+// The sampler keeps its OWN atPort-smoothing window so the 5-min snapshot cadence
+// doesn't cross-contaminate the request-driven /ais/ports smoothing (portStatusHistory).
+const portSnapshotHistory = new Map();
+
+// Push items onto a bounded array, keeping the newest `max`.
+function pushCapped(arr, items, max) {
+  arr.push(...items);
+  return arr.length > max ? arr.slice(-max) : arr;
+}
+
+// Serialize the geofence membership Map (gfId -> Set<mmsi>) for Redis persistence.
+function serializeMembership(m) {
+  const o = {};
+  for (const [gfId, set] of m) if (set.size) o[gfId] = [...set];
+  return o;
+}
+
+// Freight vessels currently in memory, shaped for congestion + geofence checks.
+// One definition of "freight", shared by the /ais/ports handler and the sampler.
+function buildFreightVesselList() {
+  const out = [];
+  for (const [mmsi, v] of vessels) {
+    const stat = vesselStatic.get(mmsi);
+    const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
+    const name = v.name || (stat && stat.name) || '';
+    if (!isFreightVessel(st, name, stat && stat.imo)) continue;
+    out.push({
+      mmsi, lat: v.lat, lon: v.lon, speed: v.speed, navStatus: v.navStatus,
+      timestamp: v.timestamp, destination: stat && stat.destination,
+    });
+  }
+  return out;
+}
+
+function samplePortHistory(now = Date.now()) {
+  try {
+    // Same freshness cutoff as the /ais/ports snapshot (computePortStatus): a contact
+    // that stopped reporting while inside a zone is treated as gone, so its exit fires
+    // on time and dwell isn't inflated — rather than lingering until the vessels-Map
+    // eviction path (DENSITY_WINDOW) happens to run.
+    const fresh = buildFreightVesselList().filter(
+      (v) => !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_STATUS_DEFAULTS.freshMs,
+    );
+    // Geofence membership diff -> enter/exit events (arrivals/departures/dwell).
+    const next = computeMembership(fresh, PORT_GEOFENCES);
+    const events = diffMembership(portHistoryState.membership, next, now, portHistoryState.enterTimes, PORT_GEOFENCES);
+    portHistoryState.membership = next;
+    if (events.length) {
+      portHistoryState.events = pushCapped(portHistoryState.events, events, PORT_HISTORY_MAX_EVENTS);
+      portHistoryState._persistVersion++;
+    }
+    // Congestion snapshot on the slower cadence (baseline/seasonality fuel).
+    const lastSnapshotAt = portHistoryState.snapshots.at(-1)?.ts ?? 0;
+    if (now - lastSnapshotAt >= PORT_SNAPSHOT_MS) {
+      const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
+      smoothPortStatus(ports, portSnapshotHistory);
+      const snapshot = {
+        ts: now,
+        ports: ports.map((p) => ({ portId: p.portId, atPort: p.atPort, inbound: p.inbound, congestion: p.congestion })),
+      };
+      portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
+      portHistoryState._persistVersion++;
+    }
+  } catch (e) {
+    console.warn('[Relay] port-history sample error:', e.message);
+  }
+}
+
+// Persist snapshots + events to Redis, throttled by version (mirrors OREF).
+async function persistPortHistory() {
+  if (!UPSTASH_ENABLED) return;
+  if (portHistoryState._persistVersion === portHistoryState._lastPersistedVersion) return;
+  if (portHistoryState._persistInFlight) return;
+  portHistoryState._persistInFlight = true;
+  const version = portHistoryState._persistVersion;
+  try {
+    const ok = await upstashSet(PORT_HISTORY_REDIS_KEY, {
+      snapshots: portHistoryState.snapshots,
+      events: portHistoryState.events,
+      membership: serializeMembership(portHistoryState.membership),
+      enterTimes: Object.fromEntries(portHistoryState.enterTimes),
+      persistedAt: new Date().toISOString(),
+    }, PORT_HISTORY_TTL_SECONDS);
+    if (ok) portHistoryState._lastPersistedVersion = version;
+  } catch (e) {
+    console.warn('[Relay] port-history persist failed:', e.message);
+  } finally {
+    portHistoryState._persistInFlight = false;
+  }
+}
+
+async function bootstrapPortHistory() {
+  if (!UPSTASH_ENABLED) return;
+  try {
+    const cached = await upstashGet(PORT_HISTORY_REDIS_KEY);
+    if (cached && Array.isArray(cached.snapshots)) {
+      portHistoryState.snapshots = cached.snapshots.slice(-PORT_HISTORY_MAX_SNAPSHOTS);
+      portHistoryState.events = Array.isArray(cached.events) ? cached.events.slice(-PORT_HISTORY_MAX_EVENTS) : [];
+      // Restore OPEN zone occupancy so vessels still in port across a restart aren't
+      // replayed as fresh enters — and their dwell keeps counting from the real entry.
+      if (cached.membership && typeof cached.membership === 'object') {
+        portHistoryState.membership = new Map(
+          Object.entries(cached.membership).map(([gfId, arr]) => [gfId, new Set(arr)]),
+        );
+      }
+      if (cached.enterTimes && typeof cached.enterTimes === 'object') {
+        portHistoryState.enterTimes = new Map(
+          Object.entries(cached.enterTimes).map(([k, v]) => [k, Number(v)]),
+        );
+      }
+      console.log(`[Relay] port-history bootstrapped (${portHistoryState.snapshots.length} snapshots, ${portHistoryState.events.length} events, ${portHistoryState.membership.size} open zones)`);
+    }
+  } catch (e) {
+    console.warn('[Relay] port-history bootstrap failed:', e.message);
+  }
+}
+
+async function startPortHistoryLoop() {
+  if (!PORT_HISTORY_ENABLED) { console.log('[Relay] port-history sampler disabled (PORT_HISTORY_ENABLED=0)'); return; }
+  await bootstrapPortHistory();
+  samplePortHistory();
+  // Sample in-memory every tick; flush to Redis on the slower cadence so we don't
+  // rewrite the whole (growing) time-series blob every minute (ferry-delay pattern).
+  setInterval(() => samplePortHistory(), GEOFENCE_TICK_MS).unref?.();
+  setInterval(() => { void persistPortHistory(); }, PORT_PERSIST_MS).unref?.();
+  console.log(`[Relay] port-history + geofence sampler on (tick ${GEOFENCE_TICK_MS / 1000}s, snapshot ${PORT_SNAPSHOT_MS / 60000}min, persist ${PORT_PERSIST_MS / 60000}min, ${PORT_GEOFENCES.length} port zones)`);
+}
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
 // Alternative upstream to aisstream's WebSocket: the free aisstream stream has
@@ -4157,17 +4315,7 @@ const handleRequest = async (req, res) => {
     // vessels -> { atPort (waiting/berthed), inbound (en route), congestion }.
     connectUpstream();
     const now = Date.now();
-    const freightVessels = [];
-    for (const [mmsi, v] of vessels) {
-      const stat = vesselStatic.get(mmsi);
-      const st = Number.isFinite(v.shipType) ? v.shipType : (stat && stat.shipType);
-      const name = v.name || (stat && stat.name) || '';
-      if (!isFreightVessel(st, name, stat && stat.imo)) continue;
-      freightVessels.push({
-        mmsi, lat: v.lat, lon: v.lon, speed: v.speed, navStatus: v.navStatus,
-        timestamp: v.timestamp, destination: stat && stat.destination,
-      });
-    }
+    const freightVessels = buildFreightVesselList();
     const ports = computeAllPortStatus(
       ITALY_PORTS_BY_ID, freightVessels, resolveDestinationPort, now, {}, (p) => p.commercial,
     );
@@ -4182,6 +4330,25 @@ const handleRequest = async (req, res) => {
     }, JSON.stringify({
       ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now,
       ...feedFreshness(),
+    }));
+  } else if (pathname === '/ais/geofences') {
+    // Geofence zone shapes for the ferry.html map overlay (circle-now, polygon-ready).
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=300, s-maxage=300',
+    }, JSON.stringify({ geofences: PORT_GEOFENCES, count: PORT_GEOFENCES.length }));
+  } else if (pathname === '/ais/port-history') {
+    // Time-series for the congestion forecast: per-port congestion snapshots +
+    // geofence enter/exit events (arrivals/departures/dwell).
+    return sendCompressed(req, res, 200, {
+      'Content-Type': 'application/json',
+      'Cache-Control': 'public, max-age=60, s-maxage=60',
+    }, JSON.stringify({
+      snapshots: portHistoryState.snapshots,
+      events: portHistoryState.events,
+      snapshotCount: portHistoryState.snapshots.length,
+      eventCount: portHistoryState.events.length,
+      generatedAt: Date.now(),
     }));
   } else if (pathname === '/ais/voyages/daily') {
     // Trips Marco registered per day (durable counters). ?days=N (default 14, max 120).
@@ -4766,6 +4933,7 @@ server.listen(PORT, () => {
   startFerryDelayLoop();
   startFerryEnrichLoop();
   startMeteoalarmLoop();
+  startPortHistoryLoop();
   startMarinesiaLoop();
 });
 
