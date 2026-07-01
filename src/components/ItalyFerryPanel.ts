@@ -33,6 +33,17 @@ const CONGESTION_LABEL: Record<PortStatus['congestion'], string> = {
   clear: 'Clear', busy: 'Busy', congested: 'Congested',
 };
 
+// Unicode sparkline for the arrival curve (relative bar heights).
+const SPARK = ['▁', '▂', '▃', '▄', '▅', '▆', '▇', '█'];
+function sparkline(vals: number[]): string {
+  const max = Math.max(1, ...vals);
+  return vals.map((v) => SPARK[Math.min(SPARK.length - 1, Math.round((v / max) * (SPARK.length - 1)))]).join('');
+}
+
+// Anchor-queue count at/above which we flag it as "building". A display cue only —
+// deliberately independent of the backend atPort busyAt threshold (a different metric).
+const WAITING_HIGH = 4;
+
 /**
  * Live board of European freight vessels (Italy, UK, Spain, Netherlands) derived
  * from AIS, with a region filter and a Vessels/Ports toggle. Self-contained: call
@@ -231,17 +242,37 @@ export class ItalyFerryPanel extends Panel {
     if (ports.length === 0) {
       return '<div class="economic-empty">Port status unavailable.</div>';
     }
-    const rows = ports.map((p) => `
+    const rows = ports.map((p) => {
+      // Waiting = at anchor (the queue). Flag it when the queue is building.
+      const high = p.atAnchor >= WAITING_HIGH;
+      const waiting = p.atAnchor > 0
+        ? `<span class="port-waiting${high ? ' is-high' : ''}">${p.atAnchor}${high ? ' ⚠' : ''}</span>`
+        : '<span class="port-dim">0</span>';
+      // Arriving within 24h / total inbound, + a sparkline of the 0–6/6–12/12–24/24–48h curve.
+      // Keep the /inbound denominator so a distant wave (all >48h out → no sparkline) still shows.
+      const e = p.inboundEta;
+      const bands = [e.h6, e.h12 - e.h6, e.h24 - e.h12, e.h48 - e.h24];
+      const spark = e.h48 > 0 ? ` <span class="port-spark">${sparkline(bands)}</span>` : '';
+      const soon = e.h6 > 0 ? ` <span class="port-arr-soon" title="arriving within 6 h">${e.h6}&lt;6h</span>` : '';
+      const arrivals = p.inbound > 0
+        ? `${e.h24}<span class="port-dim">/${p.inbound}</span>${spark}${soon}`
+        : '<span class="port-dim">—</span>';
+      return `
       <tr>
         <td class="ferry-name">${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.region ?? '—')}</td>
         <td><span class="port-congestion port-congestion-${p.congestion}">${CONGESTION_LABEL[p.congestion]}</span></td>
         <td>${p.atPort}</td>
-        <td>${p.inbound}</td>
-      </tr>`).join('');
+        <td>${waiting}</td>
+        <td class="port-arrivals">${arrivals}</td>
+      </tr>`;
+    }).join('');
     return `<table class="ferry-table port-table">
       <thead><tr>
-        <th>Port</th><th>Region</th><th>Status</th><th title="Freight vessels waiting / berthed within ~8 km">At port</th><th title="Freight vessels under way, bound here">Inbound</th>
+        <th>Port</th><th>Region</th><th>Status</th>
+        <th title="Freight vessels stopped within ~8 km (anchored or berthed)">At port</th>
+        <th title="Of those, at anchor — waiting for a berth (the queue; the earliest congestion signal)">⚓ Waiting</th>
+        <th title="Arriving within 24 h / total inbound (bound here, any ETA). Bars = 0–6 / 6–12 / 12–24 / 24–48 h by geometric ETA.">Arrivals · 24h</th>
       </tr></thead>
       <tbody>${rows}</tbody>
     </table>`;

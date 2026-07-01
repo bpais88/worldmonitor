@@ -82,11 +82,19 @@
       .ferry-toggle-btn:hover { background: rgba(127,127,127,0.10); }
       .ferry-toggle-btn.is-active { background: rgba(56,189,138,0.16); color: #2fbf85; opacity: 1; font-weight: 600; }
       /* Port congestion badges */
-      .port-table th:nth-child(1), .port-table td:nth-child(1) { width: 28%; }
-      .port-table th:nth-child(2), .port-table td:nth-child(2) { width: 30%; }
-      .port-table th:nth-child(3), .port-table td:nth-child(3) { width: 18%; }
-      .port-table th:nth-child(4), .port-table td:nth-child(4) { width: 12%; }
-      .port-table th:nth-child(5), .port-table td:nth-child(5) { width: 12%; }
+      .port-table th:nth-child(1), .port-table td:nth-child(1) { width: 22%; }  /* Port */
+      .port-table th:nth-child(2), .port-table td:nth-child(2) { width: 19%; }  /* Region */
+      .port-table th:nth-child(3), .port-table td:nth-child(3) { width: 14%; }  /* Status */
+      .port-table th:nth-child(4), .port-table td:nth-child(4) { width: 11%; }  /* At port */
+      .port-table th:nth-child(5), .port-table td:nth-child(5) { width: 13%; }  /* Waiting */
+      .port-table th:nth-child(6), .port-table td:nth-child(6) { width: 21%; }  /* Arrivals 24h */
+      /* Waiting (at anchor) + arrivals columns */
+      .port-dim { opacity: 0.4; }
+      .port-waiting.is-high { color: #e0a032; font-weight: 600; }
+      .port-spark { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; color: #6ea8fe; }
+      .port-arr-soon { font-size: 10px; padding: 0 5px; border-radius: 8px;
+        background: rgba(110,168,254,0.16); color: #6ea8fe; white-space: nowrap; }
+      .port-arrivals { white-space: nowrap; }
       .port-congestion { padding: 1px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
       .port-congestion-clear { background: rgba(56,189,138,0.16); color: #2fbf85; }
       .port-congestion-busy { background: rgba(245,179,66,0.18); color: #e0a032; }
