@@ -13,6 +13,7 @@ import { handleSlackGet, handleSlackPost, slackBoot, slackStatus } from './slack
 import { handleTeamsRequest } from './teams/router.mjs';
 import { handleVoiceRequest } from './voice/adapter.mjs';
 import { handleWhatsAppRequest } from './whatsapp/router.mjs';
+import { handleTelegramRequest } from './telegram/router.mjs';
 import { relayGet } from './relay.mjs';
 import { listWatches, evaluateWatches } from './watches.mjs';
 import { getInstallation, legacyInstall, deliverFor } from './slack/installations.mjs';
@@ -51,6 +52,8 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname.startsWith('/voice/')) return handleVoiceRequest(req, res, body, u);
   // WhatsApp (Twilio) carries its own `?k=` webhook secret in the URL, verified inside.
   if (u.pathname.startsWith('/whatsapp')) return handleWhatsAppRequest(req, res, body, u);
+  // Telegram (Bot API) carries its own X-Telegram-Bot-Api-Secret-Token header, verified inside.
+  if (u.pathname.startsWith('/telegram')) return handleTelegramRequest(req, res, body);
   return handleSlackPost(req, res, body, u);
 });
 
