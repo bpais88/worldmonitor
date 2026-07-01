@@ -4,6 +4,7 @@ import {
   VOICE_TOOLS,
   secretMatches,
   parseToolInput,
+  cleanSchema,
   toElevenLabsToolConfig,
   handleVoiceRequest,
 } from './adapter.mjs';
@@ -42,15 +43,26 @@ test('parseToolInput: top-level params, `parameters` envelope, and bad JSON', ()
   assert.deepEqual(parseToolInput(''), {});
 });
 
-test('toElevenLabsToolConfig: webhook shape with our URL + bearer auth', () => {
-  const t = { name: 'get_port', description: 'd', input_schema: { type: 'object', properties: { port: {} } } };
+test('cleanSchema strips additionalProperties + $schema recursively', () => {
+  const dirty = { type: 'object', $schema: 'x', additionalProperties: false, properties: { a: { type: 'object', additionalProperties: true } } };
+  const c = cleanSchema(dirty);
+  assert.equal('$schema' in c, false);
+  assert.equal('additionalProperties' in c, false);
+  assert.equal('additionalProperties' in c.properties.a, false);
+  assert.equal(c.properties.a.type, 'object');
+});
+
+test('toElevenLabsToolConfig: webhook shape + strips ElevenLabs-forbidden schema keys', () => {
+  const t = { name: 'get_port', description: 'd', input_schema: { type: 'object', properties: { port: { type: 'string' } }, additionalProperties: false } };
   const cfg = toElevenLabsToolConfig(t, 'https://relay.example.com/', 'SEKRET');
   assert.equal(cfg.type, 'webhook');
   assert.equal(cfg.name, 'get_port');
   assert.equal(cfg.api_schema.url, 'https://relay.example.com/voice/tools/get_port');
   assert.equal(cfg.api_schema.method, 'POST');
   assert.equal(cfg.api_schema.request_headers.Authorization, 'Bearer SEKRET');
-  assert.deepEqual(cfg.api_schema.request_body_schema, t.input_schema);
+  // ElevenLabs rejects additionalProperties — stripped; properties preserved.
+  assert.equal('additionalProperties' in cfg.api_schema.request_body_schema, false);
+  assert.deepEqual(cfg.api_schema.request_body_schema.properties, { port: { type: 'string' } });
 });
 
 test('handleVoiceRequest: 401 without the secret', async () => {

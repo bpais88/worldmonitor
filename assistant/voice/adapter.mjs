@@ -13,10 +13,22 @@
 import crypto from 'node:crypto';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { MARCO_PERSONA } from '../slack/onboarding.mjs';
+import { DEFAULT_SYSTEM } from '../agent.mjs';
 
 /** The read-only tool set exposed to voice — the exact same handlers Slack/Teams use. */
 export const VOICE_TOOLS = [...freightTools, ...weatherTools];
 const TOOL_BY_NAME = new Map(VOICE_TOOLS.map((t) => [t.name, t]));
+
+// Marco's voice identity — the channel persona (mirrors SLACK_SYSTEM / TEAMS_SYSTEM).
+// ElevenLabs runs the LLM in Option A, so provision.mjs pushes this to the agent config.
+export const VOICE_SYSTEM =
+  `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
+  'You are on a VOICE CALL. Be concise and warm — the caller is listening, not reading. ' +
+  'Short sentences. Say key numbers clearly and pause after them. If you lack data, say so ' +
+  'plainly. You only answer freight/port/weather questions; you cannot take actions.';
+export const VOICE_FIRST_MESSAGE =
+  'Hi, this is Marco, your freight assistant. Which port or vessel can I help you with?';
 
 // The URL path each server tool is exposed at — single-sourced: emitted by the
 // tool-config generator, parsed by the webhook, matched by the server mount.
@@ -81,9 +93,28 @@ export async function handleVoiceRequest(req, res, body, u) {
 }
 
 // ── Setup helpers (consumed by the ElevenLabs API provisioning script) ─────────────
-// Map one Marco tool → an ElevenLabs "server tool" config. Field names follow the
-// convai/tools API; finalized against the live API when the agent is provisioned.
+
+// ElevenLabs' request_body_schema rejects JSON-Schema keywords it doesn't model
+// (`additionalProperties`, `$schema`), which Marco's tool schemas carry for strict
+// Claude tool-use. Strip them recursively so the schema validates.
+export function cleanSchema(s) {
+  if (Array.isArray(s)) return s.map(cleanSchema);
+  if (s && typeof s === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(s)) {
+      if (k === 'additionalProperties' || k === '$schema') continue;
+      out[k] = cleanSchema(v);
+    }
+    return out;
+  }
+  return s;
+}
+
+// Map one Marco tool → an ElevenLabs "server tool" config (verified against the live API).
 export function toElevenLabsToolConfig(tool, baseUrl, secret) {
+  const schema = tool.input_schema && tool.input_schema.properties
+    ? tool.input_schema
+    : { type: 'object', properties: {} };
   return {
     type: 'webhook',
     name: tool.name,
@@ -93,10 +124,7 @@ export function toElevenLabsToolConfig(tool, baseUrl, secret) {
       url: `${baseUrl.replace(/\/+$/, '')}${TOOLS_PREFIX}${tool.name}`,
       method: 'POST',
       request_headers: { Authorization: `Bearer ${secret}` },
-      request_body_schema:
-        tool.input_schema && tool.input_schema.properties
-          ? tool.input_schema
-          : { type: 'object', properties: {} },
+      request_body_schema: cleanSchema(schema),
     },
   };
 }
