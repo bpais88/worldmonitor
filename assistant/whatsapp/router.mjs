@@ -9,14 +9,11 @@
 // a per-user scope (today's single team:'whatsapp' tenant would cross-leak list/cancel across
 // users) — both land together in the proactive phase.
 import { verifyWebhookSecret } from './verify.mjs';
-import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
-import { DEFAULT_POLICY } from '../guardrails.mjs';
+import { DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
-import { threadKey, getHistory, appendTurn } from '../slack/memory.mjs';
-import { recordUsage } from '../usage.mjs';
-import { send } from '../send.mjs';
+import { runChannelTurn } from '../channel-turn.mjs';
 
 // Read-only tool set — the exact same handlers as Slack/Teams.
 const WHATSAPP_TOOLS = [...freightTools, ...weatherTools];
@@ -50,29 +47,14 @@ async function dispatch(params) {
   const from = params.From || ''; // "whatsapp:+31..."
   const text = (params.Body || '').trim();
   if (!from || !text) return;
-  const user = from.replace(/^whatsapp:/, '');
-  console.log(`[whatsapp] msg from ${user}: "${text.slice(0, 100)}"`);
-
-  const install = { platform: 'whatsapp', deliver: { to: from } };
-  const key = threadKey('whatsapp', user); // one conversation thread per user number
-
-  try {
-    const { text: reply, usage, calls } = await runAgent({
-      userText: text,
-      history: await getHistory(key),
-      tools: WHATSAPP_TOOLS,
-      system: WHATSAPP_SYSTEM,
-      policy: DEFAULT_POLICY, // read-only
-      context: { channel: user, user, team: 'whatsapp', platform: 'whatsapp', deliver: install.deliver },
-    });
-    const out = (reply || '(no answer)').slice(0, MAX_REPLY);
-    const day = await recordUsage('whatsapp', usage);
-    console.log(`[whatsapp]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${out.length} chars` +
-      (day ? ` · today ${day.messages} msg` : ''));
-    await send(install, { text: out }); // WhatsApp routes by install.deliver.to, not channelId
-    await appendTurn(key, text, out);
-  } catch (e) {
-    console.error('[whatsapp] agent error:', e.message);
-    await send(install, { text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
-  }
+  // Transport-specific bits done; the reactive-Q&A core is shared across the plain-chat channels.
+  await runChannelTurn({
+    platform: 'whatsapp',
+    user: from.replace(/^whatsapp:/, ''), // one thread per user number
+    text,
+    deliver: { to: from }, // send() routes WhatsApp by deliver.to
+    tools: WHATSAPP_TOOLS,
+    system: WHATSAPP_SYSTEM,
+    maxReply: MAX_REPLY,
+  });
 }

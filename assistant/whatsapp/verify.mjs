@@ -8,18 +8,7 @@
 // query string verbatim on every webhook. Configure the webhook as
 //   https://host/whatsapp?k=<WHATSAPP_WEBHOOK_SECRET>
 // Marco is read-only, so authenticity (proof the caller is our Twilio) is the property that matters.
-import crypto from 'node:crypto';
-
-// Constant-time compare over UTF-8 bytes; tolerates length mismatch without leaking via throw.
-function safeEqual(a, b) {
-  const ab = Buffer.from(String(a), 'utf-8');
-  const bb = Buffer.from(String(b), 'utf-8');
-  if (ab.length !== bb.length) return false;
-  try { return crypto.timingSafeEqual(ab, bb); } catch { return false; }
-}
-
-/** Verify the shared secret Twilio carries in the webhook URL's `?k=` param. Fail-closed. */
-export function verifyWebhookSecret({ provided, expected }) {
-  if (!expected || !provided) return false;
-  return safeEqual(provided, expected);
-}
+//
+// The shared-secret check itself lives in ../secret.mjs (also used by the Telegram adapter);
+// the router calls it with `provided: u.searchParams.get('k')`.
+export { verifyWebhookSecret } from '../secret.mjs';

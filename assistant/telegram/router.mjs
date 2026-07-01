@@ -8,14 +8,11 @@
 // tenant doesn't yet give — both land in the proactive phase. (Telegram has no 24h reply window, so
 // proactive alerts are actually easier here later than on WhatsApp.)
 import { verifyTelegramSecret } from './verify.mjs';
-import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
-import { DEFAULT_POLICY } from '../guardrails.mjs';
+import { DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
-import { threadKey, getHistory, appendTurn } from '../slack/memory.mjs';
-import { recordUsage } from '../usage.mjs';
-import { send } from '../send.mjs';
+import { runChannelTurn } from '../channel-turn.mjs';
 
 // Read-only tool set — the exact same handlers as Slack/Teams/WhatsApp.
 const TELEGRAM_TOOLS = [...freightTools, ...weatherTools];
@@ -39,10 +36,10 @@ export async function handleTelegramRequest(req, res, body) {
     res.writeHead(403);
     return res.end();
   }
-  // Ack fast (200) — we reply out-of-band via the API, since running the agent takes longer than the
-  // webhook window, like the other adapters.
-  res.writeHead(200, { 'Content-Type': 'application/json' });
-  res.end('{}');
+  // Ack fast (bare 200) — we reply out-of-band via the API, since running the agent takes longer
+  // than the webhook window, like the other adapters.
+  res.writeHead(200);
+  res.end();
   let update;
   try { update = JSON.parse(body || '{}'); } catch { return; }
   void dispatch(update);
@@ -53,29 +50,14 @@ async function dispatch(update) {
   const chatId = msg?.chat?.id;
   const text = (msg?.text || '').trim();
   if (!chatId || !text) return; // ignore non-text updates (photos, joins, etc.)
-  const user = String(chatId);
-  console.log(`[telegram] msg from ${user}: "${text.slice(0, 100)}"`);
-
-  const install = { platform: 'telegram', deliver: { chatId } };
-  const key = threadKey('telegram', user); // one conversation thread per chat
-
-  try {
-    const { text: reply, usage, calls } = await runAgent({
-      userText: text,
-      history: await getHistory(key),
-      tools: TELEGRAM_TOOLS,
-      system: TELEGRAM_SYSTEM,
-      policy: DEFAULT_POLICY, // read-only
-      context: { channel: user, user, team: 'telegram', platform: 'telegram', deliver: install.deliver },
-    });
-    const out = (reply || '(no answer)').slice(0, MAX_REPLY);
-    const day = await recordUsage('telegram', usage);
-    console.log(`[telegram]   → tools: ${calls.join(', ') || 'none'} · ${usage.input}+${usage.output} tok · replied ${out.length} chars` +
-      (day ? ` · today ${day.messages} msg` : ''));
-    await send(install, { text: out }); // Telegram routes by install.deliver.chatId
-    await appendTurn(key, text, out);
-  } catch (e) {
-    console.error('[telegram] agent error:', e.message);
-    await send(install, { text: `⚠️ Sorry — I hit an error: ${e.message}` }).catch(() => {});
-  }
+  // Transport-specific bits done; the reactive-Q&A core is shared across the plain-chat channels.
+  await runChannelTurn({
+    platform: 'telegram',
+    user: String(chatId), // one conversation thread per chat
+    text,
+    deliver: { chatId }, // send() routes Telegram by deliver.chatId
+    tools: TELEGRAM_TOOLS,
+    system: TELEGRAM_SYSTEM,
+    maxReply: MAX_REPLY,
+  });
 }

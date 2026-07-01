@@ -4,18 +4,7 @@
 // the `X-Telegram-Bot-Api-Secret-Token` header on every update. We verify it (constant-time) against
 // TELEGRAM_WEBHOOK_SECRET, fail-closed. Simpler than Twilio: no signature, no URL userinfo — Telegram
 // designed this header for exactly this. (https://core.telegram.org/bots/api#setwebhook)
-import crypto from 'node:crypto';
-
-// Constant-time compare over UTF-8 bytes; tolerates length mismatch without leaking via throw.
-function safeEqual(a, b) {
-  const ab = Buffer.from(String(a), 'utf-8');
-  const bb = Buffer.from(String(b), 'utf-8');
-  if (ab.length !== bb.length) return false;
-  try { return crypto.timingSafeEqual(ab, bb); } catch { return false; }
-}
-
-/** Verify Telegram's X-Telegram-Bot-Api-Secret-Token header against our secret. Fail-closed. */
-export function verifyTelegramSecret({ provided, expected }) {
-  if (!expected || !provided) return false;
-  return safeEqual(provided, expected);
-}
+//
+// The shared-secret check itself lives in ../secret.mjs (also used by the WhatsApp adapter); the
+// router calls it with `provided: req.headers['x-telegram-bot-api-secret-token']`.
+export { verifyWebhookSecret as verifyTelegramSecret } from '../secret.mjs';
