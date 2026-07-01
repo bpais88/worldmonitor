@@ -81,9 +81,28 @@ export async function handleVoiceRequest(req, res, body, u) {
 }
 
 // ── Setup helpers (consumed by the ElevenLabs API provisioning script) ─────────────
-// Map one Marco tool → an ElevenLabs "server tool" config. Field names follow the
-// convai/tools API; finalized against the live API when the agent is provisioned.
+
+// ElevenLabs' request_body_schema rejects JSON-Schema keywords it doesn't model
+// (`additionalProperties`, `$schema`), which Marco's tool schemas carry for strict
+// Claude tool-use. Strip them recursively so the schema validates.
+export function cleanSchema(s) {
+  if (Array.isArray(s)) return s.map(cleanSchema);
+  if (s && typeof s === 'object') {
+    const out = {};
+    for (const [k, v] of Object.entries(s)) {
+      if (k === 'additionalProperties' || k === '$schema') continue;
+      out[k] = cleanSchema(v);
+    }
+    return out;
+  }
+  return s;
+}
+
+// Map one Marco tool → an ElevenLabs "server tool" config (verified against the live API).
 export function toElevenLabsToolConfig(tool, baseUrl, secret) {
+  const schema = tool.input_schema && tool.input_schema.properties
+    ? tool.input_schema
+    : { type: 'object', properties: {} };
   return {
     type: 'webhook',
     name: tool.name,
@@ -93,10 +112,7 @@ export function toElevenLabsToolConfig(tool, baseUrl, secret) {
       url: `${baseUrl.replace(/\/+$/, '')}${TOOLS_PREFIX}${tool.name}`,
       method: 'POST',
       request_headers: { Authorization: `Bearer ${secret}` },
-      request_body_schema:
-        tool.input_schema && tool.input_schema.properties
-          ? tool.input_schema
-          : { type: 'object', properties: {} },
+      request_body_schema: cleanSchema(schema),
     },
   };
 }
