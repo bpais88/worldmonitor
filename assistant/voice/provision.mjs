@@ -14,11 +14,10 @@
 //   VOICE_ID        JBFqnCBsd6RMkjVDRZzb   (George — warm, professional)
 //   VOICE_MODEL     eleven_turbo_v2        (English agents require turbo/flash v2)
 
-import { VOICE_TOOLS, toElevenLabsToolConfig } from './adapter.mjs';
-import { MARCO_PERSONA } from '../slack/onboarding.mjs';
-import { DEFAULT_SYSTEM } from '../agent.mjs';
+import { VOICE_TOOLS, VOICE_SYSTEM, VOICE_FIRST_MESSAGE, toElevenLabsToolConfig } from './adapter.mjs';
 
 const API = 'https://api.elevenlabs.io';
+// Idempotency key — renaming this orphans the existing agent (and its phone binding).
 const AGENT_NAME = 'Marco — Freight Voice';
 
 function reqEnv(name) {
@@ -34,12 +33,10 @@ const VOICE_ID = process.env.VOICE_ID || 'JBFqnCBsd6RMkjVDRZzb';
 const MODEL = process.env.VOICE_MODEL || 'eleven_turbo_v2';
 const PHONE_ID = process.env.PHONE_NUMBER_ID || '';
 
-const VOICE_SYSTEM =
-  `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
-  'You are on a VOICE CALL. Be concise and warm — the caller is listening, not reading. ' +
-  'Short sentences. Say key numbers clearly and pause after them. If you lack data, say so ' +
-  'plainly. You only answer freight/port/weather questions; you cannot take actions.';
-const FIRST_MESSAGE = 'Hi, this is Marco, your freight assistant. Which port or vessel can I help you with?';
+function die(label, r) {
+  console.error(`${label} FAILED (${r.status}):`, JSON.stringify(r.json).slice(0, 200));
+  process.exit(1);
+}
 
 async function el(method, path, body) {
   const res = await fetch(`${API}${path}`, {
@@ -67,7 +64,7 @@ async function main() {
     } else {
       const r = await el('POST', '/v1/convai/tools', { tool_config: toElevenLabsToolConfig(tool, BASE, SECRET) });
       id = r.json?.id;
-      if (r.status !== 200 || !id) { console.error(`tool ${tool.name} FAILED (${r.status}):`, JSON.stringify(r.json).slice(0, 200)); process.exit(1); }
+      if (r.status !== 200 || !id) die(`tool ${tool.name}`, r);
       console.log(`tool ${tool.name}: created ${id}`);
     }
     toolIds.push(id);
@@ -75,19 +72,19 @@ async function main() {
 
   // 2. Agent — update if it exists, else create.
   const conversation_config = {
-    agent: { first_message: FIRST_MESSAGE, prompt: { prompt: VOICE_SYSTEM, tool_ids: toolIds } },
+    agent: { first_message: VOICE_FIRST_MESSAGE, prompt: { prompt: VOICE_SYSTEM, tool_ids: toolIds } },
     tts: { voice_id: VOICE_ID, model_id: MODEL },
   };
   const agents = await el('GET', '/v1/convai/agents');
   let agentId = (agents.json?.agents || []).find((a) => a.name === AGENT_NAME)?.agent_id;
   if (agentId) {
     const u = await el('PATCH', `/v1/convai/agents/${agentId}`, { conversation_config });
-    if (u.status !== 200) { console.error(`agent update FAILED (${u.status}):`, JSON.stringify(u.json).slice(0, 200)); process.exit(1); }
+    if (u.status !== 200) die('agent update', u);
     console.log(`agent: updated ${agentId}`);
   } else {
     const c = await el('POST', '/v1/convai/agents/create', { name: AGENT_NAME, conversation_config });
     agentId = c.json?.agent_id;
-    if (!agentId) { console.error(`agent create FAILED (${c.status}):`, JSON.stringify(c.json).slice(0, 200)); process.exit(1); }
+    if (!agentId) die('agent create', c);
     console.log(`agent: created ${agentId}`);
   }
 

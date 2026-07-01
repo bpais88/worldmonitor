@@ -13,10 +13,22 @@
 import crypto from 'node:crypto';
 import { freightTools } from '../tools/freight.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { MARCO_PERSONA } from '../slack/onboarding.mjs';
+import { DEFAULT_SYSTEM } from '../agent.mjs';
 
 /** The read-only tool set exposed to voice — the exact same handlers Slack/Teams use. */
 export const VOICE_TOOLS = [...freightTools, ...weatherTools];
 const TOOL_BY_NAME = new Map(VOICE_TOOLS.map((t) => [t.name, t]));
+
+// Marco's voice identity — the channel persona (mirrors SLACK_SYSTEM / TEAMS_SYSTEM).
+// ElevenLabs runs the LLM in Option A, so provision.mjs pushes this to the agent config.
+export const VOICE_SYSTEM =
+  `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
+  'You are on a VOICE CALL. Be concise and warm — the caller is listening, not reading. ' +
+  'Short sentences. Say key numbers clearly and pause after them. If you lack data, say so ' +
+  'plainly. You only answer freight/port/weather questions; you cannot take actions.';
+export const VOICE_FIRST_MESSAGE =
+  'Hi, this is Marco, your freight assistant. Which port or vessel can I help you with?';
 
 // The URL path each server tool is exposed at — single-sourced: emitted by the
 // tool-config generator, parsed by the webhook, matched by the server mount.
