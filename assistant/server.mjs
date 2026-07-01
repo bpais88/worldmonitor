@@ -12,6 +12,7 @@ import http from 'node:http';
 import { handleSlackGet, handleSlackPost, slackBoot, slackStatus } from './slack/adapter.mjs';
 import { handleTeamsRequest } from './teams/router.mjs';
 import { handleVoiceRequest } from './voice/adapter.mjs';
+import { handleWhatsAppRequest } from './whatsapp/router.mjs';
 import { relayGet } from './relay.mjs';
 import { listWatches, evaluateWatches } from './watches.mjs';
 import { getInstallation, legacyInstall, deliverFor } from './slack/installations.mjs';
@@ -48,6 +49,8 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === TEAMS_MESSAGING_PATH) return handleTeamsRequest(req, res, body);
   // Voice (ElevenLabs server tools) carries its own shared-secret auth, verified inside.
   if (u.pathname.startsWith('/voice/')) return handleVoiceRequest(req, res, body, u);
+  // WhatsApp (Twilio) carries its own X-Twilio-Signature auth, verified inside.
+  if (u.pathname.startsWith('/whatsapp')) return handleWhatsAppRequest(req, res, body, u);
   return handleSlackPost(req, res, body, u);
 });
 

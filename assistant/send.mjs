@@ -11,6 +11,7 @@
 
 import { deliverFor } from './slack/installations.mjs';
 import { sendActivity, updateActivity } from './teams/connector.mjs';
+import { sendWhatsApp } from './whatsapp/connector.mjs';
 
 // Wrap an Adaptive Card object as a Bot Framework attachment (the Teams card transport).
 const teamsCard = (card) => (card ? [{ contentType: 'application/vnd.microsoft.card.adaptive', content: card }] : undefined);
@@ -28,6 +29,10 @@ async function slackApi(method, payload, botToken) {
 
 /** Post a message (optionally a thread reply; `blocks` = Slack Block Kit, `card` = Teams Adaptive Card). */
 export async function send(install, { channelId, threadId, text, blocks, card }) {
+  if (install?.platform === 'whatsapp') {
+    // WhatsApp (Twilio): the recipient number is on install.deliver.to; plain text only.
+    return sendWhatsApp({ to: install.deliver?.to, text });
+  }
   if (install?.platform === 'teams') {
     // Teams: `deliver` is the conversation reference (serviceUrl + from/recipient accounts +
     // locale). channelId is the conversation id; threadId is the inbound activity to reply
