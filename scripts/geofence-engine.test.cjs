@@ -100,3 +100,13 @@ test('diffMembership emits enter/exit events and computes dwell on exit', () => 
   assert.ok(enterTimes.has('rotterdam-port:A'));
   assert.ok(!enterTimes.has('genoa-port:C'));
 });
+
+test('a vessel already inside on the first diff (restored membership) emits no spurious enter', () => {
+  const gfs = buildPortGeofences(PORTS);
+  const inside = computeMembership([{ mmsi: 'X', lat: 51.95, lon: 4.14 }], gfs);
+  // Simulate a relay restart where membership was restored from Redis (X already
+  // inside): diffing the restored state against the same current state must NOT
+  // replay X as a fresh enter (that would corrupt dwell + the event stream).
+  const events = diffMembership(inside, inside, 1_700_000_000_000, new Map(), gfs);
+  assert.equal(events.length, 0);
+});

@@ -1723,7 +1723,7 @@ const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { ITALY_TILES, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
-const { computeAllPortStatus, smoothPortStatus } = require('./port-status.cjs');
+const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
 const portStatusHistory = new Map();
@@ -1769,6 +1769,13 @@ function pushCapped(arr, items, max) {
   return arr.length > max ? arr.slice(-max) : arr;
 }
 
+// Serialize the geofence membership Map (gfId -> Set<mmsi>) for Redis persistence.
+function serializeMembership(m) {
+  const o = {};
+  for (const [gfId, set] of m) if (set.size) o[gfId] = [...set];
+  return o;
+}
+
 // Freight vessels currently in memory, shaped for congestion + geofence checks.
 // One definition of "freight", shared by the /ais/ports handler and the sampler.
 function buildFreightVesselList() {
@@ -1788,9 +1795,15 @@ function buildFreightVesselList() {
 
 function samplePortHistory(now = Date.now()) {
   try {
-    const freight = buildFreightVesselList();
+    // Same freshness cutoff as the /ais/ports snapshot (computePortStatus): a contact
+    // that stopped reporting while inside a zone is treated as gone, so its exit fires
+    // on time and dwell isn't inflated — rather than lingering until the vessels-Map
+    // eviction path (DENSITY_WINDOW) happens to run.
+    const fresh = buildFreightVesselList().filter(
+      (v) => !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_STATUS_DEFAULTS.freshMs,
+    );
     // Geofence membership diff -> enter/exit events (arrivals/departures/dwell).
-    const next = computeMembership(freight, PORT_GEOFENCES);
+    const next = computeMembership(fresh, PORT_GEOFENCES);
     const events = diffMembership(portHistoryState.membership, next, now, portHistoryState.enterTimes, PORT_GEOFENCES);
     portHistoryState.membership = next;
     if (events.length) {
@@ -1800,7 +1813,7 @@ function samplePortHistory(now = Date.now()) {
     // Congestion snapshot on the slower cadence (baseline/seasonality fuel).
     const lastSnapshotAt = portHistoryState.snapshots.at(-1)?.ts ?? 0;
     if (now - lastSnapshotAt >= PORT_SNAPSHOT_MS) {
-      const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, freight, resolveDestinationPort, now, {}, (p) => p.commercial);
+      const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
       smoothPortStatus(ports, portSnapshotHistory);
       const snapshot = {
         ts: now,
@@ -1825,6 +1838,8 @@ async function persistPortHistory() {
     const ok = await upstashSet(PORT_HISTORY_REDIS_KEY, {
       snapshots: portHistoryState.snapshots,
       events: portHistoryState.events,
+      membership: serializeMembership(portHistoryState.membership),
+      enterTimes: Object.fromEntries(portHistoryState.enterTimes),
       persistedAt: new Date().toISOString(),
     }, PORT_HISTORY_TTL_SECONDS);
     if (ok) portHistoryState._lastPersistedVersion = version;
@@ -1842,7 +1857,19 @@ async function bootstrapPortHistory() {
     if (cached && Array.isArray(cached.snapshots)) {
       portHistoryState.snapshots = cached.snapshots.slice(-PORT_HISTORY_MAX_SNAPSHOTS);
       portHistoryState.events = Array.isArray(cached.events) ? cached.events.slice(-PORT_HISTORY_MAX_EVENTS) : [];
-      console.log(`[Relay] port-history bootstrapped (${portHistoryState.snapshots.length} snapshots, ${portHistoryState.events.length} events)`);
+      // Restore OPEN zone occupancy so vessels still in port across a restart aren't
+      // replayed as fresh enters — and their dwell keeps counting from the real entry.
+      if (cached.membership && typeof cached.membership === 'object') {
+        portHistoryState.membership = new Map(
+          Object.entries(cached.membership).map(([gfId, arr]) => [gfId, new Set(arr)]),
+        );
+      }
+      if (cached.enterTimes && typeof cached.enterTimes === 'object') {
+        portHistoryState.enterTimes = new Map(
+          Object.entries(cached.enterTimes).map(([k, v]) => [k, Number(v)]),
+        );
+      }
+      console.log(`[Relay] port-history bootstrapped (${portHistoryState.snapshots.length} snapshots, ${portHistoryState.events.length} events, ${portHistoryState.membership.size} open zones)`);
     }
   } catch (e) {
     console.warn('[Relay] port-history bootstrap failed:', e.message);
