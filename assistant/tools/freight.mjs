@@ -53,7 +53,7 @@ export const freightTools = [
   {
     name: 'get_port_congestion',
     description:
-      'Congestion status for Italian commercial freight ports. Returns, per port: congestion level (clear/busy/congested), atPort (freight vessels waiting/berthed within ~8 km) and inbound (under way, bound there). If the result has a "feed" field (warming/stale), LEAD your answer with that caveat — the counts are partial or aging. Use for "which ports are busy/congested", "how many vessels waiting at X".',
+      'Congestion status for European commercial freight ports (Italy, the UK, Spain, the Netherlands). Returns, per port: congestion level (clear/busy/congested), atPort (freight vessels waiting/berthed within ~8 km) and inbound (under way, bound there). If the result has a "feed" field (warming/stale), LEAD your answer with that caveat — the counts are partial or aging. Use for "which ports are busy/congested", "how many vessels waiting at X".',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const j = await relayGet('/ais/ports');
@@ -70,7 +70,7 @@ export const freightTools = [
   {
     name: 'find_freight_vessels',
     description:
-      'List tracked Italian freight vessels (cargo + RoPax). Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. If the result has a "feed" field (warming/stale), lead with that caveat — the count is partial or aging. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
+      'List tracked European freight vessels (cargo + RoPax) across Italy, the UK, Spain, and the Netherlands. Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. If the result has a "feed" field (warming/stale), lead with that caveat — the count is partial or aging. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
     input_schema: {
       type: 'object',
       properties: {
