@@ -1754,11 +1754,20 @@ const portHistoryState = {
   events: [], // { ts, gfId, portId, mmsi, kind: 'enter'|'exit', dwellMin? }
   membership: new Map(), // gfId -> Set<mmsi> from the last tick
   enterTimes: new Map(), // `${gfId}:${mmsi}` -> entry ts (for dwell on exit)
-  lastSnapshotAt: 0,
   _persistVersion: 0,
   _lastPersistedVersion: 0,
   _persistInFlight: false,
 };
+
+// The sampler keeps its OWN atPort-smoothing window so the 5-min snapshot cadence
+// doesn't cross-contaminate the request-driven /ais/ports smoothing (portStatusHistory).
+const portSnapshotHistory = new Map();
+
+// Push items onto a bounded array, keeping the newest `max`.
+function pushCapped(arr, items, max) {
+  arr.push(...items);
+  return arr.length > max ? arr.slice(-max) : arr;
+}
 
 // Freight vessels currently in memory, shaped for congestion + geofence checks.
 // One definition of "freight", shared by the /ais/ports handler and the sampler.
@@ -1785,24 +1794,19 @@ function samplePortHistory(now = Date.now()) {
     const events = diffMembership(portHistoryState.membership, next, now, portHistoryState.enterTimes, PORT_GEOFENCES);
     portHistoryState.membership = next;
     if (events.length) {
-      portHistoryState.events.push(...events);
-      if (portHistoryState.events.length > PORT_HISTORY_MAX_EVENTS) {
-        portHistoryState.events = portHistoryState.events.slice(-PORT_HISTORY_MAX_EVENTS);
-      }
+      portHistoryState.events = pushCapped(portHistoryState.events, events, PORT_HISTORY_MAX_EVENTS);
       portHistoryState._persistVersion++;
     }
     // Congestion snapshot on the slower cadence (baseline/seasonality fuel).
-    if (now - portHistoryState.lastSnapshotAt >= PORT_SNAPSHOT_MS) {
+    const lastSnapshotAt = portHistoryState.snapshots.at(-1)?.ts ?? 0;
+    if (now - lastSnapshotAt >= PORT_SNAPSHOT_MS) {
       const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, freight, resolveDestinationPort, now, {}, (p) => p.commercial);
-      smoothPortStatus(ports, portStatusHistory);
-      portHistoryState.snapshots.push({
+      smoothPortStatus(ports, portSnapshotHistory);
+      const snapshot = {
         ts: now,
         ports: ports.map((p) => ({ portId: p.portId, atPort: p.atPort, inbound: p.inbound, congestion: p.congestion })),
-      });
-      if (portHistoryState.snapshots.length > PORT_HISTORY_MAX_SNAPSHOTS) {
-        portHistoryState.snapshots = portHistoryState.snapshots.slice(-PORT_HISTORY_MAX_SNAPSHOTS);
-      }
-      portHistoryState.lastSnapshotAt = now;
+      };
+      portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
       portHistoryState._persistVersion++;
     }
   } catch (e) {

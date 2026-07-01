@@ -51,6 +51,9 @@ function buildPortGeofences(ports, opts = {}) {
       name: `${p.name} — port area`,
       kind: 'port',
       geometry: { type: 'circle', center: { lat: p.lat, lon: p.lon }, radiusKm },
+      // `rules` is a declarative contract: the sampler currently applies freight +
+      // enter/exit/dwell uniformly; per-zone enforcement lands with the alert layer.
+      // `style` is consumed by the ferry.html "Zones" overlay.
       rules: { events: ['enter', 'exit', 'dwell'], dwellMin, appliesTo: 'freight' },
       style: KIND_STYLE.port,
       enabled: true,
@@ -95,15 +98,27 @@ function isInside(lat, lon, geofence) {
 
 /**
  * Current membership: Map<geofenceId, Set<mmsi>> of the vessels inside each zone.
- * O(vessels × geofences) — fine at ~2k vessels × ~40 zones (one haversine each).
+ * O(vessels × geofences), but a cheap latitude-band reject skips the haversine for
+ * the ~95% of pairs that can't possibly match (1° lat ≈ 110.574 km).
  */
 function computeMembership(vessels, geofences) {
   const membership = new Map();
-  for (const gf of geofences) membership.set(gf.id, new Set());
+  const prepared = [];
+  for (const gf of geofences) {
+    membership.set(gf.id, new Set());
+    const g = gf.geometry;
+    const circle = g && g.type === 'circle' && g.center && Number.isFinite(g.radiusKm);
+    prepared.push({
+      gf,
+      centerLat: circle ? g.center.lat : 0,
+      latPad: circle ? g.radiusKm / 110.574 : Infinity, // polygon/other → no reject
+    });
+  }
   for (const v of vessels || []) {
     if (!v || v.mmsi == null || !Number.isFinite(v.lat) || !Number.isFinite(v.lon)) continue;
-    for (const gf of geofences) {
-      if (isInside(v.lat, v.lon, gf)) membership.get(gf.id).add(v.mmsi);
+    for (const p of prepared) {
+      if (Math.abs(v.lat - p.centerLat) > p.latPad) continue;
+      if (isInside(v.lat, v.lon, p.gf)) membership.get(p.gf.id).add(v.mmsi);
     }
   }
   return membership;
@@ -117,10 +132,11 @@ function computeMembership(vessels, geofences) {
  */
 function diffMembership(prev, next, now, enterTimes, geofences) {
   const events = [];
-  const portByGf = new Map((geofences || []).map((g) => [g.id, g.portId]));
-  for (const [gfId, currSet] of next) {
+  for (const gf of geofences) {
+    const gfId = gf.id;
+    const portId = gf.portId;
+    const currSet = next.get(gfId) || new Set();
     const prevSet = prev.get(gfId) || new Set();
-    const portId = portByGf.get(gfId);
     for (const mmsi of currSet) {
       if (!prevSet.has(mmsi)) {
         enterTimes.set(`${gfId}:${mmsi}`, now);
@@ -141,9 +157,6 @@ function diffMembership(prev, next, now, enterTimes, geofences) {
 }
 
 module.exports = {
-  DEFAULT_PORT_RADIUS_KM,
-  DEFAULT_DWELL_MIN,
-  KIND_STYLE,
   buildPortGeofences,
   pointInRing,
   isInside,
