@@ -28,14 +28,17 @@ const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>
 // load, matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost hoisting.
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 
-// Read a query value WITHOUT application/x-www-form-urlencoded decoding — URLSearchParams turns a
-// literal `+` into a space, which would corrupt a base64 secret. We compare the secret verbatim, so
-// the webhook URL can carry `?k=<secret>` literally (a hex/base64url secret is safe; only a raw `&`
-// or `#` inside the secret would still need avoiding).
+// Read a query value with percent-decoding but WITHOUT the application/x-www-form-urlencoded
+// `+`→space conversion that URLSearchParams applies. So the secret matches whether the webhook URL
+// carries it literally (`?k=a+b`) or percent-encoded (`?k=a%2Bb`) — both decode to `a+b` — while a
+// literal `+` never becomes a space. (A `&`/`#`/`%` inside the secret must be percent-encoded.)
 export function rawQueryValue(search, key) {
   for (const pair of (search || '').replace(/^\?/, '').split('&')) {
     const i = pair.indexOf('=');
-    if ((i < 0 ? pair : pair.slice(0, i)) === key) return i < 0 ? '' : pair.slice(i + 1);
+    if ((i < 0 ? pair : pair.slice(0, i)) === key) {
+      const raw = i < 0 ? '' : pair.slice(i + 1);
+      try { return decodeURIComponent(raw); } catch { return raw; } // malformed %XX → compare raw
+    }
   }
   return null;
 }
