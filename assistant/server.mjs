@@ -49,8 +49,8 @@ const server = http.createServer(async (req, res) => {
   if (u.pathname === TEAMS_MESSAGING_PATH) return handleTeamsRequest(req, res, body);
   // Voice (ElevenLabs server tools) carries its own shared-secret auth, verified inside.
   if (u.pathname.startsWith('/voice/')) return handleVoiceRequest(req, res, body, u);
-  // WhatsApp (Twilio) carries its own Basic-auth webhook secret, verified inside.
-  if (u.pathname.startsWith('/whatsapp')) return handleWhatsAppRequest(req, res, body);
+  // WhatsApp (Twilio) carries its own `?k=` webhook secret in the URL, verified inside.
+  if (u.pathname.startsWith('/whatsapp')) return handleWhatsAppRequest(req, res, body, u);
   return handleSlackPost(req, res, body, u);
 });
 

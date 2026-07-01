@@ -1,14 +1,14 @@
 // WhatsApp (Twilio) request router — Marco's 4th channel, the Teams twin. Twilio delivers
-// inbound WhatsApp messages as form-encoded webhooks; we verify the Basic-auth webhook secret
-// (see verify.mjs for why not X-Twilio-Signature), ack fast, run the SAME agent as Slack/Teams
-// over the read-only tools, and reply via the Twilio API through the neutral send() seam.
+// inbound WhatsApp messages as form-encoded webhooks; we verify the `?k=` webhook secret
+// (see verify.mjs for why a URL secret, not X-Twilio-Signature/Basic-auth), ack fast, run the
+// SAME agent as Slack/Teams over the read-only tools, and reply via the Twilio API through send().
 //
 // Scope: reactive Q&A only — we always reply inside WhatsApp's 24h free-form window, so no
 // message templates are needed. Watches + action tools are excluded: actions have no approval
 // affordance in plain text, and watches need BOTH proactive delivery (approved templates) AND
 // a per-user scope (today's single team:'whatsapp' tenant would cross-leak list/cancel across
 // users) — both land together in the proactive phase.
-import { verifyWebhookBasicAuth } from './verify.mjs';
+import { verifyWebhookSecret } from './verify.mjs';
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
@@ -27,15 +27,12 @@ const WHATSAPP_SYSTEM =
   'answer freight/port/weather questions; you cannot take actions.';
 const MAX_REPLY = 1500; // WhatsApp per-message limit is 1600 — keep a margin.
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
-// The shared secret Twilio sends as the Basic-auth password (see verify.mjs). Read once at load,
-// matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost by hoisting.
+// The shared secret Twilio carries in the webhook URL's `?k=` param (see verify.mjs). Read once at
+// load, matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost hoisting.
 const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 
-export async function handleWhatsAppRequest(req, res, body) {
-  const ok = verifyWebhookBasicAuth({
-    header: req.headers['authorization'],
-    expectedSecret: WEBHOOK_SECRET,
-  });
+export async function handleWhatsAppRequest(req, res, body, u) {
+  const ok = verifyWebhookSecret({ provided: u.searchParams.get('k'), expected: WEBHOOK_SECRET });
   if (!ok) {
     console.warn('[whatsapp] webhook auth rejected');
     res.writeHead(403);
