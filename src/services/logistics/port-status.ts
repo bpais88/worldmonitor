@@ -1,6 +1,8 @@
 // Per-port freight congestion, from the relay's /ais/ports endpoint
 // (proxied through /api/ais-ports on the web, direct to the relay in local dev).
 
+import { relayFetch } from './relay-fetch';
+
 const PORTS_PROXY_URL = '/api/ais-ports';
 const LOCAL_RELAY_PORTS_URL = 'http://localhost:3004/ais/ports';
 
@@ -36,11 +38,8 @@ function toPortStatus(row: unknown): PortStatus | null {
   };
 }
 
-async function fetchPorts(base: string): Promise<PortStatus[]> {
-  const res = await fetch(base, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`ais-ports request failed: ${res.status}`);
-  const data = await res.json();
-  const rows: unknown = (data as { ports?: unknown })?.ports;
+function parsePorts(json: unknown): PortStatus[] {
+  const rows: unknown = (json as { ports?: unknown })?.ports;
   if (!Array.isArray(rows)) return [];
   const out: PortStatus[] = [];
   for (const row of rows) {
@@ -51,17 +50,6 @@ async function fetchPorts(base: string): Promise<PortStatus[]> {
 }
 
 /** Fetch per-port freight congestion, with a local-relay fallback in dev. */
-export async function getPortStatus(baseUrl: string = PORTS_PROXY_URL): Promise<PortStatus[]> {
-  try {
-    return await fetchPorts(baseUrl);
-  } catch (err) {
-    if (
-      typeof window !== 'undefined' &&
-      window.location.hostname === 'localhost' &&
-      baseUrl !== LOCAL_RELAY_PORTS_URL
-    ) {
-      return fetchPorts(LOCAL_RELAY_PORTS_URL);
-    }
-    throw err;
-  }
+export function getPortStatus(): Promise<PortStatus[]> {
+  return relayFetch(PORTS_PROXY_URL, LOCAL_RELAY_PORTS_URL, parsePorts);
 }
