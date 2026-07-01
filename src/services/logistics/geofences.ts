@@ -2,6 +2,8 @@
 // /api/ais-geofences on the web, direct to the relay in local dev). Consumed by the
 // ferry.html "Zones" overlay — rendered as coloured circles/polygons on the map.
 
+import { relayFetch } from './relay-fetch';
+
 const GEOFENCES_PROXY_URL = '/api/ais-geofences';
 const LOCAL_RELAY_GEOFENCES_URL = 'http://localhost:3004/ais/geofences';
 
@@ -22,47 +24,43 @@ export interface Geofence {
 const DEFAULT_COLOR = '#2fbf85';
 const DEFAULT_FILL_OPACITY = 0.08;
 
-function toGeofence(row: unknown): Geofence | null {
-  if (!row || typeof row !== 'object') return null;
-  const r = row as Record<string, unknown>;
-  const g = r.geometry as Record<string, unknown> | undefined;
-  if (typeof r.id !== 'string' || !g) return null;
+function parseGeometry(g: Record<string, unknown> | undefined): GeofenceGeometry | null {
+  if (!g) return null;
   if (g.type === 'circle') {
     const c = g.center as Record<string, unknown> | undefined;
     if (!c || !Number.isFinite(Number(c.lat)) || !Number.isFinite(Number(c.lon))) return null;
-    return {
-      id: r.id,
-      portId: typeof r.portId === 'string' ? r.portId : undefined,
-      name: typeof r.name === 'string' ? r.name : r.id,
-      kind: typeof r.kind === 'string' ? r.kind : 'custom',
-      geometry: { type: 'circle', center: { lat: Number(c.lat), lon: Number(c.lon) }, radiusKm: Number(g.radiusKm) || 8 },
-      style: r.style as Geofence['style'],
-      enabled: r.enabled !== false,
-    };
+    return { type: 'circle', center: { lat: Number(c.lat), lon: Number(c.lon) }, radiusKm: Number(g.radiusKm) || 8 };
   }
   if (g.type === 'polygon' && Array.isArray(g.ring)) {
     const ring = g.ring
-      .map((p) => (p && typeof p === 'object' ? { lat: Number((p as Record<string, unknown>).lat), lon: Number((p as Record<string, unknown>).lon) } : null))
+      .map((p) => (p && typeof p === 'object'
+        ? { lat: Number((p as Record<string, unknown>).lat), lon: Number((p as Record<string, unknown>).lon) }
+        : null))
       .filter((p): p is { lat: number; lon: number } => !!p && Number.isFinite(p.lat) && Number.isFinite(p.lon));
-    if (ring.length < 3) return null;
-    return {
-      id: r.id,
-      portId: typeof r.portId === 'string' ? r.portId : undefined,
-      name: typeof r.name === 'string' ? r.name : r.id,
-      kind: typeof r.kind === 'string' ? r.kind : 'custom',
-      geometry: { type: 'polygon', ring },
-      style: r.style as Geofence['style'],
-      enabled: r.enabled !== false,
-    };
+    return ring.length >= 3 ? { type: 'polygon', ring } : null;
   }
   return null;
 }
 
-async function fetchGeofences(base: string): Promise<Geofence[]> {
-  const res = await fetch(base, { headers: { Accept: 'application/json' } });
-  if (!res.ok) throw new Error(`ais-geofences request failed: ${res.status}`);
-  const data = await res.json();
-  const rows: unknown = (data as { geofences?: unknown })?.geofences;
+function toGeofence(row: unknown): Geofence | null {
+  if (!row || typeof row !== 'object') return null;
+  const r = row as Record<string, unknown>;
+  if (typeof r.id !== 'string') return null;
+  const geometry = parseGeometry(r.geometry as Record<string, unknown> | undefined);
+  if (!geometry) return null;
+  return {
+    id: r.id,
+    portId: typeof r.portId === 'string' ? r.portId : undefined,
+    name: typeof r.name === 'string' ? r.name : r.id,
+    kind: typeof r.kind === 'string' ? r.kind : 'custom',
+    geometry,
+    style: r.style as Geofence['style'],
+    enabled: r.enabled !== false,
+  };
+}
+
+function parseGeofences(json: unknown): Geofence[] {
+  const rows: unknown = (json as { geofences?: unknown })?.geofences;
   if (!Array.isArray(rows)) return [];
   const out: Geofence[] = [];
   for (const row of rows) {
@@ -73,19 +71,8 @@ async function fetchGeofences(base: string): Promise<Geofence[]> {
 }
 
 /** Fetch the geofence zone shapes, with a local-relay fallback in dev. */
-export async function getGeofences(baseUrl: string = GEOFENCES_PROXY_URL): Promise<Geofence[]> {
-  try {
-    return await fetchGeofences(baseUrl);
-  } catch (err) {
-    if (
-      typeof window !== 'undefined' &&
-      window.location.hostname === 'localhost' &&
-      baseUrl !== LOCAL_RELAY_GEOFENCES_URL
-    ) {
-      return fetchGeofences(LOCAL_RELAY_GEOFENCES_URL);
-    }
-    throw err;
-  }
+export function getGeofences(): Promise<Geofence[]> {
+  return relayFetch(GEOFENCES_PROXY_URL, LOCAL_RELAY_GEOFENCES_URL, parseGeofences);
 }
 
 // ── GeoJSON conversion (for MapLibre) ──────────────────────────────────────
@@ -107,7 +94,7 @@ function circleRing(center: { lat: number; lon: number }, radiusKm: number, step
   return ring;
 }
 
-export interface GeofenceFeatureProps {
+interface GeofenceFeatureProps {
   id: string;
   name: string;
   kind: string;
@@ -116,7 +103,7 @@ export interface GeofenceFeatureProps {
 }
 
 /** One geofence → a GeoJSON Polygon Feature carrying its render style. */
-export function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, GeofenceFeatureProps> {
+function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, GeofenceFeatureProps> {
   const ring =
     gf.geometry.type === 'circle'
       ? circleRing(gf.geometry.center, gf.geometry.radiusKm)

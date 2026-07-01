@@ -347,22 +347,23 @@ export class ItalyFerryPanel extends Panel {
 
   /** Toggle the geofence zone overlay; fetch the shapes once on first show. */
   private async toggleZones(btn: HTMLButtonElement): Promise<void> {
-    this.zonesOn = !this.zonesOn;
-    btn.classList.toggle('is-active', this.zonesOn);
-    btn.setAttribute('aria-pressed', String(this.zonesOn));
+    this.setZonesActive(btn, !this.zonesOn);
     if (this.zonesOn && !this.geofences) {
       try {
         this.geofences = await getGeofences();
         this.map?.setGeofences(this.geofences);
       } catch {
-        // Revert the toggle if the shapes fail to load.
-        this.zonesOn = false;
-        btn.classList.remove('is-active');
-        btn.setAttribute('aria-pressed', 'false');
+        this.setZonesActive(btn, false); // revert if the shapes fail to load
         return;
       }
     }
     this.map?.setZonesVisible(this.zonesOn);
+  }
+
+  private setZonesActive(btn: HTMLButtonElement, on: boolean): void {
+    this.zonesOn = on;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', String(on));
   }
 
   private updateToggleActive(): void {
