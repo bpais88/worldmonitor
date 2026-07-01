@@ -1815,18 +1815,13 @@ function samplePortHistory(now = Date.now()) {
     if (now - lastSnapshotAt >= PORT_SNAPSHOT_MS) {
       const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
       smoothPortStatus(ports, portSnapshotHistory);
+      // Bank every DYNAMIC port field (portId, atPort smoothed + atPortRaw, atAnchor/
+      // atBerth, inbound + inboundEta, congestion); drop only the static identity fields
+      // that don't need to repeat each snapshot. New computePortStatus fields flow in
+      // automatically — the whole point is to capture everything for the backtest.
       const snapshot = {
         ts: now,
-        ports: ports.map((p) => ({
-          portId: p.portId,
-          atPort: p.atPort, // median-smoothed (the headline / congestion basis)
-          atPortRaw: p.atPortRaw, // this-tick raw count (for backtest fidelity)
-          atAnchor: p.atAnchor, // waiting-for-berth queue (leading indicator)
-          atBerth: p.atBerth,
-          inbound: p.inbound,
-          inboundEta: p.inboundEta, // { h6, h12, h24, h48 } arrivals by geometric ETA
-          congestion: p.congestion,
-        })),
+        ports: ports.map(({ name, lat, lon, region, ...dyn }) => dyn),
       };
       portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
       portHistoryState._persistVersion++;

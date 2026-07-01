@@ -24,6 +24,8 @@ const NAV_MOORED = 5;
 
 const KN_TO_KMH = 1.852; // 1 knot = 1.852 km/h — for the geometric arrival ETA
 // Cumulative "arriving within N hours" buckets (a vessel <6h out counts in all four).
+// These define the logged-history schema (h6/h12/…) — changing them is a data
+// migration, not a per-call knob, so they live here rather than in DEFAULTS.
 const ETA_BUCKETS_H = [6, 12, 24, 48];
 
 function isStopped(v, stoppedKnots) {
@@ -52,9 +54,10 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
   for (const v of vessels || []) {
     if (!v) continue;
     if (Number.isFinite(v.timestamp) && now - v.timestamp > o.freshMs) continue;
+    // Distance to the port, computed once and reused for both the at-port check + ETA.
+    const distKm = (Number.isFinite(v.lat) && Number.isFinite(v.lon)) ? haversineKm(v, port) : Infinity;
     // At port: stopped within the radius. Split anchor (waiting) vs berth (served).
-    if (Number.isFinite(v.lat) && Number.isFinite(v.lon) &&
-        haversineKm(v, port) <= o.radiusKm && isStopped(v, o.stoppedKnots)) {
+    if (distKm <= o.radiusKm && isStopped(v, o.stoppedKnots)) {
       atPort++;
       if (v.navStatus === NAV_AT_ANCHOR) atAnchor++;
       else if (v.navStatus === NAV_MOORED) atBerth++;
@@ -65,8 +68,8 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
       const d = resolveDest && resolveDest(v.destination);
       if (d && d.portId === port.portId) {
         inbound++;
-        // Geometric ETA (physics: distance / speed) — NOT the crew-typed ETA field.
-        const etaH = haversineKm(v, port) / (v.speed * KN_TO_KMH);
+        // Geometric ETA (physics: distance / speed) — NOT the crew-typed AIS ETA field.
+        const etaH = distKm / (v.speed * KN_TO_KMH);
         for (const h of ETA_BUCKETS_H) if (etaH <= h) inboundEta[`h${h}`]++;
       }
     }
