@@ -1,0 +1,24 @@
+name: Assistant tests
+
+# Runs the Marco assistant unit suite (node:test) on PRs touching the assistant or the
+# port data it derives coverage from. Includes the coverage guard: if a commercial port in a
+# new country is added to src/config/italy-ferries.data.json, coverage.test.mjs fails until
+# Marco's coverage prose names it (otherwise the model treats those ports as out of scope).
+on:
+  pull_request:
+    paths:
+      - 'assistant/**'
+      - 'src/config/italy-ferries.data.json'
+
+jobs:
+  assistant-tests:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run test:assistant
