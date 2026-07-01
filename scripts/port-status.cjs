@@ -22,6 +22,10 @@ const DEFAULTS = {
 const NAV_AT_ANCHOR = 1;
 const NAV_MOORED = 5;
 
+const KN_TO_KMH = 1.852; // 1 knot = 1.852 km/h — for the geometric arrival ETA
+// Cumulative "arriving within N hours" buckets (a vessel <6h out counts in all four).
+const ETA_BUCKETS_H = [6, 12, 24, 48];
+
 function isStopped(v, stoppedKnots) {
   if (v.navStatus === NAV_AT_ANCHOR || v.navStatus === NAV_MOORED) return true;
   return Number.isFinite(v.speed) && v.speed <= stoppedKnots;
@@ -40,20 +44,31 @@ function congestionLevel(atPort, o) {
 function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = {}) {
   const o = { ...DEFAULTS, ...opts };
   let atPort = 0;
+  let atAnchor = 0; // navStatus "at anchor" = waiting for a berth (queue → leading indicator)
+  let atBerth = 0; // navStatus "moored" = berthed / being served
   let inbound = 0;
+  const inboundEta = {}; // cumulative arrival counts by geometric ETA (h6/h12/h24/h48)
+  for (const h of ETA_BUCKETS_H) inboundEta[`h${h}`] = 0;
   for (const v of vessels || []) {
     if (!v) continue;
     if (Number.isFinite(v.timestamp) && now - v.timestamp > o.freshMs) continue;
-    // At port: stopped within the radius.
+    // At port: stopped within the radius. Split anchor (waiting) vs berth (served).
     if (Number.isFinite(v.lat) && Number.isFinite(v.lon) &&
         haversineKm(v, port) <= o.radiusKm && isStopped(v, o.stoppedKnots)) {
       atPort++;
+      if (v.navStatus === NAV_AT_ANCHOR) atAnchor++;
+      else if (v.navStatus === NAV_MOORED) atBerth++;
       continue;
     }
     // Inbound: destination resolves to this port and the vessel is under way.
     if (v.destination && Number.isFinite(v.speed) && v.speed > o.stoppedKnots) {
       const d = resolveDest && resolveDest(v.destination);
-      if (d && d.portId === port.portId) inbound++;
+      if (d && d.portId === port.portId) {
+        inbound++;
+        // Geometric ETA (physics: distance / speed) — NOT the crew-typed ETA field.
+        const etaH = haversineKm(v, port) / (v.speed * KN_TO_KMH);
+        for (const h of ETA_BUCKETS_H) if (etaH <= h) inboundEta[`h${h}`]++;
+      }
     }
   }
   return {
@@ -63,7 +78,10 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
     lon: port.lon,
     region: port.region || null,
     atPort,
+    atAnchor,
+    atBerth,
     inbound,
+    inboundEta,
     congestion: congestionLevel(atPort, o),
   };
 }

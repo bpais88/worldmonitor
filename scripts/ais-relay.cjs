@@ -1817,7 +1817,16 @@ function samplePortHistory(now = Date.now()) {
       smoothPortStatus(ports, portSnapshotHistory);
       const snapshot = {
         ts: now,
-        ports: ports.map((p) => ({ portId: p.portId, atPort: p.atPort, inbound: p.inbound, congestion: p.congestion })),
+        ports: ports.map((p) => ({
+          portId: p.portId,
+          atPort: p.atPort, // median-smoothed (the headline / congestion basis)
+          atPortRaw: p.atPortRaw, // this-tick raw count (for backtest fidelity)
+          atAnchor: p.atAnchor, // waiting-for-berth queue (leading indicator)
+          atBerth: p.atBerth,
+          inbound: p.inbound,
+          inboundEta: p.inboundEta, // { h6, h12, h24, h48 } arrivals by geometric ETA
+          congestion: p.congestion,
+        })),
       };
       portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
       portHistoryState._persistVersion++;
