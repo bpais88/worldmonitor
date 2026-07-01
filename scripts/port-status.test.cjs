@@ -43,6 +43,29 @@ test('ignores stale vessels (older than freshMs)', () => {
   assert.equal(s.atPort, 0);
 });
 
+test('splits atPort into atAnchor (waiting) and atBerth (moored) by navStatus', () => {
+  const s = computePortStatus(PORT, [
+    near({ mmsi: 'a', navStatus: 1 }),            // at anchor → queue
+    near({ mmsi: 'b', navStatus: 5, speed: 2 }),  // moored → berthed
+    near({ mmsi: 'c', speed: 0 }),                // stopped, no navStatus → atPort only
+  ], resolveDest, NOW);
+  assert.equal(s.atPort, 3);
+  assert.equal(s.atAnchor, 1);
+  assert.equal(s.atBerth, 1);
+});
+
+test('buckets inbound vessels by geometric ETA (cumulative h6/h12/h24/h48)', () => {
+  // Same longitude as the port; Δlat×~111km ÷ (15 kn×1.852) gives the ETA.
+  const vNear = { mmsi: 'n', lat: PORT.lat + 0.9, lon: PORT.lon, speed: 15, destination: 'ITGIT', timestamp: NOW }; // ~100km → ~3.6h
+  const vFar = { mmsi: 'f', lat: PORT.lat + 3.6, lon: PORT.lon, speed: 15, destination: 'ITGIT', timestamp: NOW }; // ~400km → ~14.4h
+  const s = computePortStatus(PORT, [vNear, vFar], resolveDest, NOW);
+  assert.equal(s.inbound, 2);
+  assert.equal(s.inboundEta.h6, 1); // vNear only
+  assert.equal(s.inboundEta.h12, 1); // vNear only
+  assert.equal(s.inboundEta.h24, 2); // both
+  assert.equal(s.inboundEta.h48, 2); // both
+});
+
 test('congestion level scales with the at-port count', () => {
   const many = (n) => Array.from({ length: n }, (_, i) => near({ mmsi: `m${i}` }));
   assert.equal(computePortStatus(PORT, many(2), resolveDest, NOW).congestion, 'clear');
