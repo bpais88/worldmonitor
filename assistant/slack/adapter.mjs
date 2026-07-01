@@ -299,7 +299,7 @@ function landingPage(res) {
     return res.end(JSON.stringify({ ok: true }));
   }
   htmlPage(res, 200,
-    '<h1>Marco</h1><p style="font-size:18px;color:#444">Your freight-ops coworker, in Slack. He tracks every cargo ship and RoPax ferry across Italian ports — live — and tells you when a port congests or clears.</p>' +
+    '<h1>Marco</h1><p style="font-size:18px;color:#444">Your freight-ops coworker, in Slack. He tracks every cargo ship and RoPax ferry across European ports (Italy, the UK, Spain, the Netherlands) — live — and tells you when a port congests or clears.</p>' +
     '<p style="margin-top:32px"><a href="/slack/install">' +
     '<img alt="Add to Slack" height="48" width="172" src="https://platform.slack-edge.com/img/add_to_slack.png" srcset="https://platform.slack-edge.com/img/add_to_slack.png 1x, https://platform.slack-edge.com/img/add_to_slack@2x.png 2x"></a></p>');
 }
