@@ -18,6 +18,10 @@ import { weatherTools } from '../tools/weather.mjs';
 export const VOICE_TOOLS = [...freightTools, ...weatherTools];
 const TOOL_BY_NAME = new Map(VOICE_TOOLS.map((t) => [t.name, t]));
 
+// The URL path each server tool is exposed at — single-sourced: emitted by the
+// tool-config generator, parsed by the webhook, matched by the server mount.
+const TOOLS_PREFIX = '/voice/tools/';
+
 /** Constant-time secret comparison (pure, testable). */
 export function secretMatches(provided, expected) {
   if (!expected || !provided) return false;
@@ -26,12 +30,11 @@ export function secretMatches(provided, expected) {
   return a.length === b.length && crypto.timingSafeEqual(a, b);
 }
 
-// The secret ElevenLabs sends on each tool call — we set it on the tool via the API, so
-// it's ours to rotate. Accept `Authorization: Bearer <secret>` or `X-Voice-Secret: <secret>`.
+// The bearer secret ElevenLabs sends on each tool call — we set it on the tool via the
+// API, so it's ours to rotate.
 function providedSecret(headers) {
   const auth = headers['authorization'] || '';
-  const bearer = auth.startsWith('Bearer ') ? auth.slice(7) : '';
-  return bearer || headers['x-voice-secret'] || '';
+  return auth.startsWith('Bearer ') ? auth.slice(7) : '';
 }
 
 function sendJson(res, status, obj) {
@@ -58,7 +61,8 @@ export async function handleVoiceRequest(req, res, body, u) {
   if (!secretMatches(providedSecret(req.headers), process.env.VOICE_TOOL_SECRET || '')) {
     return sendJson(res, 401, { error: 'unauthorized' });
   }
-  const name = u.pathname.replace(/^\/voice\/tools\//, '').replace(/\/+$/, '');
+  if (!u.pathname.startsWith(TOOLS_PREFIX)) return sendJson(res, 404, { error: 'not found' });
+  const name = u.pathname.slice(TOOLS_PREFIX.length).replace(/\/+$/, '');
   const tool = TOOL_BY_NAME.get(name);
   if (!tool) return sendJson(res, 404, { error: `unknown tool: ${name}` });
 
@@ -86,7 +90,7 @@ export function toElevenLabsToolConfig(tool, baseUrl, secret) {
     description: tool.description,
     response_timeout_secs: 20,
     api_schema: {
-      url: `${baseUrl.replace(/\/+$/, '')}/voice/tools/${tool.name}`,
+      url: `${baseUrl.replace(/\/+$/, '')}${TOOLS_PREFIX}${tool.name}`,
       method: 'POST',
       request_headers: { Authorization: `Bearer ${secret}` },
       request_body_schema:
@@ -95,8 +99,4 @@ export function toElevenLabsToolConfig(tool, baseUrl, secret) {
           : { type: 'object', properties: {} },
     },
   };
-}
-
-export function voiceToolConfigs(baseUrl, secret) {
-  return VOICE_TOOLS.map((t) => toElevenLabsToolConfig(t, baseUrl, secret));
 }
