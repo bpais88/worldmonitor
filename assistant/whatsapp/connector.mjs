@@ -1,17 +1,21 @@
 // Twilio WhatsApp send — the outbound half of the WhatsApp adapter. Posts to the Twilio
-// Messages API (Basic auth = AccountSid:AuthToken). No `twilio` dependency — mirrors how
-// teams/connector.mjs owns the Teams wire calls. Reached only through send.mjs's whatsapp branch.
+// Messages API (Basic auth = ApiKeySid:ApiKeySecret, or AccountSid:AuthToken as a fallback).
+// No `twilio` dependency — mirrors how teams/connector.mjs owns the Teams wire calls. Reached
+// only through send.mjs's whatsapp branch.
 
 const TWILIO_ACCOUNT_SID = process.env.TWILIO_ACCOUNT_SID || '';
-const TWILIO_AUTH_TOKEN = process.env.TWILIO_AUTH_TOKEN || '';
+// REST auth: a scoped API key (SK…:secret) is preferred over the account-wide Auth Token, but
+// either pair is valid Basic auth for the Twilio API — the URL still addresses the account SID.
+const AUTH_USER = process.env.TWILIO_API_KEY_SID || TWILIO_ACCOUNT_SID;
+const AUTH_PASS = process.env.TWILIO_API_KEY_SECRET || process.env.TWILIO_AUTH_TOKEN || '';
 // The WhatsApp sender, e.g. "whatsapp:+14155238886" (the Twilio sandbox or your approved sender).
 const TWILIO_WHATSAPP_FROM = process.env.TWILIO_WHATSAPP_FROM || '';
 
 const asWhatsApp = (n) => (n.startsWith('whatsapp:') ? n : `whatsapp:${n}`);
-const AUTH_HEADER = `Basic ${Buffer.from(`${TWILIO_ACCOUNT_SID}:${TWILIO_AUTH_TOKEN}`).toString('base64')}`;
+const AUTH_HEADER = `Basic ${Buffer.from(`${AUTH_USER}:${AUTH_PASS}`).toString('base64')}`;
 
 export async function sendWhatsApp({ to, text }) {
-  if (!TWILIO_ACCOUNT_SID || !TWILIO_AUTH_TOKEN || !TWILIO_WHATSAPP_FROM || !to) {
+  if (!TWILIO_ACCOUNT_SID || !AUTH_PASS || !TWILIO_WHATSAPP_FROM || !to) {
     console.warn('[whatsapp] send skipped (missing Twilio config or recipient)');
     return { ok: false };
   }

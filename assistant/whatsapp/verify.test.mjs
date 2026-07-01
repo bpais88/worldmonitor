@@ -1,34 +1,29 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import crypto from 'node:crypto';
-import { twilioSignatureBase, verifyTwilioSignature } from './verify.mjs';
+import { verifyWebhookBasicAuth, WEBHOOK_USER } from './verify.mjs';
 
-const TOKEN = 'test_auth_token';
-const URL = 'https://relay.example.com/whatsapp';
-const PARAMS = { From: 'whatsapp:+31600000000', Body: 'is rotterdam busy?', To: 'whatsapp:+14155238886', MessageSid: 'SM123' };
+const SECRET = 'super-secret-webhook-pass';
+const basic = (user, pass) => `Basic ${Buffer.from(`${user}:${pass}`).toString('base64')}`;
 
-// Twilio's signature = base64(HMAC-SHA1(url + params-sorted-by-key as key+value, authToken)).
-const sign = (token, url, params) =>
-  crypto.createHmac('sha1', token).update(Buffer.from(twilioSignatureBase(url, params), 'utf-8')).digest('base64');
-
-test('twilioSignatureBase = URL + params concatenated sorted by key', () => {
-  assert.equal(twilioSignatureBase('https://x/y', { b: '2', a: '1' }), 'https://x/ya1b2');
+test('accepts the correct Basic credential', () => {
+  assert.equal(
+    verifyWebhookBasicAuth({ header: basic(WEBHOOK_USER, SECRET), expectedSecret: SECRET }),
+    true,
+  );
 });
 
-test('verifyTwilioSignature accepts a correct signature', () => {
-  const sig = sign(TOKEN, URL, PARAMS);
-  assert.equal(verifyTwilioSignature({ authToken: TOKEN, signature: sig, url: URL, params: PARAMS }), true);
+test('rejects a wrong password or wrong username', () => {
+  assert.equal(verifyWebhookBasicAuth({ header: basic(WEBHOOK_USER, 'nope'), expectedSecret: SECRET }), false);
+  assert.equal(verifyWebhookBasicAuth({ header: basic('attacker', SECRET), expectedSecret: SECRET }), false);
 });
 
-test('verifyTwilioSignature rejects tampered body / wrong token / wrong url', () => {
-  const sig = sign(TOKEN, URL, PARAMS);
-  assert.equal(verifyTwilioSignature({ authToken: TOKEN, signature: sig, url: URL, params: { ...PARAMS, Body: 'tampered' } }), false);
-  assert.equal(verifyTwilioSignature({ authToken: 'wrong', signature: sig, url: URL, params: PARAMS }), false);
-  assert.equal(verifyTwilioSignature({ authToken: TOKEN, signature: sig, url: 'https://evil.example.com/whatsapp', params: PARAMS }), false);
+test('rejects malformed / non-Basic headers', () => {
+  assert.equal(verifyWebhookBasicAuth({ header: `Bearer ${SECRET}`, expectedSecret: SECRET }), false);
+  assert.equal(verifyWebhookBasicAuth({ header: 'Basic !!!not-base64', expectedSecret: SECRET }), false);
+  assert.equal(verifyWebhookBasicAuth({ header: `Basic ${Buffer.from('nocolon').toString('base64')}`, expectedSecret: SECRET }), false);
 });
 
-test('verifyTwilioSignature fails closed on missing inputs', () => {
-  assert.equal(verifyTwilioSignature({ authToken: '', signature: 'x', url: URL, params: PARAMS }), false);
-  assert.equal(verifyTwilioSignature({ authToken: TOKEN, signature: '', url: URL, params: PARAMS }), false);
-  assert.equal(verifyTwilioSignature({ authToken: TOKEN, signature: 'x', url: '', params: PARAMS }), false);
+test('fails closed on missing secret or header', () => {
+  assert.equal(verifyWebhookBasicAuth({ header: basic(WEBHOOK_USER, SECRET), expectedSecret: '' }), false);
+  assert.equal(verifyWebhookBasicAuth({ header: '', expectedSecret: SECRET }), false);
 });
