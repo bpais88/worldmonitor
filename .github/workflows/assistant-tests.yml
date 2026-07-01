@@ -6,9 +6,15 @@ name: Assistant tests
 # Marco's coverage prose names it (otherwise the model treats those ports as out of scope).
 on:
   pull_request:
-    paths:
-      - 'assistant/**'
-      - 'src/config/italy-ferries.data.json'
+    # Invert (ignore-list, not include-list): the assistant imports across boundaries —
+    # scripts/ferry-eta.cjs and src/config/italy-ferries.data.json — so an enumerated include-list
+    # silently misses a change to those (and typecheck.yml ignores scripts/**). Run the suite on any
+    # code change, skipping only obviously non-code paths.
+    paths-ignore:
+      - '*.md'
+      - '.planning/**'
+      - 'docs/**'
+      - 'e2e/**'
 
 jobs:
   assistant-tests:
