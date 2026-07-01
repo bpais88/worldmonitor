@@ -11,6 +11,7 @@
 import http from 'node:http';
 import { handleSlackGet, handleSlackPost, slackBoot, slackStatus } from './slack/adapter.mjs';
 import { handleTeamsRequest } from './teams/router.mjs';
+import { handleVoiceRequest } from './voice/adapter.mjs';
 import { relayGet } from './relay.mjs';
 import { listWatches, evaluateWatches } from './watches.mjs';
 import { getInstallation, legacyInstall, deliverFor } from './slack/installations.mjs';
@@ -45,6 +46,8 @@ const server = http.createServer(async (req, res) => {
   // Teams (Bot Framework) carries its own JWT auth, not Slack's HMAC, so it's dispatched
   // before the Slack signature gate inside handleSlackPost.
   if (u.pathname === TEAMS_MESSAGING_PATH) return handleTeamsRequest(req, res, body);
+  // Voice (ElevenLabs server tools) carries its own shared-secret auth, verified inside.
+  if (u.pathname.startsWith('/voice/')) return handleVoiceRequest(req, res, body, u);
   return handleSlackPost(req, res, body, u);
 });
 
