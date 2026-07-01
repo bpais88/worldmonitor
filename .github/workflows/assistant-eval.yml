@@ -1,0 +1,24 @@
+name: Assistant eval (nightly)
+
+# Behavioural tool-grounding eval — does Marco call the right tool for data questions, or answer
+# from the model's memory? Paid (real model calls) and mildly non-deterministic, so it runs NIGHTLY
+# rather than per-PR. Needs the ANTHROPIC_API_KEY repo secret; without it the eval script skips
+# cleanly (exit 0). Trigger manually via the Actions tab (workflow_dispatch) any time.
+on:
+  schedule:
+    - cron: '0 6 * * *' # 06:00 UTC daily
+  workflow_dispatch: {}
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run eval:assistant
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
