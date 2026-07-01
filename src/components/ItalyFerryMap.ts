@@ -10,11 +10,14 @@ import maplibregl from 'maplibre-gl';
 import { escapeHtml } from '@/utils/sanitize';
 import { EUROPE_BBOX, type Bbox } from '@/config/italy-ferries';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
+import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
 
 // Same basemap as DeckGLMap (keyless Carto vector style).
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const SOURCE_ID = 'ferries';
+const GEOFENCE_SOURCE_ID = 'geofences';
+const GEOFENCE_LAYERS = ['geofence-fill', 'geofence-line'];
 const ARROW_ICON = 'ferry-arrow';
 
 // bbox is [latMin, lonMin, latMax, lonMax]; MapLibre wants [[w,s],[e,n]].
@@ -80,6 +83,8 @@ export class ItalyFerryMap {
   private map: maplibregl.Map;
   private ready = false;
   private pending: TrackedFerry[] | null = null;
+  private pendingGeofences: Geofence[] | null = null;
+  private zonesVisible = false;
   private popup: maplibregl.Popup;
 
   constructor(container: HTMLElement) {
@@ -101,6 +106,24 @@ export class ItalyFerryMap {
 
   private onLoad(): void {
     this.addArrowIcon();
+
+    // Geofence zones render UNDER the vessels (added first). Hidden until toggled on.
+    this.map.addSource(GEOFENCE_SOURCE_ID, { type: 'geojson', data: geofencesToGeoJSON([]) });
+    this.map.addLayer({
+      id: 'geofence-fill',
+      type: 'fill',
+      source: GEOFENCE_SOURCE_ID,
+      layout: { visibility: 'none' },
+      paint: { 'fill-color': ['get', 'color'], 'fill-opacity': ['get', 'fillOpacity'] },
+    });
+    this.map.addLayer({
+      id: 'geofence-line',
+      type: 'line',
+      source: GEOFENCE_SOURCE_ID,
+      layout: { visibility: 'none' },
+      paint: { 'line-color': ['get', 'color'], 'line-width': 1.2, 'line-opacity': 0.7 },
+    });
+
     this.map.addSource(SOURCE_ID, { type: 'geojson', data: ferriesToGeoJSON([]) });
 
     // Coloured dot for stationary vessels (and as a base for moving ones).
@@ -163,6 +186,11 @@ export class ItalyFerryMap {
       this.setFerries(this.pending);
       this.pending = null;
     }
+    if (this.pendingGeofences) {
+      this.setGeofences(this.pendingGeofences);
+      this.pendingGeofences = null;
+    }
+    this.applyZonesVisibility();
   }
 
   /** Click a vessel for a popup; pointer cursor on hover. */
@@ -219,6 +247,28 @@ export class ItalyFerryMap {
     }
     const source = this.map.getSource(SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
     source?.setData(ferriesToGeoJSON(ferries) as unknown as GeoJSON.FeatureCollection);
+  }
+
+  /** Update the geofence zone shapes in place. */
+  public setGeofences(geofences: Geofence[]): void {
+    if (!this.ready) {
+      this.pendingGeofences = geofences;
+      return;
+    }
+    const source = this.map.getSource(GEOFENCE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    source?.setData(geofencesToGeoJSON(geofences) as unknown as GeoJSON.FeatureCollection);
+  }
+
+  /** Show/hide the geofence zone overlay. */
+  public setZonesVisible(visible: boolean): void {
+    this.zonesVisible = visible;
+    this.applyZonesVisibility();
+  }
+
+  private applyZonesVisibility(): void {
+    if (!this.ready) return;
+    const visibility = this.zonesVisible ? 'visible' : 'none';
+    for (const id of GEOFENCE_LAYERS) this.map.setLayoutProperty(id, 'visibility', visibility);
   }
 
   /** Zoom/pan to a region's bounding box — used when the region filter changes. */

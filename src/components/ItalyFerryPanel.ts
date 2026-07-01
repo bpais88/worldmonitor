@@ -15,6 +15,7 @@ import {
   REGION_ORDER,
   type FreightRegion,
 } from '@/config/italy-ferries';
+import { getGeofences, type Geofence } from '@/services/logistics/geofences';
 import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
 import { describeFreshness } from '@/services/logistics/freshness';
 
@@ -43,6 +44,8 @@ export class ItalyFerryPanel extends Panel {
   private mode: BoardMode = 'vessels';
   private region: FreightRegion = 'all'; // country filter, or 'all' = Europe-wide
   private operatorFilter: string | null = null; // operatorId, or null = all
+  private zonesOn = false; // geofence overlay visible?
+  private geofences: Geofence[] | null = null; // lazy-loaded on first toggle
   private searchText = '';
   private timer: ReturnType<typeof setInterval> | null = null;
   private map: ItalyFerryMap | null = null;
@@ -268,6 +271,7 @@ export class ItalyFerryPanel extends Panel {
         <span><i style="background:#2fbf85"></i>Under way (arrow = heading)</span>
         <span><i style="background:#e0a032"></i>At anchor</span>
         <span><i style="background:#9aa0a6"></i>In port</span>
+        <button type="button" class="ferry-zones-btn" aria-pressed="false" title="Show the port geofence zones on the map">◯ Port zones</button>
       </div>
       <div class="ferry-board"></div>
       <div class="economic-footer">
@@ -334,7 +338,31 @@ export class ItalyFerryPanel extends Panel {
       if (ferry) this.map?.focusFerry(ferry);
     });
 
+    // Geofence "Zones" overlay toggle (lazy-loads the shapes on first show).
+    const zonesBtn = this.content.querySelector<HTMLButtonElement>('.ferry-zones-btn');
+    zonesBtn?.addEventListener('click', () => void this.toggleZones(zonesBtn));
+
     this.mapMounted = true;
+  }
+
+  /** Toggle the geofence zone overlay; fetch the shapes once on first show. */
+  private async toggleZones(btn: HTMLButtonElement): Promise<void> {
+    this.zonesOn = !this.zonesOn;
+    btn.classList.toggle('is-active', this.zonesOn);
+    btn.setAttribute('aria-pressed', String(this.zonesOn));
+    if (this.zonesOn && !this.geofences) {
+      try {
+        this.geofences = await getGeofences();
+        this.map?.setGeofences(this.geofences);
+      } catch {
+        // Revert the toggle if the shapes fail to load.
+        this.zonesOn = false;
+        btn.classList.remove('is-active');
+        btn.setAttribute('aria-pressed', 'false');
+        return;
+      }
+    }
+    this.map?.setZonesVisible(this.zonesOn);
   }
 
   private updateToggleActive(): void {
