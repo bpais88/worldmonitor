@@ -1,14 +1,14 @@
 // WhatsApp (Twilio) request router — Marco's 4th channel, the Teams twin. Twilio delivers
-// inbound WhatsApp messages as form-encoded webhooks; we verify the Twilio signature, ack
-// fast, run the SAME agent as Slack/Teams over the read-only tools, and reply via the Twilio
-// API through the neutral send() seam.
+// inbound WhatsApp messages as form-encoded webhooks; we verify the Basic-auth webhook secret
+// (see verify.mjs for why not X-Twilio-Signature), ack fast, run the SAME agent as Slack/Teams
+// over the read-only tools, and reply via the Twilio API through the neutral send() seam.
 //
 // Scope: reactive Q&A only — we always reply inside WhatsApp's 24h free-form window, so no
 // message templates are needed. Watches + action tools are excluded: actions have no approval
 // affordance in plain text, and watches need BOTH proactive delivery (approved templates) AND
 // a per-user scope (today's single team:'whatsapp' tenant would cross-leak list/cancel across
 // users) — both land together in the proactive phase.
-import { verifyTwilioSignature } from './verify.mjs';
+import { verifyWebhookBasicAuth } from './verify.mjs';
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
@@ -27,32 +27,21 @@ const WHATSAPP_SYSTEM =
   'answer freight/port/weather questions; you cannot take actions.';
 const MAX_REPLY = 1500; // WhatsApp per-message limit is 1600 — keep a margin.
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
+// The shared secret Twilio sends as the Basic-auth password (see verify.mjs). Read once at load,
+// matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost by hoisting.
+const WEBHOOK_SECRET = process.env.WHATSAPP_WEBHOOK_SECRET || '';
 
-/**
- * The public URL Twilio signed against — reconstructed from the forwarded headers Railway
- * sets, overridable via WHATSAPP_PUBLIC_URL for an exact match if the proxy rewrites host.
- */
-function webhookUrl(req, u) {
-  const base = process.env.WHATSAPP_PUBLIC_URL;
-  if (base) return `${base.replace(/\/+$/, '')}${u.pathname}${u.search}`;
-  const proto = req.headers['x-forwarded-proto'] || 'https';
-  const host = req.headers['x-forwarded-host'] || req.headers.host;
-  return `${proto}://${host}${u.pathname}${u.search}`;
-}
-
-export async function handleWhatsAppRequest(req, res, body, u) {
-  const params = Object.fromEntries(new URLSearchParams(body || ''));
-  const ok = verifyTwilioSignature({
-    authToken: process.env.TWILIO_AUTH_TOKEN || '',
-    signature: req.headers['x-twilio-signature'],
-    url: webhookUrl(req, u),
-    params,
+export async function handleWhatsAppRequest(req, res, body) {
+  const ok = verifyWebhookBasicAuth({
+    header: req.headers['authorization'],
+    expectedSecret: WEBHOOK_SECRET,
   });
   if (!ok) {
-    console.warn('[whatsapp] signature rejected');
+    console.warn('[whatsapp] webhook auth rejected');
     res.writeHead(403);
     return res.end();
   }
+  const params = Object.fromEntries(new URLSearchParams(body || ''));
   // Ack fast with empty TwiML — we reply out-of-band via the API (running the agent takes
   // longer than Twilio's webhook window), like the Slack/Teams adapters.
   res.writeHead(200, { 'Content-Type': 'text/xml' });
