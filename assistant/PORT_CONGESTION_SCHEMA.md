@@ -70,7 +70,7 @@ CREATE TABLE port_baselines (
   dow        smallint NOT NULL,        -- 0..6 in LOCAL port time
   hour       smallint NOT NULL,        -- 0..23 in LOCAL port time
   p50 real, p75 real, p90 real, mean real, stddev real,  -- of at_berth
-  n          integer NOT NULL,         -- sample count in the bucket
+  n          integer NOT NULL,         -- DISTINCT local days observed (trust gate; percentiles are over all samples)
   updated_at timestamptz NOT NULL,
   PRIMARY KEY (port_id, dow, hour)
 );
