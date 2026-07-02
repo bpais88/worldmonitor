@@ -83,8 +83,11 @@ Whole launch gated behind `/health` `trips.degraded===false` holding ≥1 week o
 
 ## Open decisions (need the owner)
 
-1. **Distance method** — keep great-circle (cheap, reproducible, disclosed caveat; inflates avg_speed) or
-   compute a trip_points path-integral (needs dense points)? Affects whether `avg_speed_kn` is sellable.
+1. ~~**Distance method**~~ **RESOLVED 2026-07-02 → trip_points path-integral** (migration 005). The full-cycle
+   check found origin is observed on only ~5% of trips, so great-circle-from-origin covered just 4/142 arrived
+   trips; the path-integral (sailed distance from the stored points, GPS-jump legs > 40 kn dropped) lifts
+   coverage to ~73%. `avg_speed_kn` = mean AIS speed while under way (not distance/time, which conflated
+   cruising with port idle). Both reproducible from the durable points.
 2. **trip_points as a sold artifact** — if we sell voyage-replay/route-history, the 90d prune destroys it.
    Keep 90d + on-demand export, or extend + month-partition?
 3. **coverageOk weighting** — suppress a metric computed over a window with degraded snapshots, or show with

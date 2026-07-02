@@ -351,32 +351,56 @@ async function backfillDestDwell(exits) {
   } catch (e) { tripFail(e); return 0; }
 }
 
+const TRIP_SEG_MAX_KN = 40;    // a leg between two points implying >40 kn is a bad AIS position → dropped
+const TRIP_MOVING_MIN_KN = 1;  // speed above this counts as "under way" (excludes idle/berth samples)
+const TRIP_SPEED_MIN_PTS = 3;  // need this many moving samples before an avg speed is trustworthy
+// Wait this long after arrival before finalizing. Capture STOPS at arrival, so the point set is then
+// fixed — but the last points captured while open may still sit in the relay's pendingTripPoints buffer
+// (flushed every ~60s, requeued on a transient failure). Finalizing sooner would compute from a partial
+// track and then the `distance_km IS NULL` gate would skip the trip forever, undercounting distance/speed.
+// 5 min safely clears the 60s flush + a couple of requeues.
+const TRIP_FINALIZE_GRACE_SEC = 300;
+
 /**
- * Compute distance_km + avg_speed_kn for arrived trips that have a known origin, in SQL from the
- * ports dimension — great-circle (haversine, R=6371, matching ferry-eta.cjs haversineKm), so it is
- * reproducible and gap-robust. Stays NULL when origin is unknown (the JOIN excludes null-origin).
- * avg_speed carries the km/h→kn (/1.852) conversion. Idempotent: only fills where distance_km IS NULL.
+ * Compute distance_km + avg_speed_kn for arrived trips from the TRIP_POINTS PATH (not great-circle
+ * origin→dest, which needed an origin that's observed on only ~5% of trips). distance = summed haversine
+ * between consecutive points (R=6371), dropping GPS-jump legs (> TRIP_SEG_MAX_KN). avg_speed = mean of
+ * the vessel's own AIS speed while under way — cleaner than distance/time, which conflates cruising with
+ * port idle. NULL until >=2 points (distance) / >=TRIP_SPEED_MIN_PTS moving points (speed). Idempotent
+ * (only fills where distance_km IS NULL). Reproducible from the durable points.
  */
 async function finalizeArrivedGeo() {
   if (!enabled) return 0;
   try {
     const rows = await withTimeout(sql`
-      UPDATE trips t SET
-        distance_km = gc.km,
-        avg_speed_kn = CASE WHEN t.duration_min > 0 THEN (gc.km / (t.duration_min / 60.0)) / 1.852 END,
-        updated_at = now()
-      FROM (
-        SELECT t2.id,
+      WITH tp AS (
+        SELECT tp.trip_id, tp.speed_kn,
                2 * 6371 * asin(sqrt(
-                 power(sin(radians(pd.lat - po.lat) / 2), 2) +
-                 cos(radians(po.lat)) * cos(radians(pd.lat)) * power(sin(radians(pd.lon - po.lon) / 2), 2)
-               )) AS km
-        FROM trips t2
-        JOIN ports po ON po.port_id = t2.origin_port_id
-        JOIN ports pd ON pd.port_id = t2.dest_port_id
-        WHERE t2.status = 'arrived' AND t2.distance_km IS NULL AND t2.origin_port_id IS NOT NULL
-      ) gc
-      WHERE t.id = gc.id RETURNING t.id`);
+                 power(sin(radians(tp.lat - lag(tp.lat) OVER w) / 2), 2) +
+                 cos(radians(lag(tp.lat) OVER w)) * cos(radians(tp.lat)) *
+                 power(sin(radians(tp.lon - lag(tp.lon) OVER w) / 2), 2)
+               )) AS seg_km,
+               extract(epoch from (tp.ts - lag(tp.ts) OVER w)) / 3600.0 AS seg_h
+        FROM trip_points tp
+        JOIN trips t ON t.id = tp.trip_id
+        WHERE t.status = 'arrived' AND t.distance_km IS NULL
+          AND t.arrived_at < now() - make_interval(secs => ${TRIP_FINALIZE_GRACE_SEC})  -- let buffered points flush first
+        WINDOW w AS (PARTITION BY tp.trip_id ORDER BY tp.ts)
+      ),
+      agg AS (
+        SELECT trip_id,
+               sum(seg_km) FILTER (WHERE seg_h > 0 AND (seg_km / seg_h) / 1.852 <= ${TRIP_SEG_MAX_KN}) AS km,
+               avg(speed_kn) FILTER (WHERE speed_kn > ${TRIP_MOVING_MIN_KN}) AS moving_kn,
+               count(*) FILTER (WHERE speed_kn > ${TRIP_MOVING_MIN_KN}) AS moving_pts
+        FROM tp GROUP BY trip_id
+      )
+      UPDATE trips t SET
+        distance_km = a.km,
+        avg_speed_kn = CASE WHEN a.moving_pts >= ${TRIP_SPEED_MIN_PTS} THEN a.moving_kn END,
+        updated_at = now()
+      FROM agg a
+      WHERE t.id = a.trip_id AND a.km IS NOT NULL
+      RETURNING t.id`);
     return Array.isArray(rows) ? rows.length : 0;
   } catch (e) { tripFail(e); return 0; }
 }
@@ -493,7 +517,6 @@ async function queryTrip({ id, mmsi } = {}) {
   const openedAt = num(r.opened_at);
   const departedAt = num(r.departed_at);
   const updatedAt = num(r.updated_at);
-  const originKnown = r.origin_port_id != null;
   const distanceKm = num(r.distance_km);
   const avgSpeedKn = num(r.avg_speed_kn);
   const destDwellMin = num(r.dest_dwell_min);
@@ -521,10 +544,11 @@ async function queryTrip({ id, mmsi } = {}) {
     }
   } catch (e) { fail(e); notes.track = 'track unavailable'; }
 
-  // Field-level flags (the gate). distance/speed are great-circle origin→dest and only for known-origin legs.
-  if (distanceKm == null) notes.distanceKm = originKnown ? 'computing (awaiting finalization)' : 'origin not observed; distance unavailable';
-  if (avgSpeedKn == null) notes.avgSpeedKn = originKnown ? 'computing (awaiting finalization)' : 'origin not observed; speed unavailable';
-  else notes.avgSpeedKn = 'great-circle origin→dest; real sailed distance is longer, so this reads high';
+  // Field-level flags (the gate). distance = the sailed track path; speed = avg AIS speed under way —
+  // both filled by the finalize sweep once the trip arrives with enough track (no origin needed).
+  if (distanceKm == null) notes.distanceKm = status === 'open' ? 'computing (voyage in progress)' : (pointCount < 2 ? 'track too sparse for distance' : 'computing from track');
+  if (avgSpeedKn == null) notes.avgSpeedKn = status === 'open' ? 'computing (voyage in progress)' : 'track too sparse for average speed';
+  else notes.avgSpeedKn = 'average AIS speed while under way';
   if (destDwellMin == null && status === 'arrived') notes.destDwellMin = 'pending destination exit observation';
   if (departedAt == null && status !== 'open') notes.departedAt = 'departure not recorded';
   if (status === 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_OPEN_STALE_MS) notes.status = 'stale (no recent position update)';
