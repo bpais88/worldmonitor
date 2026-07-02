@@ -1712,7 +1712,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
-const { decideTrip } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit } = require('./trip-lifecycle.cjs');
 const { relayFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
@@ -1796,7 +1796,6 @@ const portHistoryState = {
   _lastPersistedVersion: 0,
   _persistInFlight: false,
 };
-
 // The sampler keeps its OWN atPort-smoothing window so the 5-min snapshot cadence
 // doesn't cross-contaminate the request-driven /ais/ports smoothing (portStatusHistory).
 const portSnapshotHistory = new Map();
@@ -1882,6 +1881,21 @@ async function samplePortHistory(now = Date.now()) {
       else portHistoryState.events = pushCapped(portHistoryState.events, events, PORT_HISTORY_MAX_EVENTS);
       portHistoryState._persistVersion++;
     }
+    // Phase B (CLOSE side): destination-enter closes an open trip; exits feed origin/dwell backfills.
+    if (TRIPS_ENABLED && tripsReady) {
+      // Cold-boot phantom-enter guard (see _skipFirstGeoEnters): skip the first cold-boot tick's enters.
+      const skipEnters = _skipFirstGeoEnters;
+      _skipFirstGeoEnters = false;
+      const { arrivals, exits, arrivedMmsi } = planGeofenceActions(events, tripByMmsi, { skipEnters });
+      for (const m of arrivedMmsi) { const t = tripByMmsi.get(m); if (t) t.status = 'arrived'; } // stop point capture now
+      if (arrivals.length) void db.finishTrip(arrivals); // distance/avg_speed filled by the finalizeArrivedGeo sweep (PR5)
+      if (exits.length) {
+        for (const e of exits) recentExitByMmsi.set(e.mmsi, { portId: e.portId, ts: e.ts });
+        void db.backfillTripOrigin(exits);  // origin/departed for the exit-AFTER-open order
+        void db.backfillDestDwell(exits);   // dwell at the destination once the vessel leaves
+      }
+      for (const [m, ex] of recentExitByMmsi) if (now - ex.ts > RECENT_EXIT_TTL_MS) recentExitByMmsi.delete(m);
+    }
     // Congestion snapshot on the slower cadence (baseline/seasonality fuel).
     if (now - lastPortSnapshotAt >= PORT_SNAPSHOT_MS) {
       const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
@@ -1950,6 +1964,7 @@ async function bootstrapPortHistory() {
         portHistoryState.membership = new Map(
           Object.entries(cached.membership).map(([gfId, arr]) => [gfId, new Set(arr)]),
         );
+        if (portHistoryState.membership.size > 0) _skipFirstGeoEnters = false; // warm boot → first-tick enters are real
       }
       if (cached.enterTimes && typeof cached.enterTimes === 'object') {
         portHistoryState.enterTimes = new Map(
@@ -2206,6 +2221,14 @@ const tripByMmsi = new Map();      // mmsi -> tripState (see trip-lifecycle.cjs)
 const pendingTripPoints = [];      // buffered trip_points, flushed in batches off the hot loop
 let tripsReady = false;            // gate: no lifecycle mutations until loadOpenTrips() has seeded tripByMmsi
 let _flushingTripPoints = false;   // in-flight guard for the flush
+// CLOSE side (geofence loop): remember recent origin exits so a trip opening shortly AFTER departure
+// still gets its origin (backfillTripOrigin only catches the exit-AFTER-open order). Bounded by fleet.
+const RECENT_EXIT_TTL_MS = safeInt(process.env.TRIP_RECENT_EXIT_TTL_MS, 6 * 60 * 60_000, 30 * 60_000);
+const recentExitByMmsi = new Map(); // mmsi -> { portId, ts }
+// Cold-boot phantom-enter guard: true until we've either restored a non-empty membership from Redis
+// (warm boot → first-tick enters are real) or consumed the first geofence tick (cold boot → its enters
+// are bogus, every in-zone vessel looks new). bootstrapPortHistory clears it on a warm boot.
+let _skipFirstGeoEnters = true;
 
 // Durable per-day count of trips Marco began tracking (atomic INCR, ~120d TTL), so
 // "how many trips per day" is answerable later even across restarts.
@@ -2327,7 +2350,13 @@ function applyTripActions(mmsi, actions, ctx) {
         break;
       case 'open': {
         const { destPortId } = a;
-        void db.openTrip({ mmsi, destPortId, openedAt: a.openedAt, departureEta: a.departureEta })
+        // exit-before-open: if the vessel recently left a different port, record it as the origin now
+        // (backfillTripOrigin only catches the exit that fires AFTER the trip is already open).
+        const origin = originFromRecentExit(recentExitByMmsi.get(mmsi), destPortId, a.openedAt);
+        void db.openTrip({
+          mmsi, destPortId, openedAt: a.openedAt, departureEta: a.departureEta,
+          originPortId: origin ? origin.portId : null, departedAt: origin ? origin.ts : null,
+        })
           // Bind the id only if the entry is still THIS open trip (guard against a re-route having
           // replaced it while the insert was in flight).
           .then((id) => { const e = tripByMmsi.get(mmsi); if (e && e.tripId == null && e.destPortId === destPortId && id != null) e.tripId = id; });

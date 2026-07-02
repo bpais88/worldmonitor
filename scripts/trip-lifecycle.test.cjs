@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decideTrip, DEFAULTS } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit, DEFAULTS } = require('./trip-lifecycle.cjs');
 
 const T0 = 1_700_000_000_000;
 const MIN = 60_000;
@@ -137,4 +137,73 @@ test('custom destStableTicks=1 acts on the first re-route tick', () => {
 test('DEFAULTS are exposed and sane', () => {
   assert.strictEqual(DEFAULTS.minPointGapMs, 5 * 60_000);
   assert.strictEqual(DEFAULTS.destStableTicks, 2);
+});
+
+// --- planGeofenceActions (CLOSE side) --------------------------------------
+
+const openTrip = (destPortId) => ({ tripId: 1, destPortId, openedAt: T0, status: 'open', lastPointTs: 0, stalledMarked: false, etaPatched: true, pendingDest: null, pendingTicks: 0 });
+
+test('enter at a trip destination is an arrival + flags the mmsi for in-memory close', () => {
+  const trips = new Map([['247', openTrip('ancona')]]);
+  const events = [{ mmsi: '247', portId: 'ancona', kind: 'enter', ts: T0 }];
+  const { arrivals, exits, arrivedMmsi } = planGeofenceActions(events, trips);
+  assert.deepStrictEqual(arrivals, [{ mmsi: '247', portId: 'ancona', ts: T0 }]);
+  assert.deepStrictEqual(arrivedMmsi, ['247']);
+  assert.deepStrictEqual(exits, []);
+});
+
+test('enter at a port that is not the open trip destination is still an arrival but not an in-memory close', () => {
+  const trips = new Map([['247', openTrip('genova')]]); // open trip goes to genova, entered ancona
+  const { arrivals, arrivedMmsi } = planGeofenceActions([{ mmsi: '247', portId: 'ancona', kind: 'enter', ts: T0 }], trips);
+  assert.strictEqual(arrivals.length, 1);         // finishTrip's WHERE join will simply match 0 rows
+  assert.deepStrictEqual(arrivedMmsi, []);        // don't flip the genova trip to arrived
+});
+
+test('skipEnters (cold-boot phantom guard) drops all enters, keeps exits', () => {
+  const events = [
+    { mmsi: '1', portId: 'ancona', kind: 'enter', ts: T0 },
+    { mmsi: '2', portId: 'genova', kind: 'exit', ts: T0, dwellMin: 40 },
+  ];
+  const { arrivals, exits, arrivedMmsi } = planGeofenceActions(events, new Map(), { skipEnters: true });
+  assert.deepStrictEqual(arrivals, []);
+  assert.deepStrictEqual(arrivedMmsi, []);
+  assert.deepStrictEqual(exits, [{ mmsi: '2', portId: 'genova', ts: T0, dwellMin: 40 }]);
+});
+
+test('exit carries dwellMin through for the dest-dwell backfill', () => {
+  const { exits } = planGeofenceActions([{ mmsi: '5', portId: 'napoli', kind: 'exit', ts: T0, dwellMin: 63 }], new Map());
+  assert.deepStrictEqual(exits, [{ mmsi: '5', portId: 'napoli', ts: T0, dwellMin: 63 }]);
+});
+
+test('planGeofenceActions tolerates empty/absent inputs', () => {
+  const r = planGeofenceActions(undefined, undefined);
+  assert.deepStrictEqual(r, { arrivals: [], exits: [], arrivedMmsi: [] });
+});
+
+// --- originFromRecentExit ---------------------------------------------------
+
+test('recent exit before open at a different port is the origin', () => {
+  const r = originFromRecentExit({ portId: 'genova', ts: T0 - 20 * MIN }, 'ancona', T0);
+  assert.deepStrictEqual(r, { portId: 'genova', ts: T0 - 20 * MIN });
+});
+
+test('an exit at the destination itself is never the origin', () => {
+  assert.strictEqual(originFromRecentExit({ portId: 'ancona', ts: T0 - 5 * MIN }, 'ancona', T0), null);
+});
+
+test('an exit too far before the open is rejected', () => {
+  assert.strictEqual(originFromRecentExit({ portId: 'genova', ts: T0 - 7 * 60 * MIN }, 'ancona', T0), null); // >6h before
+});
+
+test('an exit shortly after the open (dest resolved at berth) still counts', () => {
+  const r = originFromRecentExit({ portId: 'genova', ts: T0 + 10 * MIN }, 'ancona', T0);
+  assert.deepStrictEqual(r, { portId: 'genova', ts: T0 + 10 * MIN });
+});
+
+test('an exit long after the open is rejected', () => {
+  assert.strictEqual(originFromRecentExit({ portId: 'genova', ts: T0 + 40 * MIN }, 'ancona', T0), null); // >30min after
+});
+
+test('null recent exit yields null origin', () => {
+  assert.strictEqual(originFromRecentExit(null, 'ancona', T0), null);
 });
