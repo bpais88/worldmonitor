@@ -1739,6 +1739,10 @@ const ITALY_PORTS_BY_ID = require('../src/config/italy-ferries.data.json').ports
 // and /ais/port-history (the time-series).
 const { buildPortGeofences, computeMembership, diffMembership } = require('./geofence-engine.cjs');
 const PORT_GEOFENCES = buildPortGeofences(ITALY_PORTS_BY_ID);
+// Durable time-series sink (Neon Postgres). Fail-soft: a no-op when DATABASE_URL is unset, so the
+// relay is unchanged without it. Retires the Upstash single-blob port-history for snapshots/events
+// (which capped ~1MB/~1 day); membership/enterTimes stay in the small Upstash blob for restart-safety.
+const db = require('./db.cjs');
 
 const PORT_HISTORY_ENABLED = process.env.PORT_HISTORY_ENABLED !== '0';
 const GEOFENCE_TICK_MS = safeInt(process.env.GEOFENCE_TICK_MS, 60_000, 15_000); // in-memory membership/event cadence
@@ -1793,6 +1797,7 @@ function buildFreightVesselList() {
   return out;
 }
 
+let lastPortSnapshotAt = 0; // snapshot-cadence gate, decoupled from where the series is stored (PG vs memory)
 function samplePortHistory(now = Date.now()) {
   try {
     // Same freshness cutoff as the /ais/ports snapshot (computePortStatus): a contact
@@ -1802,28 +1807,35 @@ function samplePortHistory(now = Date.now()) {
     const fresh = buildFreightVesselList().filter(
       (v) => !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_STATUS_DEFAULTS.freshMs,
     );
+    // Feed provenance stamped on every row this tick. Coarse for now — per-region coverage is the
+    // P1 refinement; today coverage is "degraded" only when the Marinesia fallback is warming/stale.
+    const f = feedFreshness();
+    const meta = { source: MARINESIA_ENABLED && f.stale ? 'marinesia' : 'aisstream', coverageOk: !(f.warming || f.stale) };
     // Geofence membership diff -> enter/exit events (arrivals/departures/dwell).
     const next = computeMembership(fresh, PORT_GEOFENCES);
     const events = diffMembership(portHistoryState.membership, next, now, portHistoryState.enterTimes, PORT_GEOFENCES);
     portHistoryState.membership = next;
     if (events.length) {
-      portHistoryState.events = pushCapped(portHistoryState.events, events, PORT_HISTORY_MAX_EVENTS);
+      // Postgres owns the durable series; the in-memory array is only a no-DB fallback.
+      if (db.enabled) void db.writeEvents(events, meta);
+      else portHistoryState.events = pushCapped(portHistoryState.events, events, PORT_HISTORY_MAX_EVENTS);
       portHistoryState._persistVersion++;
     }
     // Congestion snapshot on the slower cadence (baseline/seasonality fuel).
-    const lastSnapshotAt = portHistoryState.snapshots.at(-1)?.ts ?? 0;
-    if (now - lastSnapshotAt >= PORT_SNAPSHOT_MS) {
+    if (now - lastPortSnapshotAt >= PORT_SNAPSHOT_MS) {
       const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
       smoothPortStatus(ports, portSnapshotHistory);
-      // Bank every DYNAMIC port field (portId, atPort smoothed + atPortRaw, atAnchor/
-      // atBerth, inbound + inboundEta, congestion); drop only the static identity fields
-      // that don't need to repeat each snapshot. New computePortStatus fields flow in
-      // automatically — the whole point is to capture everything for the backtest.
-      const snapshot = {
-        ts: now,
-        ports: ports.map(({ name, lat, lon, region, ...dyn }) => dyn),
-      };
-      portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
+      // Bank every DYNAMIC port field (portId, atPort smoothed + atPortRaw, atAnchor/atBerth,
+      // inbound + inboundEta, congestion); new computePortStatus fields flow in automatically —
+      // capture everything for the backtest. writeSnapshot reads dynamic fields by name and ignores
+      // the static ones, so the DB path takes `ports` directly; only the fallback trims them.
+      if (db.enabled) {
+        void db.writeSnapshot(now, ports, meta);
+      } else {
+        const snapshot = { ts: now, ports: ports.map(({ name, lat, lon, region, ...dyn }) => dyn) };
+        portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
+      }
+      lastPortSnapshotAt = now;
       portHistoryState._persistVersion++;
     }
   } catch (e) {
@@ -1839,13 +1851,16 @@ async function persistPortHistory() {
   portHistoryState._persistInFlight = true;
   const version = portHistoryState._persistVersion;
   try {
-    const ok = await upstashSet(PORT_HISTORY_REDIS_KEY, {
-      snapshots: portHistoryState.snapshots,
-      events: portHistoryState.events,
+    // With Postgres owning snapshots/events, the Upstash blob shrinks to just the membership +
+    // enterTimes state (bounded by vessels-in-zones) — restart-safety for dwell, no size ceiling.
+    // Without a DB, fall back to persisting the full (capped) series here as before.
+    const payload = {
       membership: serializeMembership(portHistoryState.membership),
       enterTimes: Object.fromEntries(portHistoryState.enterTimes),
       persistedAt: new Date().toISOString(),
-    }, PORT_HISTORY_TTL_SECONDS);
+    };
+    if (!db.enabled) { payload.snapshots = portHistoryState.snapshots; payload.events = portHistoryState.events; }
+    const ok = await upstashSet(PORT_HISTORY_REDIS_KEY, payload, PORT_HISTORY_TTL_SECONDS);
     if (ok) portHistoryState._lastPersistedVersion = version;
   } catch (e) {
     console.warn('[Relay] port-history persist failed:', e.message);
@@ -1858,11 +1873,14 @@ async function bootstrapPortHistory() {
   if (!UPSTASH_ENABLED) return;
   try {
     const cached = await upstashGet(PORT_HISTORY_REDIS_KEY);
-    if (cached && Array.isArray(cached.snapshots)) {
-      portHistoryState.snapshots = cached.snapshots.slice(-PORT_HISTORY_MAX_SNAPSHOTS);
-      portHistoryState.events = Array.isArray(cached.events) ? cached.events.slice(-PORT_HISTORY_MAX_EVENTS) : [];
-      // Restore OPEN zone occupancy so vessels still in port across a restart aren't
-      // replayed as fresh enters — and their dwell keeps counting from the real entry.
+    if (cached && typeof cached === 'object') {
+      // Snapshots/events only when there's no DB (else Postgres owns them; the blob is membership-only).
+      if (!db.enabled && Array.isArray(cached.snapshots)) {
+        portHistoryState.snapshots = cached.snapshots.slice(-PORT_HISTORY_MAX_SNAPSHOTS);
+        portHistoryState.events = Array.isArray(cached.events) ? cached.events.slice(-PORT_HISTORY_MAX_EVENTS) : [];
+      }
+      // Restore OPEN zone occupancy + enter times (both feed dwell) regardless of the series home,
+      // so vessels still in port across a restart aren't replayed as fresh enters.
       if (cached.membership && typeof cached.membership === 'object') {
         portHistoryState.membership = new Map(
           Object.entries(cached.membership).map(([gfId, arr]) => [gfId, new Set(arr)]),
@@ -1873,7 +1891,8 @@ async function bootstrapPortHistory() {
           Object.entries(cached.enterTimes).map(([k, v]) => [k, Number(v)]),
         );
       }
-      console.log(`[Relay] port-history bootstrapped (${portHistoryState.snapshots.length} snapshots, ${portHistoryState.events.length} events, ${portHistoryState.membership.size} open zones)`);
+      console.log(`[Relay] port-history bootstrapped (${portHistoryState.membership.size} open zones` +
+        (db.enabled ? ', series in Postgres)' : `, ${portHistoryState.snapshots.length} snapshots, ${portHistoryState.events.length} events)`));
     }
   } catch (e) {
     console.warn('[Relay] port-history bootstrap failed:', e.message);
@@ -1883,12 +1902,20 @@ async function bootstrapPortHistory() {
 async function startPortHistoryLoop() {
   if (!PORT_HISTORY_ENABLED) { console.log('[Relay] port-history sampler disabled (PORT_HISTORY_ENABLED=0)'); return; }
   await bootstrapPortHistory();
+  if (db.enabled) {
+    try { await db.syncPorts(ITALY_PORTS_BY_ID); console.log(`[Relay] ports dim synced to Postgres (${db.stats.portsSynced} commercial ports)`); }
+    catch (e) { console.warn('[Relay] ports sync failed:', e.message); }
+  } else if (IS_PRODUCTION_RELAY) {
+    // Loud, not silent: without a DB in prod the series falls back to the capped in-memory/Redis
+    // blob — the exact silent-data-loss failure this pipeline was rebuilt to avoid. Set DATABASE_URL.
+    console.error('[Relay] ⚠️  port-history has NO DATABASE_URL in production — falling back to the capped in-memory/Redis blob (durable 2-week history will NOT accumulate). Set DATABASE_URL on the relay.');
+  }
   samplePortHistory();
   // Sample in-memory every tick; flush to Redis on the slower cadence so we don't
   // rewrite the whole (growing) time-series blob every minute (ferry-delay pattern).
   setInterval(() => samplePortHistory(), GEOFENCE_TICK_MS).unref?.();
   setInterval(() => { void persistPortHistory(); }, PORT_PERSIST_MS).unref?.();
-  console.log(`[Relay] port-history + geofence sampler on (tick ${GEOFENCE_TICK_MS / 1000}s, snapshot ${PORT_SNAPSHOT_MS / 60000}min, persist ${PORT_PERSIST_MS / 60000}min, ${PORT_GEOFENCES.length} port zones)`);
+  console.log(`[Relay] port-history + geofence sampler on (tick ${GEOFENCE_TICK_MS / 1000}s, snapshot ${PORT_SNAPSHOT_MS / 60000}min, persist ${PORT_PERSIST_MS / 60000}min, ${PORT_GEOFENCES.length} port zones, sink ${db.enabled ? 'postgres' : 'memory+redis'})`);
 }
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
@@ -4224,6 +4251,21 @@ const handleRequest = async (req, res) => {
         openskyMax: RELAY_OPENSKY_RATE_LIMIT_MAX,
         rssMax: RELAY_RSS_RATE_LIMIT_MAX,
       },
+      // Port-history pipeline health — surfaces the Postgres writer so a stuck/failing write is
+      // visible (the old blob failed silently). Sync in-memory counters only; no PG call here.
+      portHistory: {
+        enabled: PORT_HISTORY_ENABLED,
+        dbEnabled: db.enabled,
+        degraded: PORT_HISTORY_ENABLED && !db.enabled, // wanted the durable store, running on the fallback
+        zones: PORT_GEOFENCES.length,
+        openZones: portHistoryState.membership.size,
+        lastSnapshotAt: lastPortSnapshotAt || null,
+        lastWriteAt: db.stats.lastWriteAt,
+        lastWriteOk: db.stats.lastWriteOk,
+        snapshotRows: db.stats.snapshotRows,
+        eventRows: db.stats.eventRows,
+        lastError: db.stats.lastError,
+      },
     }));
   } else if (pathname === '/metrics') {
     return sendCompressed(req, res, 200, {
@@ -4342,12 +4384,26 @@ const handleRequest = async (req, res) => {
       'Cache-Control': 'public, max-age=300, s-maxage=300',
     }, JSON.stringify({ geofences: PORT_GEOFENCES, count: PORT_GEOFENCES.length }));
   } else if (pathname === '/ais/port-history') {
-    // Time-series for the congestion forecast: per-port congestion snapshots +
-    // geofence enter/exit events (arrivals/departures/dwell).
-    return sendCompressed(req, res, 200, {
-      'Content-Type': 'application/json',
-      'Cache-Control': 'public, max-age=60, s-maxage=60',
-    }, JSON.stringify({
+    // Time-series for the congestion forecast: per-port congestion snapshots + geofence enter/exit
+    // events. Served from Postgres (durable, ?since/limit/ports) when enabled; in-memory otherwise.
+    const phHeaders = { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=60' };
+    if (db.enabled) {
+      try {
+        const q = new URL(req.url, 'http://localhost').searchParams;
+        const portsParam = q.get('ports');
+        const payload = await db.queryPortHistory({
+          sinceMs: Number(q.get('since')) || undefined,
+          limitSnap: Number(q.get('limit')) || PORT_HISTORY_MAX_SNAPSHOTS, // snapshots (ticks); env-tunable
+          limitEvt: PORT_HISTORY_MAX_EVENTS,
+          ports: portsParam ? portsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
+        });
+        return sendCompressed(req, res, 200, phHeaders, JSON.stringify(payload));
+      } catch (e) {
+        console.warn('[Relay] port-history query failed:', e.message);
+        return sendCompressed(req, res, 200, phHeaders, JSON.stringify({ snapshots: [], events: [], snapshotCount: 0, eventCount: 0, generatedAt: Date.now(), error: 'query failed' }));
+      }
+    }
+    return sendCompressed(req, res, 200, phHeaders, JSON.stringify({
       snapshots: portHistoryState.snapshots,
       events: portHistoryState.events,
       snapshotCount: portHistoryState.snapshots.length,
@@ -5007,6 +5063,11 @@ async function gracefulShutdown(signal) {
   }
   if (upstreamSocket) {
     try { upstreamSocket.close(); } catch {}
+  }
+  // Save the latest membership/enterTimes (dwell restart-safety) before exit — timeout-raced so a
+  // slow write can't block past Railway's grace window. Snapshots/events already went to Postgres per tick.
+  if (PORT_HISTORY_ENABLED) {
+    try { await Promise.race([persistPortHistory(), new Promise((r) => setTimeout(r, 2500))]); } catch {}
   }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000);
