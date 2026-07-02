@@ -1796,10 +1796,6 @@ const portHistoryState = {
   _lastPersistedVersion: 0,
   _persistInFlight: false,
 };
-// Whether boot restored a non-empty membership from Redis. Drives the trips cold-boot phantom-enter
-// guard: with NO restored membership, the first diff fires a bogus 'enter' for every in-zone vessel.
-let membershipRestored = false;
-
 // The sampler keeps its OWN atPort-smoothing window so the 5-min snapshot cadence
 // doesn't cross-contaminate the request-driven /ais/ports smoothing (portStatusHistory).
 const portSnapshotHistory = new Map();
@@ -1887,13 +1883,12 @@ async function samplePortHistory(now = Date.now()) {
     }
     // Phase B (CLOSE side): destination-enter closes an open trip; exits feed origin/dwell backfills.
     if (TRIPS_ENABLED && tripsReady) {
-      // Cold-boot phantom-enter guard: on the first geofence tick with no restored membership, every
-      // in-zone vessel fires a bogus 'enter' — skip arrivals that tick (a cold boot yields no real ones).
-      const skipEnters = _tripsFirstGeoTick && !membershipRestored;
-      _tripsFirstGeoTick = false;
+      // Cold-boot phantom-enter guard (see _skipFirstGeoEnters): skip the first cold-boot tick's enters.
+      const skipEnters = _skipFirstGeoEnters;
+      _skipFirstGeoEnters = false;
       const { arrivals, exits, arrivedMmsi } = planGeofenceActions(events, tripByMmsi, { skipEnters });
       for (const m of arrivedMmsi) { const t = tripByMmsi.get(m); if (t) t.status = 'arrived'; } // stop point capture now
-      if (arrivals.length) void db.finishTrip(arrivals).then((n) => { if (n) void db.finalizeArrivedGeo(); });
+      if (arrivals.length) void db.finishTrip(arrivals); // distance/avg_speed filled by the finalizeArrivedGeo sweep (PR5)
       if (exits.length) {
         for (const e of exits) recentExitByMmsi.set(e.mmsi, { portId: e.portId, ts: e.ts });
         void db.backfillTripOrigin(exits);  // origin/departed for the exit-AFTER-open order
@@ -1969,7 +1964,7 @@ async function bootstrapPortHistory() {
         portHistoryState.membership = new Map(
           Object.entries(cached.membership).map(([gfId, arr]) => [gfId, new Set(arr)]),
         );
-        if (portHistoryState.membership.size > 0) membershipRestored = true; // warm boot → first-tick enters are real
+        if (portHistoryState.membership.size > 0) _skipFirstGeoEnters = false; // warm boot → first-tick enters are real
       }
       if (cached.enterTimes && typeof cached.enterTimes === 'object') {
         portHistoryState.enterTimes = new Map(
@@ -2230,7 +2225,10 @@ let _flushingTripPoints = false;   // in-flight guard for the flush
 // still gets its origin (backfillTripOrigin only catches the exit-AFTER-open order). Bounded by fleet.
 const RECENT_EXIT_TTL_MS = safeInt(process.env.TRIP_RECENT_EXIT_TTL_MS, 6 * 60 * 60_000, 30 * 60_000);
 const recentExitByMmsi = new Map(); // mmsi -> { portId, ts }
-let _tripsFirstGeoTick = true;      // cold-boot phantom-enter guard (first geofence tick)
+// Cold-boot phantom-enter guard: true until we've either restored a non-empty membership from Redis
+// (warm boot → first-tick enters are real) or consumed the first geofence tick (cold boot → its enters
+// are bogus, every in-zone vessel looks new). bootstrapPortHistory clears it on a warm boot.
+let _skipFirstGeoEnters = true;
 
 // Durable per-day count of trips Marco began tracking (atomic INCR, ~120d TTL), so
 // "how many trips per day" is answerable later even across restarts.
