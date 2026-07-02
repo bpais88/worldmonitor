@@ -99,4 +99,51 @@ function decideTrip(prev, voyage, ctx) {
   return { actions, nextState: next };
 }
 
-module.exports = { decideTrip, DEFAULTS };
+// --- Geofence (CLOSE) side ------------------------------------------------
+// The geofence loop's diffMembership yields enter/exit events; these pure helpers turn a tick's
+// events into the CLOSE-side work the relay dispatches. Enter at a trip's destination = arrival;
+// exits feed origin/dwell backfills. Kept pure + unit-tested alongside the anchor-side decideTrip.
+
+/**
+ * Plan the CLOSE-side actions from a tick's geofence events.
+ * @param events       [{ mmsi, portId, kind:'enter'|'exit', ts, dwellMin? }]
+ * @param tripByMmsi   the relay's live trip map (read-only here)
+ * @param skipEnters   cold-boot phantom-enter guard — on the first tick after a boot that restored NO
+ *                     membership, every in-zone vessel fires a bogus 'enter'; skip arrivals that tick
+ * @returns { arrivals:[{mmsi,portId,ts}], exits:[{mmsi,portId,ts,dwellMin}], arrivedMmsi:[mmsi] }
+ *   arrivedMmsi = the subset whose OPEN trip's destination matches the entered port (in-memory flip
+ *   to 'arrived', mirroring finishTrip's WHERE join so point capture stops immediately).
+ */
+function planGeofenceActions(events, tripByMmsi, { skipEnters = false } = {}) {
+  const arrivals = [];
+  const exits = [];
+  const arrivedMmsi = [];
+  for (const e of events || []) {
+    const mmsi = String(e.mmsi);
+    if (e.kind === 'enter') {
+      if (skipEnters) continue;
+      arrivals.push({ mmsi, portId: e.portId, ts: e.ts });
+      const t = tripByMmsi && tripByMmsi.get(mmsi);
+      if (t && t.status === 'open' && t.destPortId === e.portId) arrivedMmsi.push(mmsi);
+    } else if (e.kind === 'exit') {
+      exits.push({ mmsi, portId: e.portId, ts: e.ts, dwellMin: e.dwellMin });
+    }
+  }
+  return { arrivals, exits, arrivedMmsi };
+}
+
+/**
+ * Decide whether a remembered recent geofence exit is a trip's ORIGIN (the exit-before-open case that
+ * backfillTripOrigin can't catch, since no future exit fires). Valid when it's a DIFFERENT port than
+ * the destination and lands in a sane window around opened_at. Returns { portId, ts } or null.
+ */
+function originFromRecentExit(recentExit, destPortId, openedAt, opts = {}) {
+  if (!recentExit || !recentExit.portId || recentExit.portId === destPortId) return null;
+  const maxBeforeMs = opts.maxBeforeMs ?? 6 * 60 * 60_000; // exit up to 6h before the leg opened
+  const maxAfterMs = opts.maxAfterMs ?? 30 * 60_000;       // …or shortly after (open resolved at berth)
+  const dt = openedAt - recentExit.ts; // >0 ⇒ exit before open
+  if (dt > maxBeforeMs || dt < -maxAfterMs) return null;
+  return { portId: recentExit.portId, ts: recentExit.ts };
+}
+
+module.exports = { decideTrip, planGeofenceActions, originFromRecentExit, DEFAULTS };
