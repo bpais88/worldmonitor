@@ -1712,6 +1712,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
+const { decideTrip } = require('./trip-lifecycle.cjs');
 const { relayFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
@@ -2191,6 +2192,21 @@ const etaInfoByMmsi = new Map();
 const voyageByMmsi = new Map();
 let _ferryHistoryDirty = false;
 
+// --- Phase B: trips lifecycle (ANCHOR side) --------------------------------
+// OFF by default (TRIPS_ENABLED=1 to arm). Flag off ⇒ zero trip writes, incl. the boot load — so this
+// is inert until we flip it in prod. Persists per-vessel trip state + a per-tick trip_points trail via
+// scripts/db.cjs (fire-and-forget). Decision logic is pure in trip-lifecycle.cjs (decideTrip).
+const TRIPS_ENABLED = process.env.TRIPS_ENABLED === '1';
+const TRIP_POINT_GAP_MS = safeInt(process.env.TRIP_POINT_GAP_MS, 5 * 60_000, 60_000);   // downsample: ≤1 pt/5min/trip
+const TRIP_POINTS_FLUSH_MS = safeInt(process.env.TRIP_POINTS_FLUSH_MS, 60_000, 15_000); // batch flush cadence
+const TRIP_POINTS_BUFFER_MAX = safeInt(process.env.TRIP_POINTS_BUFFER_MAX, 5000, 100);  // drop-oldest hard cap
+const TRIP_DEST_STABLE_TICKS = safeInt(process.env.TRIP_DEST_STABLE_TICKS, 2, 1);       // re-route flicker guard
+const TRIP_OPTS = { minPointGapMs: TRIP_POINT_GAP_MS, destStableTicks: TRIP_DEST_STABLE_TICKS };
+const tripByMmsi = new Map();      // mmsi -> tripState (see trip-lifecycle.cjs); DB is authoritative, seeded on boot
+const pendingTripPoints = [];      // buffered trip_points, flushed in batches off the hot loop
+let tripsReady = false;            // gate: no lifecycle mutations until loadOpenTrips() has seeded tripByMmsi
+let _flushingTripPoints = false;   // in-flight guard for the flush
+
 // Durable per-day count of trips Marco began tracking (atomic INCR, ~120d TTL), so
 // "how many trips per day" is answerable later even across restarts.
 const VOYAGE_COUNT_PREFIX = `${RELAY_ENV_PREFIX}relay:voyages:count:`;
@@ -2252,6 +2268,20 @@ function updateFerryDelays(now = Date.now()) {
         info.voyageAgeMin = Math.round((now - voyage.startTs) / 60_000);
       }
       etaInfoByMmsi.set(mmsi, info);
+
+      // Phase B: persist the trip (open/decorate) driven by the voyage anchor. Pure decision +
+      // fire-and-forget dispatch. `voyage` is non-null here (we already continued on !port).
+      if (TRIPS_ENABLED && tripsReady && voyage) {
+        const fresh = !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_STATUS_DEFAULTS.freshMs;
+        const { actions, nextState } = decideTrip(tripByMmsi.get(mmsi), voyage, {
+          now, fresh,
+          speedStalled: !!(drift && drift.stalled),
+          etaSlipMin: drift && Number.isFinite(drift.etaGrowthMin) ? drift.etaGrowthMin : null,
+          opts: TRIP_OPTS,
+        });
+        if (actions.length) applyTripActions(mmsi, actions, { v, eta, drift, now });
+        if (nextState === null) tripByMmsi.delete(mmsi); else tripByMmsi.set(mmsi, nextState);
+      }
     }
     // Prune histories for vessels that stopped reporting.
     for (const [mmsi, buf] of etaHistory) {
@@ -2263,10 +2293,80 @@ function updateFerryDelays(now = Date.now()) {
         voyageByMmsi.delete(mmsi);
       }
     }
+    // Phase B: anchor-loss reconciliation. Any tracked trip whose vessel no longer has a voyage
+    // (not-freight now, destination unresolved, or history pruned) has lost its anchor → abandon +
+    // forget. One place, so the abandon path isn't scattered across the delete sites above.
+    if (TRIPS_ENABLED && tripsReady) {
+      for (const [mmsi, t] of tripByMmsi) {
+        if (!voyageByMmsi.has(mmsi)) {
+          if (t.tripId != null && t.status === 'open') void db.abandonTrips([t.tripId]);
+          tripByMmsi.delete(mmsi);
+        }
+      }
+    }
     if (newTrips) void registerTrips(newTrips, now);
     _ferryHistoryDirty = true;
   } catch (e) {
     console.warn('[Relay] ferry delay update failed:', e.message);
+  }
+}
+
+// Drop-oldest hard cap on the trip_points buffer, so a persistent DB outage can't grow it unbounded.
+function capTripPoints() {
+  while (pendingTripPoints.length > TRIP_POINTS_BUFFER_MAX) { pendingTripPoints.shift(); db.stats.tripPointsDropped++; }
+}
+
+// Dispatch the pure decideTrip() actions to Postgres (fire-and-forget) + buffer trip_points. `ctx`
+// carries the live vessel frame for point capture. openTrip's async id is bound back onto tripByMmsi.
+function applyTripActions(mmsi, actions, ctx) {
+  const { v, eta, drift, now } = ctx;
+  for (const a of actions) {
+    switch (a.type) {
+      case 'abandon':
+        void db.abandonTrips([a.tripId]);
+        break;
+      case 'open': {
+        const { destPortId } = a;
+        void db.openTrip({ mmsi, destPortId, openedAt: a.openedAt, departureEta: a.departureEta })
+          // Bind the id only if the entry is still THIS open trip (guard against a re-route having
+          // replaced it while the insert was in flight).
+          .then((id) => { const e = tripByMmsi.get(mmsi); if (e && e.tripId == null && e.destPortId === destPortId && id != null) e.tripId = id; });
+        break;
+      }
+      case 'markStalled': void db.markStalled(a.tripId); break;
+      case 'patchEta': void db.patchTripEta(a.tripId, a.etaTs); break;
+      case 'bumpSlip': void db.bumpTripEtaSlip(a.tripId, a.slipMin); break;
+      case 'capturePoint':
+        pendingTripPoints.push({
+          tripId: a.tripId, ts: now, lat: v.lat, lon: v.lon,
+          speedKn: Number.isFinite(v.speed) ? v.speed : null,
+          course: Number.isFinite(v.course) ? v.course : null,
+          eta: eta ? eta.etaTs : null,
+          etaSlipMin: drift && Number.isFinite(drift.etaGrowthMin) ? Math.round(drift.etaGrowthMin) : null,
+        });
+        capTripPoints();
+        break;
+      default: break;
+    }
+  }
+}
+
+// Flush buffered trip_points in one batch. On a write failure the batch is re-queued (bounded by the
+// cap) so a transient DB blip doesn't silently lose the trail. In-flight-guarded so flushes can't overlap.
+async function flushTripPoints() {
+  if (!TRIPS_ENABLED || _flushingTripPoints || !pendingTripPoints.length) return;
+  _flushingTripPoints = true;
+  const batch = pendingTripPoints.splice(0, pendingTripPoints.length);
+  try {
+    const n = await db.appendTripPoints(batch);
+    if (n === 0 && batch.length && db.enabled) {
+      pendingTripPoints.unshift(...batch); // write failed — re-queue (bounded) so a transient blip doesn't lose the trail
+      capTripPoints();
+    }
+  } catch (e) {
+    console.warn('[Relay] trip_points flush failed:', e.message);
+  } finally {
+    _flushingTripPoints = false;
   }
 }
 
@@ -2318,10 +2418,28 @@ async function bootstrapFerryHistory() {
 }
 
 function startFerryDelayLoop() {
-  bootstrapFerryHistory().finally(() => {
+  bootstrapFerryHistory().finally(async () => {
+    // Phase B: seed tripByMmsi from Postgres (the authority for open trips) BEFORE the first tick, so
+    // a restart re-binds to live trips instead of double-opening them. Gate lifecycle on tripsReady.
+    if (TRIPS_ENABLED) {
+      try {
+        const { trips, capped } = await db.loadOpenTrips();
+        for (const [mmsi, t] of trips) {
+          tripByMmsi.set(mmsi, {
+            tripId: t.tripId, destPortId: t.destPortId, openedAt: t.openedAt, status: t.status,
+            lastPointTs: 0, stalledMarked: !!t.stalled, etaPatched: t.departureEta != null,
+            pendingDest: null, pendingTicks: 0,
+          });
+        }
+        if (capped) console.warn('[Relay] trips: loadOpenTrips hit the 5000 cap — possible open-trip leak');
+        console.log(`[Relay] trips: seeded ${trips.size} open/arrived from Postgres`);
+      } catch (e) { console.warn('[Relay] trips: loadOpenTrips failed:', e.message); }
+    }
+    tripsReady = true;
     updateFerryDelays();
     setInterval(updateFerryDelays, FERRY_DELAY_INTERVAL_MS).unref?.();
     setInterval(persistFerryHistory, FERRY_DELAY_PERSIST_MS).unref?.();
+    if (TRIPS_ENABLED) scheduleWithBootRun(flushTripPoints, TRIP_POINTS_FLUSH_MS);
   });
 }
 
@@ -5188,6 +5306,11 @@ async function gracefulShutdown(signal) {
   // slow write can't block past Railway's grace window. Snapshots/events already went to Postgres per tick.
   if (PORT_HISTORY_ENABLED) {
     try { await Promise.race([persistPortHistory(), new Promise((r) => setTimeout(r, 2500))]); } catch {}
+  }
+  // Phase B: flush the last tick's buffered trip_points before exit (idempotent, so a replayed flush
+  // on the next boot is safe). Timeout-raced so it can't block past Railway's grace window.
+  if (TRIPS_ENABLED) {
+    try { await Promise.race([flushTripPoints(), new Promise((r) => setTimeout(r, 2500))]); } catch {}
   }
   server.close(() => process.exit(0));
   setTimeout(() => process.exit(0), 5000);
