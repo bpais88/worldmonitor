@@ -2409,11 +2409,25 @@ async function flushTripPoints() {
 // status-guarded + idempotent in db.cjs, so re-runs are safe.
 async function tripMaintenance() {
   if (!TRIPS_ENABLED || !db.enabled) return;
-  const [abandoned, pruned] = await Promise.all([   // independent tables/filters — run concurrently
+  const [abandonedIds, pruned] = await Promise.all([   // independent tables/filters — run concurrently
     db.abandonStaleTrips(TRIP_MAX_OPEN_AGE_H),
     db.pruneTripPoints(TRIP_POINTS_RETENTION_DAYS),
   ]);
-  if (abandoned || pruned) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale, pruned ${pruned} old points`);
+  // Reconcile in-memory state with EXACTLY the trips the DB sweep abandoned — by id, not a recomputed
+  // age cutoff. A vessel whose voyage anchor is still live keeps its tripByMmsi entry 'open', so without
+  // this decideTrip would keep capturing points against the now-abandoned trip and never open a
+  // replacement. Reconciling by id (vs a fresh Date.now() cutoff) avoids the race where a slightly later
+  // cutoff marks a trip the SQL now() left open → which would then mis-bind a re-route onto the still-open
+  // DB row via the unique-open-trip ON CONFLICT. Marked entries clear on the next re-route / anchor-loss.
+  let reconciled = 0;
+  if (abandonedIds.length) {
+    const ab = new Set(abandonedIds);
+    for (const t of tripByMmsi.values()) {
+      if (t.status === 'open' && t.tripId != null && ab.has(t.tripId)) { t.status = 'abandoned'; reconciled++; }
+    }
+  }
+  const abandoned = abandonedIds.length;
+  if (abandoned || pruned || reconciled) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale (${reconciled} in-memory), pruned ${pruned} old points`);
 }
 
 // Build the /health `trips` block (sync — no I/O). Mixes the db.cjs writer counters with the relay's

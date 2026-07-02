@@ -272,17 +272,22 @@ async function abandonTrips(ids) {
   } catch (e) { tripFail(e); return 0; }
 }
 
-/** Backstop sweep: abandon open trips older than maxAgeH (never reached / dark / untracked dest). */
+/**
+ * Backstop sweep: abandon open trips older than maxAgeH (never reached / dark / untracked dest).
+ * Returns the ABANDONED trip IDS (not a count) so the caller can reconcile its in-memory state against
+ * exactly what the DB changed — reconciling by a recomputed age cutoff instead would race the SQL
+ * now() and could mark a trip the DB left open.
+ */
 async function abandonStaleTrips(maxAgeH = 120) {
-  if (!enabled) return 0;
+  if (!enabled) return [];
   try {
     const rows = await withTimeout(sql`
       UPDATE trips SET status = 'abandoned', updated_at = now()
       WHERE status = 'open' AND opened_at < now() - make_interval(hours => ${maxAgeH}) RETURNING id`);
-    const n = Array.isArray(rows) ? rows.length : 0;
-    if (n) tripOk('tripsAbandoned', n);
-    return n;
-  } catch (e) { tripFail(e); return 0; }
+    const ids = Array.isArray(rows) ? rows.map((r) => Number(r.id)) : [];
+    if (ids.length) tripOk('tripsAbandoned', ids.length);
+    return ids;
+  } catch (e) { tripFail(e); return []; }
 }
 
 /** Mark a trip stalled (eager, first tick drift.stalled fires). Guarded so it writes at most once. */
