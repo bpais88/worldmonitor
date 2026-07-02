@@ -12,11 +12,13 @@ import { EUROPE_BBOX, type Bbox } from '@/config/italy-ferries';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
+import { fetchTripByMmsi, type TripDetail, type TripPoint } from '@/services/logistics/trip-detail';
 
 // Same basemap as DeckGLMap (keyless Carto vector style).
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const SOURCE_ID = 'ferries';
 const GEOFENCE_SOURCE_ID = 'geofences';
+const TRACK_SOURCE_ID = 'trip-track'; // the clicked vessel's voyage track (Phase C get_trip)
 const GEOFENCE_LAYERS = ['geofence-fill', 'geofence-line'];
 const ARROW_ICON = 'ferry-arrow';
 
@@ -79,6 +81,52 @@ function popupHtml(p: FerryFeatureProps): string {
   </div>`;
 }
 
+// Voyage (get_trip) rendering — chip labels + a duration formatter.
+const CHIP_LABEL: Record<string, string> = { distanceKm: 'Distance', avgSpeedKn: 'Speed', destDwellMin: 'Dwell', track: 'Track', status: 'Status' };
+function fmtDuration(min: number): string {
+  if (min < 60) return `${Math.round(min)} min`;
+  const h = Math.floor(min / 60);
+  const m = Math.round(min % 60);
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
+/**
+ * The voyage block appended under the vessel popup once its trip loads. A suppressed/annotated field
+ * renders as a caveat chip (e.g. "Distance: origin not observed") — never a bare 0 — which is the
+ * whole point of the Phase C sufficiency gate.
+ */
+function voyageHtml(d: TripDetail): string {
+  if (!d.found || !d.trip) return '';
+  const t = d.trip;
+  const n = d.notes;
+  const route = `${escapeHtml(t.origin || '—')} → ${escapeHtml(t.dest || '—')}`;
+  const rows: string[] = [];
+  if (t.distanceKm != null) {
+    const spd = t.avgSpeedKn != null ? ` · ~${Math.round(t.avgSpeedKn)} kn` : '';
+    rows.push(`<div class="ferry-popup-row ferry-popup-dim">${Math.round(t.distanceKm)} km${spd}</div>`);
+  }
+  if (t.durationMin != null) rows.push(`<div class="ferry-popup-row ferry-popup-dim">${fmtDuration(t.durationMin)} under way</div>`);
+  if (t.destDwellMin != null) rows.push(`<div class="ferry-popup-row ferry-popup-dim">${Math.round(t.destDwellMin)} min at destination</div>`);
+  if (d.track && d.track.length) rows.push(`<div class="ferry-popup-row ferry-popup-dim">${d.pointCount} track points${d.densityPerHr ? ` · ~${d.densityPerHr}/hr` : ''}</div>`);
+  const chips = ['distanceKm', 'avgSpeedKn', 'destDwellMin', 'track', 'status']
+    .map((f) => {
+      const note = n[f];
+      return note ? `<div class="ferry-popup-chip">${escapeHtml(CHIP_LABEL[f] ?? f)}: ${escapeHtml(note)}</div>` : '';
+    })
+    .join('');
+  return `<div class="ferry-popup-voyage">
+    <div class="ferry-popup-voyage-title">Voyage · ${escapeHtml(t.status)}</div>
+    <div class="ferry-popup-row">${route}</div>
+    ${rows.join('')}
+    ${chips}
+  </div>`;
+}
+
+const EMPTY_TRACK: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
+function trackToLine(track: TripPoint[]): GeoJSON.FeatureCollection {
+  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: track.map((p) => [p.lon, p.lat]) } }] };
+}
+
 export class ItalyFerryMap {
   private map: maplibregl.Map;
   private ready = false;
@@ -86,6 +134,7 @@ export class ItalyFerryMap {
   private pendingGeofences: Geofence[] | null = null;
   private zonesVisible = false;
   private popup: maplibregl.Popup;
+  private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
 
   constructor(container: HTMLElement) {
     this.map = new maplibregl.Map({
@@ -100,6 +149,7 @@ export class ItalyFerryMap {
       pitchWithRotate: false,
     });
     this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 12 });
+    this.popup.on('close', () => { this.selectedMmsi = null; this.clearTrack(); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
   }
@@ -122,6 +172,16 @@ export class ItalyFerryMap {
       source: GEOFENCE_SOURCE_ID,
       layout: { visibility: 'none' },
       paint: { 'line-color': ['get', 'color'], 'line-width': 1.2, 'line-opacity': 0.7 },
+    });
+
+    // Clicked vessel's voyage track (Phase C). Added before the vessels so the line renders UNDER them.
+    this.map.addSource(TRACK_SOURCE_ID, { type: 'geojson', data: EMPTY_TRACK });
+    this.map.addLayer({
+      id: 'trip-track',
+      type: 'line',
+      source: TRACK_SOURCE_ID,
+      layout: { 'line-cap': 'round', 'line-join': 'round' },
+      paint: { 'line-color': '#4da3ff', 'line-width': 2.5, 'line-opacity': 0.85 },
     });
 
     this.map.addSource(SOURCE_ID, { type: 'geojson', data: ferriesToGeoJSON([]) });
@@ -199,11 +259,10 @@ export class ItalyFerryMap {
       this.map.on('click', id, (e) => {
         const feature = e.features?.[0];
         if (!feature) return;
+        const props = feature.properties as unknown as FerryFeatureProps;
         const coords = (feature.geometry as GeoJSON.Point).coordinates as [number, number];
-        this.popup
-          .setLngLat(coords)
-          .setHTML(popupHtml(feature.properties as unknown as FerryFeatureProps))
-          .addTo(this.map);
+        this.popup.setLngLat(coords).setHTML(popupHtml(props)).addTo(this.map);
+        void this.loadVoyage(props);
       });
       this.map.on('mouseenter', id, () => { this.map.getCanvas().style.cursor = 'pointer'; });
       this.map.on('mouseleave', id, () => { this.map.getCanvas().style.cursor = ''; });
@@ -214,8 +273,40 @@ export class ItalyFerryMap {
   public focusFerry(ferry: TrackedFerry): void {
     if (!this.ready) return;
     const center: [number, number] = [ferry.lon, ferry.lat];
+    const props = ferryProps(ferry);
     this.map.flyTo({ center, zoom: Math.max(this.map.getZoom(), 9), speed: 1.2 });
-    this.popup.setLngLat(center).setHTML(popupHtml(ferryProps(ferry))).addTo(this.map);
+    this.popup.setLngLat(center).setHTML(popupHtml(props)).addTo(this.map);
+    void this.loadVoyage(props);
+  }
+
+  /**
+   * Fetch the clicked vessel's latest/open trip and, if it's still the selected vessel when the fetch
+   * resolves (guards against a rapid re-click), draw its track + append the voyage block to the popup.
+   * Best-effort: a failure leaves the vessel popup as-is.
+   */
+  private async loadVoyage(props: FerryFeatureProps): Promise<void> {
+    const mmsi = props.mmsi;
+    this.selectedMmsi = mmsi;
+    this.clearTrack();
+    let detail: TripDetail;
+    try {
+      detail = await fetchTripByMmsi(mmsi);
+    } catch {
+      return; // relay/proxy hiccup — the vessel popup still stands
+    }
+    if (this.selectedMmsi !== mmsi || !detail.found) return; // superseded by another click, or no trip
+    if (detail.track && detail.track.length) this.setTrack(detail.track);
+    this.popup.setHTML(popupHtml(props) + voyageHtml(detail));
+  }
+
+  private setTrack(track: TripPoint[]): void {
+    const src = this.map.getSource(TRACK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    src?.setData(trackToLine(track));
+  }
+
+  private clearTrack(): void {
+    const src = this.map.getSource(TRACK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    src?.setData(EMPTY_TRACK);
   }
 
   /** Build an upward-pointing arrow as an SDF icon so it can be tinted per status. */
