@@ -1826,14 +1826,15 @@ function samplePortHistory(now = Date.now()) {
       const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
       smoothPortStatus(ports, portSnapshotHistory);
       // Bank every DYNAMIC port field (portId, atPort smoothed + atPortRaw, atAnchor/atBerth,
-      // inbound + inboundEta, congestion); drop only the static identity fields. New
-      // computePortStatus fields flow in automatically — capture everything for the backtest.
-      const snapshot = {
-        ts: now,
-        ports: ports.map(({ name, lat, lon, region, ...dyn }) => dyn),
-      };
-      if (db.enabled) void db.writeSnapshot(now, snapshot.ports, meta);
-      else portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
+      // inbound + inboundEta, congestion); new computePortStatus fields flow in automatically —
+      // capture everything for the backtest. writeSnapshot reads dynamic fields by name and ignores
+      // the static ones, so the DB path takes `ports` directly; only the fallback trims them.
+      if (db.enabled) {
+        void db.writeSnapshot(now, ports, meta);
+      } else {
+        const snapshot = { ts: now, ports: ports.map(({ name, lat, lon, region, ...dyn }) => dyn) };
+        portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
+      }
       lastPortSnapshotAt = now;
       portHistoryState._persistVersion++;
     }
@@ -1904,6 +1905,10 @@ async function startPortHistoryLoop() {
   if (db.enabled) {
     try { await db.syncPorts(ITALY_PORTS_BY_ID); console.log(`[Relay] ports dim synced to Postgres (${db.stats.portsSynced} commercial ports)`); }
     catch (e) { console.warn('[Relay] ports sync failed:', e.message); }
+  } else if (IS_PRODUCTION_RELAY) {
+    // Loud, not silent: without a DB in prod the series falls back to the capped in-memory/Redis
+    // blob — the exact silent-data-loss failure this pipeline was rebuilt to avoid. Set DATABASE_URL.
+    console.error('[Relay] ⚠️  port-history has NO DATABASE_URL in production — falling back to the capped in-memory/Redis blob (durable 2-week history will NOT accumulate). Set DATABASE_URL on the relay.');
   }
   samplePortHistory();
   // Sample in-memory every tick; flush to Redis on the slower cadence so we don't
@@ -4251,6 +4256,7 @@ const handleRequest = async (req, res) => {
       portHistory: {
         enabled: PORT_HISTORY_ENABLED,
         dbEnabled: db.enabled,
+        degraded: PORT_HISTORY_ENABLED && !db.enabled, // wanted the durable store, running on the fallback
         zones: PORT_GEOFENCES.length,
         openZones: portHistoryState.membership.size,
         lastSnapshotAt: lastPortSnapshotAt || null,
@@ -4387,7 +4393,8 @@ const handleRequest = async (req, res) => {
         const portsParam = q.get('ports');
         const payload = await db.queryPortHistory({
           sinceMs: Number(q.get('since')) || undefined,
-          limitSnap: Number(q.get('limit')) || undefined,
+          limitSnap: Number(q.get('limit')) || PORT_HISTORY_MAX_SNAPSHOTS, // snapshots (ticks); env-tunable
+          limitEvt: PORT_HISTORY_MAX_EVENTS,
           ports: portsParam ? portsParam.split(',').map((s) => s.trim()).filter(Boolean) : undefined,
         });
         return sendCompressed(req, res, 200, phHeaders, JSON.stringify(payload));

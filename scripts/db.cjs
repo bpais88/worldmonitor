@@ -89,7 +89,8 @@ async function writeEvents(events, meta = {}) {
 /**
  * Serve /ais/port-history from Postgres, reshaped to the existing client contract
  * ({ snapshots:[{ts,ports:[...]}], events:[{ts,portId,mmsi,kind,dwellMin}], counts }).
- * `sinceMs` defaults to 24h ago; `limitSnap`/`limitEvt` cap the returned slices.
+ * `sinceMs` defaults to 24h ago. `limitSnap` = max SNAPSHOTS (distinct ticks, all ports each) —
+ * NOT rows, so it can't slice a tick in half; `limitEvt` = max event rows.
  */
 async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, ports } = {}) {
   if (!enabled) return { snapshots: [], events: [], snapshotCount: 0, eventCount: 0, generatedAt: Date.now(), db: false };
@@ -98,11 +99,14 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
   // which the neon serverless template doesn't support): `pf IS NULL OR port_id = ANY(pf)`.
   const pf = Array.isArray(ports) && ports.length ? ports : null;
   const [snapRows, evtRows] = await Promise.all([
+    // Limit by distinct TICKS (a snapshot = all ports at one ts), then fetch every row for those
+    // ticks — so `limitSnap` means snapshots, and a partial tick is never returned.
     sql`SELECT extract(epoch from ts)*1000 AS ts, port_id, at_port, at_port_raw, at_berth, at_anchor,
                inbound, eta_h6, eta_h12, eta_h24, eta_h48, feed_label, source, coverage_ok
         FROM port_snapshots
-        WHERE ts >= ${since}::timestamptz AND (${pf}::text[] IS NULL OR port_id = ANY(${pf}::text[]))
-        ORDER BY ts DESC LIMIT ${limitSnap}`,
+        WHERE ts IN (SELECT DISTINCT ts FROM port_snapshots WHERE ts >= ${since}::timestamptz ORDER BY ts DESC LIMIT ${limitSnap})
+          AND (${pf}::text[] IS NULL OR port_id = ANY(${pf}::text[]))
+        ORDER BY ts DESC`,
     sql`SELECT extract(epoch from ts)*1000 AS ts, port_id, mmsi, kind, dwell_min
         FROM port_events
         WHERE ts >= ${since}::timestamptz AND (${pf}::text[] IS NULL OR port_id = ANY(${pf}::text[]))
