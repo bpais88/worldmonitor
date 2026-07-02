@@ -70,9 +70,19 @@ CREATE TABLE trips (
 );
 ```
 
-A trip **joins the voyage anchor to the geofence events**: opened on destination-resolve + origin-exit,
-closed on destination-enter. It fuses the relay's existing `voyageByMmsi` (`destPortId`, `startTs`,
-`departureEtaTs`) with `port_events` (enter/exit + dwell) — neither of which persists a trip record today.
+A trip **joins the voyage anchor to the geofence events**, anchor-owns-identity: OPENED when the
+relay's `voyageByMmsi` resolves a destination (so `origin_port_id` is null until an origin exit is
+observed — legs opened mid-sea have no origin); geofence `port_events` only CLOSE (`status='arrived'`
+on destination-enter) and DECORATE (backfill `origin_port_id`/`departed_at`, `dest_dwell_min`).
+`status` is a strict enum `open | arrived | abandoned` (arrived + abandoned are terminal); every
+lifecycle write is status-guarded so any replay/restart is a 0-row no-op.
+
+**Migration 003 hardening (Phase B prerequisite):** adds `UNIQUE INDEX uq_trips_one_open ON trips(mmsi)
+WHERE status='open'` — at most one open trip per vessel, the DB-level defense `openTrip`'s
+`ON CONFLICT (mmsi) WHERE status='open' DO NOTHING` relies on (002's `ix_trips_open` was non-unique).
+Plus `ix_trips_status_opened` for the `loadOpenTrips`/`abandonStaleTrips` sweeps. Writer lives in
+`scripts/db.cjs` (openTrip/finishTrip/appendTripPoints/loadOpenTrips/abandon*/backfill*/finalizeArrivedGeo/
+pruneTripPoints), fire-and-forget from the relay, with health kept separate from the port-history writer.
 
 ### `trip_points` — per-trip time-series (the "rich" option) — Phase B
 
