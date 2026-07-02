@@ -4751,9 +4751,8 @@ const handleRequest = async (req, res) => {
     // the x-relay-key auth guard). Status-aware cache: terminal trips are IMMUTABLE → hard-cache; an
     // open trip moves → short cache.
     const q = new URL(req.url, `http://localhost:${PORT}`).searchParams;
-    const idParam = q.get('id');
     const payload = db.enabled
-      ? await db.queryTrip({ id: idParam != null ? Number(idParam) : undefined, mmsi: q.get('mmsi') || undefined })
+      ? await db.queryTrip({ id: q.get('id'), mmsi: q.get('mmsi') || undefined }) // queryTrip coerces id
       : { found: false, db: false, generatedAt: Date.now() };
     const terminal = !!(payload.found && payload.trip && payload.trip.status !== 'open');
     const cache = terminal ? 'public, max-age=3600, s-maxage=86400' : 'public, max-age=30, s-maxage=30';

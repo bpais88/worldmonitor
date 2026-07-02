@@ -376,8 +376,10 @@ async function finalizeArrivedGeo() {
   } catch (e) { tripFail(e); return 0; }
 }
 
+const TRIP_POINTS_RETENTION_DAYS = 90; // single source for the retention window (prune + the get_trip 'track expired' note)
+
 /** Retention: drop trip_points of non-open trips older than `days`. Trip ROWS (aggregates) kept forever. */
-async function pruneTripPoints(days = 90) {
+async function pruneTripPoints(days = TRIP_POINTS_RETENTION_DAYS) {
   if (!enabled) return 0;
   try {
     const rows = await withTimeout(sql`
@@ -441,16 +443,17 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
 // ---------------------------------------------------------------------------
 const TRIP_TRACK_MIN_POINTS = 5;                 // below this the track is 'sparse', not shown as a path
 const TRIP_OPEN_STALE_MS = 48 * 60 * 60_000;     // an open trip with no update this long is flagged stale
-const TRIP_POINTS_RETENTION_MS = 90 * 24 * 60 * 60_000;
+const TRIP_POINTS_RETENTION_MS = TRIP_POINTS_RETENTION_DAYS * 24 * 60 * 60_000; // reuse the prune window
 
 /**
  * Serve one trip by id, or a vessel's latest trip by mmsi (prefers the open leg, else most recent).
- * Returns { found, trip:{…flagged fields}, track:[…]|null, pointCount, densityPerHr, notes:[{field,note}],
- * generatedAt, db }. `notes` lists every suppressed/flagged field so the UI shows a chip, never a bare 0.
+ * Returns { found, trip:{…flagged fields}, track:[…]|null, pointCount, densityPerHr, notes:{field→note},
+ * generatedAt, db }. `notes` keys every suppressed/flagged field so the UI shows a chip, never a bare 0.
  */
 async function queryTrip({ id, mmsi } = {}) {
   if (!enabled) return { found: false, db: false, generatedAt: Date.now() };
-  const idParam = Number.isFinite(id) ? id : null;
+  // Coerce id here (one place): accepts the tool's integer OR the relay's raw query-string.
+  const idParam = id != null && id !== '' && Number.isFinite(Number(id)) ? Number(id) : null;
   const mmsiParam = mmsi != null ? String(mmsi) : null;
   if (idParam == null && mmsiParam == null) return { found: false, db: true, generatedAt: Date.now() };
   let rows;
@@ -490,7 +493,7 @@ async function queryTrip({ id, mmsi } = {}) {
   const avgSpeedKn = num(r.avg_speed_kn);
   const destDwellMin = num(r.dest_dwell_min);
   const departureEta = num(r.departure_eta);
-  const notes = [];
+  const notes = {}; // field → suppression/annotation note, so a consumer looks up notes[field] directly
 
   // Track (bounded; PK(trip_id, ts) makes this an indexed range read).
   let track = null;
@@ -501,24 +504,25 @@ async function queryTrip({ id, mmsi } = {}) {
         extract(epoch from eta) * 1000 AS eta, eta_slip_min
         FROM trip_points WHERE trip_id = ${tripId} ORDER BY ts ASC LIMIT 5000`;
     pointCount = pts.length;
+    const trackExpired = pointCount === 0 && status !== 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_POINTS_RETENTION_MS;
     if (pointCount >= TRIP_TRACK_MIN_POINTS) {
       track = pts.map((p) => ({ ts: num(p.ts), lat: num(p.lat), lon: num(p.lon), speedKn: num(p.speed_kn), course: num(p.course), eta: num(p.eta), etaSlipMin: num(p.eta_slip_min) }));
-      const spanH = (num(pts[pointCount - 1].ts) - num(pts[0].ts)) / 3_600_000;
+      const spanH = (track[track.length - 1].ts - track[0].ts) / 3_600_000;
       densityPerHr = spanH > 0 ? Math.round((pointCount / spanH) * 10) / 10 : null;
-    } else if (pointCount === 0 && status !== 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_POINTS_RETENTION_MS) {
-      notes.push({ field: 'track', note: 'track expired (90d retention)' });
+    } else if (trackExpired) {
+      notes.track = 'track expired (90d retention)';
     } else {
-      notes.push({ field: 'track', note: `sparse; ${pointCount} waypoint${pointCount === 1 ? '' : 's'} captured` });
+      notes.track = `sparse; ${pointCount} waypoint${pointCount === 1 ? '' : 's'} captured`;
     }
-  } catch (e) { fail(e); notes.push({ field: 'track', note: 'track unavailable' }); }
+  } catch (e) { fail(e); notes.track = 'track unavailable'; }
 
   // Field-level flags (the gate). distance/speed are great-circle origin→dest and only for known-origin legs.
-  if (distanceKm == null) notes.push({ field: 'distanceKm', note: originKnown ? 'computing (awaiting finalization)' : 'origin not observed; distance unavailable' });
-  if (avgSpeedKn == null) notes.push({ field: 'avgSpeedKn', note: originKnown ? 'computing (awaiting finalization)' : 'origin not observed; speed unavailable' });
-  else notes.push({ field: 'avgSpeedKn', note: 'great-circle origin→dest; real sailed distance is longer, so this reads high' });
-  if (destDwellMin == null && status === 'arrived') notes.push({ field: 'destDwellMin', note: 'pending destination exit observation' });
-  if (departedAt == null && status !== 'open') notes.push({ field: 'departedAt', note: 'departure not recorded' });
-  if (status === 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_OPEN_STALE_MS) notes.push({ field: 'status', note: 'stale (no recent position update)' });
+  if (distanceKm == null) notes.distanceKm = originKnown ? 'computing (awaiting finalization)' : 'origin not observed; distance unavailable';
+  if (avgSpeedKn == null) notes.avgSpeedKn = originKnown ? 'computing (awaiting finalization)' : 'origin not observed; speed unavailable';
+  else notes.avgSpeedKn = 'great-circle origin→dest; real sailed distance is longer, so this reads high';
+  if (destDwellMin == null && status === 'arrived') notes.destDwellMin = 'pending destination exit observation';
+  if (departedAt == null && status !== 'open') notes.departedAt = 'departure not recorded';
+  if (status === 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_OPEN_STALE_MS) notes.status = 'stale (no recent position update)';
 
   return {
     found: true, db: true, generatedAt: Date.now(),
