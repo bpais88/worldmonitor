@@ -26,7 +26,9 @@ function fail(e) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = false; st
 // sampler's in-flight guard (or leak a hung fetch on the fire-and-forget event path).
 const WRITE_TIMEOUT_MS = 10_000;
 function withTimeout(promise, ms = WRITE_TIMEOUT_MS) {
-  return Promise.race([promise, new Promise((_, rej) => setTimeout(() => rej(new Error('pg write timeout')), ms))]);
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('pg write timeout')), ms); t.unref?.(); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t)); // don't leave the timer pending on success
 }
 
 /** Upsert the commercial ports dimension (idempotent) with tz derived per country. Boot-only. */
@@ -62,7 +64,7 @@ async function writeSnapshot(tsMs, rows, meta = {}) {
   const eta = (h) => rows.map((r) => (r.inboundEta && Number.isFinite(r.inboundEta[h]) ? r.inboundEta[h] : null));
   const col = (f) => rows.map((r) => (Number.isFinite(r[f]) ? r[f] : null));
   const src = rows.map((r) => r.source || meta.source || 'relay');
-  const cov = rows.map((r) => (typeof r.coverageOk === 'boolean' ? r.coverageOk : meta.coverageOk !== false));
+  const cov = rows.map((r) => r.coverageOk !== false); // per-row coverage (P0.2 stamps it); missing → true
   try {
     await withTimeout(sql`
       INSERT INTO port_snapshots

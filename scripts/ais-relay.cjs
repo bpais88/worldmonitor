@@ -1716,9 +1716,9 @@ const { relayFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
 // would falsely mark live aisstream-backed data as permanently warming/stale.
-function feedFreshness() {
+function feedFreshness(now = Date.now()) {
   if (!MARINESIA_ENABLED) return {};
-  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length });
+  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length, now });
 }
 
 // --- Per-port coverage (P0.2): honest "did THIS port have live coverage this tick?" ------------
@@ -1731,7 +1731,7 @@ function aisstreamFresh(now = Date.now()) {
 }
 function marinesiaFresh(now = Date.now()) {
   if (!MARINESIA_ENABLED) return false;
-  const f = relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length, now });
+  const f = feedFreshness(now); // reuses the same relayFreshness args (guard above keeps it honest)
   return !f.stale && !f.warming; // usable only after a full tile sweep + a recent poll
 }
 function inItalyBbox(lat, lon) {
@@ -1739,13 +1739,15 @@ function inItalyBbox(lat, lon) {
     lat >= ITALY_BBOX.lat_min && lat <= ITALY_BBOX.lat_max &&
     lon >= ITALY_BBOX.long_min && lon <= ITALY_BBOX.long_max;
 }
-// Which feed covers this coordinate right now + whether that feed is fresh. Pure geography.
-function portFeed(lat, lon, now = Date.now()) {
-  if (aisstreamFresh(now)) return { source: 'aisstream', coverageOk: true };
-  if (marinesiaFresh(now) && inItalyBbox(lat, lon)) return { source: 'marinesia', coverageOk: true };
+// Which feed covers this coordinate, given the tick's already-computed feed liveness. Pure geography
+// (aisFresh/marinesiaOk are decided once per tick in the sampler, not recomputed per port).
+function portFeed(lat, lon, aisFresh, marinesiaOk) {
+  if (aisFresh) return { source: 'aisstream', coverageOk: true };
+  const italy = inItalyBbox(lat, lon);
+  if (marinesiaOk && italy) return { source: 'marinesia', coverageOk: true };
   // Neither fresh (or non-Italian while only Marinesia runs): name the feed that OWNS this
   // geography, but coverageOk=false — an honest "we can't currently see this port".
-  return { source: inItalyBbox(lat, lon) ? 'marinesia' : 'aisstream', coverageOk: false };
+  return { source: italy ? 'marinesia' : 'aisstream', coverageOk: false };
 }
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
@@ -1841,13 +1843,15 @@ async function samplePortHistory(now = Date.now()) {
     const fresh = buildFreightVesselList().filter(
       (v) => !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_STATUS_DEFAULTS.freshMs,
     );
-    // Per-tick feed decision (P0.2): aisstream streams the world → when fresh, all ports covered;
-    // when dark, only the Italy-only Marinesia fallback runs → coverage is per-PORT. This scalar is
-    // the events/fallback source (within a tick it's uniform: aisstream, or — if dark — marinesia).
-    const meta = { source: aisstreamFresh(now) ? 'aisstream' : 'marinesia' };
+    // Per-tick feed decision (P0.2), computed ONCE and passed into portFeed: aisstream streams the
+    // world → when fresh, all ports covered; when dark, only the Italy-only Marinesia fallback runs
+    // → coverage is per-PORT. meta.source is the events/fallback source (uniform within a tick).
+    const aisFresh = aisstreamFresh(now);
+    const marinesiaOk = aisFresh ? false : marinesiaFresh(now); // skip the freshness calc when aisstream is live
+    const meta = { source: aisFresh ? 'aisstream' : 'marinesia' };
     // Only diff/emit events for zones whose region is covered THIS tick; freeze the rest so a feed
     // going dark doesn't fire phantom exits, and dwell keeps accruing across the gap.
-    const coveredGf = PORT_GEOFENCES.filter((gf) => portFeed(gf.geometry.center.lat, gf.geometry.center.lon, now).coverageOk);
+    const coveredGf = PORT_GEOFENCES.filter((gf) => portFeed(gf.geometry.center.lat, gf.geometry.center.lon, aisFresh, marinesiaOk).coverageOk);
     const nextCovered = computeMembership(fresh, coveredGf);
     const next = new Map(portHistoryState.membership);       // carry ALL prev forward (freezes uncovered zones)
     for (const gf of coveredGf) next.set(gf.id, nextCovered.get(gf.id) || new Set());
@@ -1865,7 +1869,7 @@ async function samplePortHistory(now = Date.now()) {
       smoothPortStatus(ports, portSnapshotHistory);
       // Stamp per-port coverage/source from feed GEOGRAPHY (P0.2), not vessel counts — survives into
       // ...dyn on the fallback path. writeSnapshot reads these (+ dynamic fields) by name.
-      for (const p of ports) { const fp = portFeed(p.lat, p.lon, now); p.source = fp.source; p.coverageOk = fp.coverageOk; }
+      for (const p of ports) { const fp = portFeed(p.lat, p.lon, aisFresh, marinesiaOk); p.source = fp.source; p.coverageOk = fp.coverageOk; }
       if (db.enabled) {
         // Advance the cadence ONLY on a confirmed write — a transient DB failure leaves the gate open
         // so the next tick RETRIES, rather than silently dropping the 5-min sample (a baseline gap).
