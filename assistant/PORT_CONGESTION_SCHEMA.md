@@ -14,6 +14,7 @@ working hours); a **`forecasts` table** so the backtest gate is a query.
 ## Tables
 
 ### `ports` — dimension (synced from src/config/italy-ferries.data.json on deploy)
+
 ```sql
 CREATE TABLE ports (
   port_id     text PRIMARY KEY,
@@ -30,6 +31,7 @@ CREATE TABLE ports (
 ES→Europe/Madrid, NL→Europe/Amsterdam. Add a `tz` field to the JSON (or map country→tz at sync).
 
 ### `port_snapshots` — raw time-series (append-only, one row per port per tick)
+
 ```sql
 CREATE TABLE port_snapshots (
   ts          timestamptz NOT NULL,    -- UTC sample time
@@ -51,6 +53,7 @@ Cadence: **5-min rows** (≈11k rows/day for 39 ports — trivial for PG; 60s wo
 forecast benefit). Congestion is DERIVED downstream (relative), not trusted from `feed_label`.
 
 ### `port_events` — geofence crossings
+
 ```sql
 CREATE TABLE port_events (
   ts        timestamptz NOT NULL,
@@ -64,19 +67,21 @@ CREATE INDEX ix_evt_port_ts ON port_events (port_id, ts DESC);
 ```
 
 ### `port_baselines` — precomputed per-port × local-dow × local-hour (the "normal")
+
 ```sql
 CREATE TABLE port_baselines (
   port_id    text NOT NULL REFERENCES ports(port_id),
   dow        smallint NOT NULL,        -- 0..6 in LOCAL port time
   hour       smallint NOT NULL,        -- 0..23 in LOCAL port time
   p50 real, p75 real, p90 real, mean real, stddev real,  -- of at_berth
-  n          integer NOT NULL,         -- sample count in the bucket
+  n          integer NOT NULL,         -- DISTINCT local days observed (trust gate; percentiles are over all samples)
   updated_at timestamptz NOT NULL,
   PRIMARY KEY (port_id, dow, hour)
 );
 ```
 
 ### `forecasts` — predictions + later-filled actuals (the backtest gate, as data)
+
 ```sql
 CREATE TABLE forecasts (
   id           bigserial PRIMARY KEY,
@@ -99,6 +104,7 @@ CREATE INDEX ix_fc_port_made ON forecasts (port_id, made_at DESC);
 ## Writer (relay side)
 
 Every sample tick (5 min), `computePortStatus` already yields the per-port fields. The writer:
+
 1. Builds ~39 rows (all covered ports) + tags `source` and `coverage_ok` per row — **depends on the
    feed source/region provenance** (P1 item; the same signal that powers the honesty caveat).
 2. **One batched INSERT** for all ports: `INSERT ... ON CONFLICT (port_id, ts) DO UPDATE` (idempotent).
@@ -150,10 +156,12 @@ GROUP BY horizon_h;
 ```
 
 ## Retention
+
 Keep raw `port_snapshots` ~90 days (≈1M rows — nothing for PG); `DELETE` older on a schedule. Baselines
 and forecasts are tiny; keep indefinitely. Downsampling to hourly is unnecessary at this volume.
 
 ## How this maps to the roadmap
+
 - **P0 durability** → this schema + writer (retires the blob) + `/health` block.
 - **P0 honest coverage** → `coverage_ok`/`source` columns + `unknown` on no-coverage.
 - **P0 relative congestion** → `port_baselines` + the percentile compare.

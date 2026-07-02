@@ -156,7 +156,7 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
 // (congestion follows local working hours). Replaces the meaningless absolute atPort≥8 threshold
 // (every mega-port always "congested"). Built on at_berth (the clean occupancy signal), and only
 // from coverage_ok rows (P0.2) so dark/degraded windows never poison the baseline.
-const BASELINE_MIN_N = 6; // min samples in a dow×hour bucket before the relative label is trusted
+const BASELINE_MIN_DAYS = 3; // a dow×hour bucket must be seen on ≥3 distinct local days before trusted
 
 /** Recompute all per-port × local-dow × local-hour at_berth percentiles. Returns bucket count. */
 async function refreshBaselines() {
@@ -170,7 +170,11 @@ async function refreshBaselines() {
              percentile_cont(0.5)  WITHIN GROUP (ORDER BY s.at_berth),
              percentile_cont(0.75) WITHIN GROUP (ORDER BY s.at_berth),
              percentile_cont(0.90) WITHIN GROUP (ORDER BY s.at_berth),
-             avg(s.at_berth), stddev_pop(s.at_berth), count(*), now()
+             avg(s.at_berth), stddev_pop(s.at_berth),
+             -- n = DISTINCT local days observed (NOT sample count): cadence-independent, so six
+             -- adjacent 5-min samples from one hour can't trip the trust gate. Percentiles are
+             -- still computed over every sample in the group.
+             count(DISTINCT (s.ts AT TIME ZONE p.tz)::date), now()
       FROM port_snapshots s JOIN ports p USING (port_id)
       WHERE s.coverage_ok AND s.at_berth IS NOT NULL AND s.ts > now() - interval '8 weeks'
       GROUP BY 1, 2, 3
@@ -178,6 +182,10 @@ async function refreshBaselines() {
         p50=EXCLUDED.p50, p75=EXCLUDED.p75, p90=EXCLUDED.p90,
         mean=EXCLUDED.mean, stddev=EXCLUDED.stddev, n=EXCLUDED.n, updated_at=EXCLUDED.updated_at
       RETURNING 1`, 30_000);
+    // Expire buckets that aged out of the 8-week window (not upserted this run → stale updated_at),
+    // so /ais/ports never serves congestionRel from months-old percentiles. 2 days survives a
+    // missed nightly run without false-deleting a still-current bucket.
+    await withTimeout(sql`DELETE FROM port_baselines WHERE updated_at < now() - interval '2 days'`);
     const n = Array.isArray(res) ? res.length : 0;
     stats.baselineBuckets = n;
     stats.baselineRefreshedAt = Date.now();
@@ -185,24 +193,24 @@ async function refreshBaselines() {
   } catch (e) { fail(e); return 0; }
 }
 
-/** Load baselines into memory: Map(`${portId}:${dow}:${hour}` → {p75,p90,n}). Boot + post-refresh. */
+/** Load baselines into memory: Map(`${portId}:${dow}:${hour}` → {p75,p90,days}). Boot + post-refresh. */
 async function loadBaselines() {
   if (!enabled) return new Map();
   const rows = await sql`SELECT port_id, dow, hour, p75, p90, n FROM port_baselines`;
   const m = new Map();
-  for (const r of rows) m.set(`${r.port_id}:${r.dow}:${r.hour}`, { p75: Number(r.p75), p90: Number(r.p90), n: Number(r.n) });
+  for (const r of rows) m.set(`${r.port_id}:${r.dow}:${r.hour}`, { p75: Number(r.p75), p90: Number(r.p90), days: Number(r.n) });
   return m;
 }
 
 /**
  * Relative congestion for a port RIGHT NOW: current at_berth vs its baseline for the matching
- * local dow×hour. Returns null ("unknown") when the bucket is too thin to trust — so it
- * self-activates as the baseline fills (~2 weeks of data). Pure: caller passes the in-memory
- * baselines (see loadBaselines) + the port's LOCAL dow/hour (computed from its tz).
+ * local dow×hour. Returns null ("unknown") until the bucket has been seen on ≥minDays distinct
+ * local days — so it self-activates only after real history (~weeks), not after 30min of one hour.
+ * Pure: caller passes the in-memory baselines (see loadBaselines) + the port's LOCAL dow/hour.
  */
-function relativeCongestion(baselines, portId, atBerth, dow, hour, minN = BASELINE_MIN_N) {
+function relativeCongestion(baselines, portId, atBerth, dow, hour, minDays = BASELINE_MIN_DAYS) {
   const b = baselines?.get(`${portId}:${dow}:${hour}`);
-  if (!b || b.n < minN || !Number.isFinite(atBerth)) return null; // unknown until enough history
+  if (!b || b.days < minDays || !Number.isFinite(atBerth)) return null; // unknown until enough days
   if (atBerth > b.p90) return 'congested';
   if (atBerth > b.p75) return 'busy';
   return 'clear';
@@ -210,6 +218,6 @@ function relativeCongestion(baselines, portId, atBerth, dow, hour, minN = BASELI
 
 module.exports = {
   enabled, syncPorts, writeSnapshot, writeEvents, queryPortHistory,
-  refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_N,
+  refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_DAYS,
   stats, COUNTRY_TZ, tzForCountry,
 };

@@ -1831,7 +1831,7 @@ function buildFreightVesselList() {
 }
 
 // P0.3 relative-congestion baseline: loaded on boot + refreshed nightly. congestionRel on /ais/ports
-// self-activates per port as its local dow×hour bucket accrues ≥ db.BASELINE_MIN_N samples (null until).
+// self-activates per port as its local dow×hour bucket is seen on ≥ db.BASELINE_MIN_DAYS days (null until).
 let portBaselines = new Map();
 const PORT_TZ = new Map(ITALY_PORTS_BY_ID.map((p) => [p.id, db.tzForCountry(p.country)]));
 const LOCAL_DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
