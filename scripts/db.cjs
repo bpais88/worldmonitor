@@ -381,8 +381,10 @@ async function finalizeArrivedGeo() {
   } catch (e) { tripFail(e); return 0; }
 }
 
+const TRIP_POINTS_RETENTION_DAYS = 90; // single source for the retention window (prune + the get_trip 'track expired' note)
+
 /** Retention: drop trip_points of non-open trips older than `days`. Trip ROWS (aggregates) kept forever. */
-async function pruneTripPoints(days = 90) {
+async function pruneTripPoints(days = TRIP_POINTS_RETENTION_DAYS) {
   if (!enabled) return 0;
   try {
     const rows = await withTimeout(sql`
@@ -436,6 +438,114 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
   const snapshots = [...byTs.values()].sort((a, b) => a.ts - b.ts);
   const events = evtRows.map((r) => ({ ts: Number(r.ts), portId: r.port_id, mmsi: r.mmsi, kind: r.kind, dwellMin: r.dwell_min })).reverse();
   return { snapshots, events, snapshotCount: snapshots.length, eventCount: events.length, generatedAt: Date.now(), db: true };
+}
+
+// ---------------------------------------------------------------------------
+// Phase C serving — get_trip. A trip is a RECORD, not a sample, so it is fully showable the moment it
+// exists; immature fields degrade with an honest note ('computing' / 'origin not observed' / 'sparse'
+// / 'track expired') rather than min-N suppression. THE GATE (field flags) IS COMPUTED HERE so every
+// consumer — relay handler, Vercel proxy, Marco tool, UI — reads one already-flagged payload.
+// ---------------------------------------------------------------------------
+const TRIP_TRACK_MIN_POINTS = 5;                 // below this the track is 'sparse', not shown as a path
+const TRIP_OPEN_STALE_MS = 48 * 60 * 60_000;     // an open trip with no update this long is flagged stale
+const TRIP_POINTS_RETENTION_MS = TRIP_POINTS_RETENTION_DAYS * 24 * 60 * 60_000; // reuse the prune window
+
+/**
+ * Serve one trip by id, or a vessel's latest trip by mmsi (prefers the open leg, else most recent).
+ * Returns { found, trip:{…flagged fields}, track:[…]|null, pointCount, densityPerHr, notes:{field→note},
+ * generatedAt, db }. `notes` keys every suppressed/flagged field so the UI shows a chip, never a bare 0.
+ */
+async function queryTrip({ id, mmsi } = {}) {
+  if (!enabled) return { found: false, db: false, generatedAt: Date.now() };
+  // Coerce id here (one place): accepts the tool's integer OR the relay's raw query-string.
+  const idParam = id != null && id !== '' && Number.isFinite(Number(id)) ? Number(id) : null;
+  const mmsiParam = mmsi != null ? String(mmsi) : null;
+  if (idParam == null && mmsiParam == null) return { found: false, db: true, generatedAt: Date.now() };
+  let rows;
+  try {
+    // One null-safe query for both lookups (neon serverless can't compose SQL fragments): by id, or —
+    // when no id — the vessel's latest leg (open one first, else most recent). ORDER BY is a no-op for id.
+    rows = await sql`
+      SELECT t.id, t.mmsi, t.origin_port_id, t.dest_port_id, t.status,
+             extract(epoch from t.opened_at) * 1000 AS opened_at,
+             extract(epoch from t.departed_at) * 1000 AS departed_at,
+             extract(epoch from t.arrived_at) * 1000 AS arrived_at,
+             t.duration_min, t.dest_dwell_min, t.distance_km, t.avg_speed_kn,
+             extract(epoch from t.departure_eta) * 1000 AS departure_eta, t.max_eta_slip_min, t.stalled,
+             extract(epoch from t.updated_at) * 1000 AS updated_at,
+             v.name AS vessel_name, v.imo, v.operator_name, v.category,
+             po.name AS origin_name, pd.name AS dest_name
+      FROM trips t
+      LEFT JOIN vessels v ON v.mmsi = t.mmsi
+      LEFT JOIN ports po ON po.port_id = t.origin_port_id
+      LEFT JOIN ports pd ON pd.port_id = t.dest_port_id
+      WHERE (${idParam}::bigint IS NOT NULL AND t.id = ${idParam}::bigint)
+         OR (${idParam}::bigint IS NULL AND t.mmsi = ${mmsiParam})
+      ORDER BY (t.status = 'open') DESC, t.opened_at DESC
+      LIMIT 1`;
+  } catch (e) { fail(e); return { found: false, db: true, error: 'query failed', generatedAt: Date.now() }; }
+  const r = rows && rows[0];
+  if (!r) return { found: false, db: true, generatedAt: Date.now() };
+
+  const num = (x) => (x == null ? null : Number(x));
+  const tripId = num(r.id);
+  const status = r.status;
+  const openedAt = num(r.opened_at);
+  const departedAt = num(r.departed_at);
+  const updatedAt = num(r.updated_at);
+  const originKnown = r.origin_port_id != null;
+  const distanceKm = num(r.distance_km);
+  const avgSpeedKn = num(r.avg_speed_kn);
+  const destDwellMin = num(r.dest_dwell_min);
+  const departureEta = num(r.departure_eta);
+  const notes = {}; // field → suppression/annotation note, so a consumer looks up notes[field] directly
+
+  // Track (bounded; PK(trip_id, ts) makes this an indexed range read).
+  let track = null;
+  let pointCount = 0;
+  let densityPerHr = null;
+  try {
+    const pts = await sql`SELECT extract(epoch from ts) * 1000 AS ts, lat, lon, speed_kn, course,
+        extract(epoch from eta) * 1000 AS eta, eta_slip_min
+        FROM trip_points WHERE trip_id = ${tripId} ORDER BY ts ASC LIMIT 5000`;
+    pointCount = pts.length;
+    const trackExpired = pointCount === 0 && status !== 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_POINTS_RETENTION_MS;
+    if (pointCount >= TRIP_TRACK_MIN_POINTS) {
+      track = pts.map((p) => ({ ts: num(p.ts), lat: num(p.lat), lon: num(p.lon), speedKn: num(p.speed_kn), course: num(p.course), eta: num(p.eta), etaSlipMin: num(p.eta_slip_min) }));
+      const spanH = (track[track.length - 1].ts - track[0].ts) / 3_600_000;
+      densityPerHr = spanH > 0 ? Math.round((pointCount / spanH) * 10) / 10 : null;
+    } else if (trackExpired) {
+      notes.track = 'track expired (90d retention)';
+    } else {
+      notes.track = `sparse; ${pointCount} waypoint${pointCount === 1 ? '' : 's'} captured`;
+    }
+  } catch (e) { fail(e); notes.track = 'track unavailable'; }
+
+  // Field-level flags (the gate). distance/speed are great-circle origin→dest and only for known-origin legs.
+  if (distanceKm == null) notes.distanceKm = originKnown ? 'computing (awaiting finalization)' : 'origin not observed; distance unavailable';
+  if (avgSpeedKn == null) notes.avgSpeedKn = originKnown ? 'computing (awaiting finalization)' : 'origin not observed; speed unavailable';
+  else notes.avgSpeedKn = 'great-circle origin→dest; real sailed distance is longer, so this reads high';
+  if (destDwellMin == null && status === 'arrived') notes.destDwellMin = 'pending destination exit observation';
+  if (departedAt == null && status !== 'open') notes.departedAt = 'departure not recorded';
+  if (status === 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_OPEN_STALE_MS) notes.status = 'stale (no recent position update)';
+
+  return {
+    found: true, db: true, generatedAt: Date.now(),
+    trip: {
+      id: tripId, mmsi: r.mmsi, vesselName: r.vessel_name || null, imo: r.imo || null,
+      operator: r.operator_name || null, category: r.category || null, status,
+      // Fall back to the port_id when the name join misses — a trip's dest can resolve to a
+      // non-commercial port that isn't in the `ports` dim (those never geofence-close), so the id is
+      // the only label we have. origin_port_id is null for mid-sea opens → origin stays null.
+      originPortId: r.origin_port_id, origin: r.origin_name || r.origin_port_id || null,
+      destPortId: r.dest_port_id, dest: r.dest_name || r.dest_port_id || null,
+      openedAt, departedAt, arrivedAt: num(r.arrived_at), durationMin: num(r.duration_min),
+      distanceKm, avgSpeedKn, destDwellMin, departureEta, maxEtaSlipMin: num(r.max_eta_slip_min),
+      stalled: !!r.stalled,
+      onTime: departureEta != null ? { slipMin: num(r.max_eta_slip_min), toleranceMin: 15 } : null,
+    },
+    track, pointCount, densityPerHr, notes,
+  };
 }
 
 // --- P0.3: relative congestion baseline ---------------------------------------------------------
@@ -510,5 +620,7 @@ module.exports = {
   openTrip, finishTrip, appendTripPoints, loadOpenTrips, abandonTrips, abandonStaleTrips,
   markStalled, patchTripEta, bumpTripEtaSlip, backfillTripOrigin, backfillDestDwell,
   finalizeArrivedGeo, pruneTripPoints,
+  // Phase C serving
+  queryTrip,
   stats, COUNTRY_TZ, tzForCountry,
 };

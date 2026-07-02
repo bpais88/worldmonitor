@@ -11,12 +11,13 @@
 import { verifyWebhookSecret } from './verify.mjs';
 import { DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
+import { profileTools } from '../tools/profiles.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
 import { runChannelTurn } from '../channel-turn.mjs';
 
 // Read-only tool set — the exact same handlers as Slack/Teams.
-const WHATSAPP_TOOLS = [...freightTools, ...weatherTools];
+const WHATSAPP_TOOLS = [...freightTools, ...profileTools, ...weatherTools];
 const WHATSAPP_SYSTEM =
   `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
   'You are replying on WhatsApp. Keep it short and mobile-friendly — a few sentences, lead ' +

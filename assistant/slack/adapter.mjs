@@ -18,6 +18,7 @@
 //      SLACK_BOT_TOKEN, SLACK_BOT_USER_ID, SLACK_ACTION_USERS.
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
+import { profileTools } from '../tools/profiles.mjs';
 import { actionTools } from '../tools/actions.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { watchTools } from '../tools/watches.mjs';
@@ -68,7 +69,7 @@ const slackTools = [
   },
 ];
 
-const TOOLS = [...freightTools, ...weatherTools, ...watchTools, ...actionTools, ...slackTools];
+const TOOLS = [...freightTools, ...profileTools, ...weatherTools, ...watchTools, ...actionTools, ...slackTools];
 const toolByName = new Map(TOOLS.map((t) => [t.name, t]));
 
 // Marco's voice + Slack mrkdwn rules layered on the analyst base prompt.

@@ -12,12 +12,13 @@
 
 import crypto from 'node:crypto';
 import { freightTools } from '../tools/freight.mjs';
+import { profileTools } from '../tools/profiles.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
 import { DEFAULT_SYSTEM } from '../agent.mjs';
 
 /** The read-only tool set exposed to voice — the exact same handlers Slack/Teams use. */
-export const VOICE_TOOLS = [...freightTools, ...weatherTools];
+export const VOICE_TOOLS = [...freightTools, ...profileTools, ...weatherTools];
 const TOOL_BY_NAME = new Map(VOICE_TOOLS.map((t) => [t.name, t]));
 
 // Marco's voice identity — the channel persona (mirrors SLACK_SYSTEM / TEAMS_SYSTEM).

@@ -5,6 +5,7 @@
 // Env: RELAY_URL, RELAY_SHARED_SECRET, ANTHROPIC_API_KEY
 import { runAgent } from './agent.mjs';
 import { freightTools } from './tools/freight.mjs';
+import { profileTools } from './tools/profiles.mjs';
 import { actionTools } from './tools/actions.mjs';
 import { weatherTools } from './tools/weather.mjs';
 import { watchTools } from './tools/watches.mjs';
@@ -26,7 +27,7 @@ console.error(`  [mode: ${mode}]`);
 
 const { text, calls, audit } = await runAgent({
   userText: question,
-  tools: [...freightTools, ...weatherTools, ...watchTools, ...actionTools],
+  tools: [...freightTools, ...profileTools, ...weatherTools, ...watchTools, ...actionTools],
   policy,
   onToolCall: (name, input, m) => console.error(`  · ${name}(${JSON.stringify(input || {})}) → ${m}`),
 });
