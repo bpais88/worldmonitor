@@ -1963,6 +1963,13 @@ async function bootstrapPortHistory() {
   }
 }
 
+// Run an async job once now (fire-and-forget) then repeat on an interval whose timer won't hold the
+// process open — the shape shared by the baseline refresh and the vessel-dim sync.
+function scheduleWithBootRun(fn, intervalMs) {
+  void fn();
+  setInterval(() => { void fn(); }, intervalMs).unref?.();
+}
+
 async function startPortHistoryLoop() {
   if (!PORT_HISTORY_ENABLED) { console.log('[Relay] port-history sampler disabled (PORT_HISTORY_ENABLED=0)'); return; }
   await bootstrapPortHistory();
@@ -1990,11 +1997,9 @@ async function startPortHistoryLoop() {
         console.log(`[Relay] congestion baseline refreshed (${n} port×dow×hour buckets)`);
       } catch (e) { console.warn('[Relay] baseline refresh failed:', e.message); }
     };
-    void refreshBaselines();
-    setInterval(() => { void refreshBaselines(); }, 24 * 60 * 60_000).unref?.();
+    scheduleWithBootRun(refreshBaselines, 24 * 60 * 60_000);
     // Analytics: bank the freight fleet's durable per-vessel profiles on boot + slow cadence.
-    void syncVesselDim();
-    setInterval(() => { void syncVesselDim(); }, VESSEL_SYNC_MS).unref?.();
+    scheduleWithBootRun(syncVesselDim, VESSEL_SYNC_MS);
   }
 }
 
@@ -2013,7 +2018,8 @@ async function syncVesselDim() {
     limit: Number.MAX_SAFE_INTEGER, isFreight: isFreightVessel, resolveOperator,
   }).map((v) => ({
     mmsi: v.mmsi, imo: v.imo, name: v.name, shipType: v.shipType, category: v.category,
-    isFreight: true, freightReason: freightReason(v.shipType, v.name, v.imo),
+    isFreight: true, // guaranteed by the isFreightVessel filter above
+    freightReason: freightReason(v.shipType, v.name, v.imo),
     operatorId: v.operatorId, operatorName: v.operatorName,
     length: v.length, beam: v.beam, draught: v.draught,
   }));

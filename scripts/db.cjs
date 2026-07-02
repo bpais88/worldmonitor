@@ -66,13 +66,14 @@ async function syncVessels(vessels) {
   const now = new Date().toISOString();
   const s = (f) => vessels.map((v) => v[f] || null);
   const num = (f) => vessels.map((v) => (Number.isFinite(v[f]) ? v[f] : null));
+  const bool = (f) => vessels.map((v) => !!v[f]);
   try {
     await withTimeout(sql`
       INSERT INTO vessels (mmsi, imo, name, ship_type, category, is_freight, freight_reason, operator_id, operator_name, length_m, beam_m, draught_m, first_seen, last_seen)
       SELECT u.mmsi, u.imo, u.name, u.ship_type, u.category, u.is_freight, u.freight_reason, u.operator_id, u.operator_name, u.length_m, u.beam_m, u.draught_m, ${now}::timestamptz, ${now}::timestamptz
       FROM unnest(
         ${s('mmsi')}::text[], ${s('imo')}::text[], ${s('name')}::text[], ${num('shipType')}::int[],
-        ${s('category')}::text[], ${vessels.map((v) => !!v.isFreight)}::bool[], ${s('freightReason')}::text[],
+        ${s('category')}::text[], ${bool('isFreight')}::bool[], ${s('freightReason')}::text[],
         ${s('operatorId')}::text[], ${s('operatorName')}::text[], ${num('length')}::real[], ${num('beam')}::real[], ${num('draught')}::real[]
       ) AS u(mmsi, imo, name, ship_type, category, is_freight, freight_reason, operator_id, operator_name, length_m, beam_m, draught_m)
       ON CONFLICT (mmsi) DO UPDATE SET
