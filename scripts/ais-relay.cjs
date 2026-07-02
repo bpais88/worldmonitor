@@ -4745,6 +4745,19 @@ const handleRequest = async (req, res) => {
       'Cache-Control': 'public, max-age=60',
       'CDN-Cache-Control': 'public, max-age=120',
     }, JSON.stringify({ daily, totalTrips: total, days, generatedAt: now }));
+  } else if (pathname === '/ais/trip') {
+    // Phase C get_trip: one trip RECORD (by ?id= or ?mmsi=) + its track + field flags, computed in
+    // db.queryTrip so every consumer reads one gated payload. PRIVATE (not in isPublicRoute → inherits
+    // the x-relay-key auth guard). Status-aware cache: terminal trips are IMMUTABLE → hard-cache; an
+    // open trip moves → short cache.
+    const q = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+    const idParam = q.get('id');
+    const payload = db.enabled
+      ? await db.queryTrip({ id: idParam != null ? Number(idParam) : undefined, mmsi: q.get('mmsi') || undefined })
+      : { found: false, db: false, generatedAt: Date.now() };
+    const terminal = !!(payload.found && payload.trip && payload.trip.status !== 'open');
+    const cache = terminal ? 'public, max-age=3600, s-maxage=86400' : 'public, max-age=30, s-maxage=30';
+    return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': cache }, JSON.stringify(payload));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;

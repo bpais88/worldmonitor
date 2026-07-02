@@ -10,6 +10,7 @@ import { normalizeTeamsActivity, shouldRespond, toTeamsDeliver } from './normali
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { DEFAULT_POLICY } from '../guardrails.mjs';
 import { freightTools } from '../tools/freight.mjs';
+import { profileTools } from '../tools/profiles.mjs';
 import { weatherTools } from '../tools/weather.mjs';
 import { watchTools } from '../tools/watches.mjs';
 import { actionTools } from '../tools/actions.mjs';
@@ -30,7 +31,7 @@ const MS_APP_ID = process.env.MS_APP_ID || '';
 // Read-class Q&A + watches PLUS side-effecting ACTION tools, gated by the propose-then-approve
 // Adaptive-card flow (PR④). Read tools execute; action tools are proposed (dry-run) and only
 // run after an Approve click.
-const TEAMS_TOOLS = [...freightTools, ...weatherTools, ...watchTools, ...actionTools];
+const TEAMS_TOOLS = [...freightTools, ...profileTools, ...weatherTools, ...watchTools, ...actionTools];
 const TEAMS_TOOL_BY_NAME = new Map(TEAMS_TOOLS.map((t) => [t.name, t]));
 
 // Like Slack: actions are ALLOWED but never auto-executed — execute:false forces every action
