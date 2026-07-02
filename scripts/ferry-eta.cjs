@@ -122,14 +122,20 @@ let imoRegistry = data.imoRegistry || {};
  * only when operated by a freight RoPax line (excludes cruise/tourist, which
  * AIS ship-type can't separate). See docs/AIS_VESSEL_CLASSIFICATION_RESEARCH.md.
  */
-function isFreightVessel(shipType, vesselName, imo) {
+// Returns WHY a vessel is freight ('imo-registry' | 'cargo-type' | 'ropax-operator') or null if
+// not freight — the auditable reason stored on the vessel profile. isFreightVessel delegates here
+// so the classification has a single source of truth.
+function freightReason(shipType, vesselName, imo) {
   if (imo && Object.prototype.hasOwnProperty.call(imoRegistry, imo)) {
-    return !!imoRegistry[imo].freight;
+    return imoRegistry[imo].freight ? 'imo-registry' : null;
   }
   const t = Number(shipType);
-  if (t >= 70 && t <= 79) return true;            // cargo / RoRo / container
-  if (t >= 60 && t <= 69) return isFreightOperator(vesselName); // RoPax (not cruise/tourist)
-  return false;                                    // tanker, HSC, passenger-tourist, other
+  if (t >= 70 && t <= 79) return 'cargo-type';                              // cargo / RoRo / container
+  if (t >= 60 && t <= 69) return isFreightOperator(vesselName) ? 'ropax-operator' : null; // RoPax (not cruise/tourist)
+  return null;                                                             // tanker, HSC, passenger-tourist, other
+}
+function isFreightVessel(shipType, vesselName, imo) {
+  return freightReason(shipType, vesselName, imo) !== null;
 }
 
 /** Test hook: swap the IMO registry (pass null to restore the real one). */
@@ -139,5 +145,5 @@ function __setImoRegistryForTests(reg) {
 
 module.exports = {
   resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, resolveOperator,
-  isFreightVessel, __setImoRegistryForTests,
+  isFreightVessel, freightReason, __setImoRegistryForTests,
 };

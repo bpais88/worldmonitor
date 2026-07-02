@@ -1710,7 +1710,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // ETA on a timer, and flags crossings whose predicted arrival is slipping (or
 // stalled mid-crossing) — without any external timetable. History persists to
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
-const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
 const { relayFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
@@ -1963,6 +1963,13 @@ async function bootstrapPortHistory() {
   }
 }
 
+// Run an async job once now (fire-and-forget) then repeat on an interval whose timer won't hold the
+// process open — the shape shared by the baseline refresh and the vessel-dim sync.
+function scheduleWithBootRun(fn, intervalMs) {
+  void fn();
+  setInterval(() => { void fn(); }, intervalMs).unref?.();
+}
+
 async function startPortHistoryLoop() {
   if (!PORT_HISTORY_ENABLED) { console.log('[Relay] port-history sampler disabled (PORT_HISTORY_ENABLED=0)'); return; }
   await bootstrapPortHistory();
@@ -1990,9 +1997,34 @@ async function startPortHistoryLoop() {
         console.log(`[Relay] congestion baseline refreshed (${n} port×dow×hour buckets)`);
       } catch (e) { console.warn('[Relay] baseline refresh failed:', e.message); }
     };
-    void refreshBaselines();
-    setInterval(() => { void refreshBaselines(); }, 24 * 60 * 60_000).unref?.();
+    scheduleWithBootRun(refreshBaselines, 24 * 60 * 60_000);
+    // Analytics: bank the freight fleet's durable per-vessel profiles on boot + slow cadence.
+    scheduleWithBootRun(syncVesselDim, VESSEL_SYNC_MS);
   }
+}
+
+// --- Vessel dimension sync (analytics primitive) ---------------------------
+// Durable per-vessel profile for the freight fleet: identity (mmsi/imo/name),
+// classification (category + is_freight + auditable freight_reason), operator, and
+// physical dims. Upserted on a slow cadence — a vessel's identity is static; the
+// point is banking first_seen/last_seen + the classification for the trip and port
+// analytics. Freight-only (the paying audience); tankers/tourist are excluded by the
+// same isFreightVessel classifier the /ais/vessels freight filter uses.
+const VESSEL_SYNC_MS = safeInt(process.env.VESSEL_SYNC_MS, 10 * 60_000, 60_000);
+
+async function syncVesselDim() {
+  if (!db.enabled) return;
+  const rows = buildVesselList(vessels, vesselStatic, {
+    limit: Number.MAX_SAFE_INTEGER, isFreight: isFreightVessel, resolveOperator,
+  }).map((v) => ({
+    mmsi: v.mmsi, imo: v.imo, name: v.name, shipType: v.shipType, category: v.category,
+    isFreight: true, // guaranteed by the isFreightVessel filter above
+    freightReason: freightReason(v.shipType, v.name, v.imo),
+    operatorId: v.operatorId, operatorName: v.operatorName,
+    length: v.length, beam: v.beam, draught: v.draught,
+  }));
+  try { await db.syncVessels(rows); }
+  catch (e) { console.warn('[Relay] vessel dim sync failed:', e.message); }
 }
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
@@ -4343,6 +4375,8 @@ const handleRequest = async (req, res) => {
         eventRows: db.stats.eventRows,
         baselineBuckets: db.stats.baselineBuckets,
         baselineRefreshedAt: db.stats.baselineRefreshedAt,
+        vesselsSynced: db.stats.vesselsSynced,
+        vesselsSyncedAt: db.stats.vesselsSyncedAt,
         lastError: db.stats.lastError,
       },
     }));
