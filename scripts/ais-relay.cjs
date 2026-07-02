@@ -2221,11 +2221,17 @@ const TRIP_POINTS_RETENTION_DAYS = safeInt(process.env.TRIP_POINTS_RETENTION_DAY
 const TRIP_SWEEP_MS = safeInt(process.env.TRIP_SWEEP_MS, 24 * 60 * 60_000, 60 * 60_000); // daily abandon/prune maintenance
 const TRIP_FINALIZE_MS = safeInt(process.env.TRIP_FINALIZE_MS, 5 * 60_000, 60_000);      // fill distance/speed soon after arrival
 const TRIP_POINTS_HIGH_WATER = Math.floor(TRIP_POINTS_BUFFER_MAX * 0.8);                 // /health degraded threshold
+// On boot, tripByMmsi is seeded from Postgres but the `vessels`/voyage maps are still refilling from AIS,
+// so anchor-loss reconciliation would abandon seeded trips whose vessel just hasn't reported YET → churn
+// (abandon then re-open when it reports). Skip that reconciliation for the first few ticks so the fleet
+// repopulates first. Re-route/anchor abandonment for vessels that DO report is unaffected.
+const TRIP_BOOT_GRACE_TICKS = safeInt(process.env.TRIP_BOOT_GRACE_TICKS, 3, 1);
 const TRIP_OPTS = { minPointGapMs: TRIP_POINT_GAP_MS, destStableTicks: TRIP_DEST_STABLE_TICKS };
 const tripByMmsi = new Map();      // mmsi -> tripState (see trip-lifecycle.cjs); DB is authoritative, seeded on boot
 const pendingTripPoints = [];      // buffered trip_points, flushed in batches off the hot loop
 let tripsReady = false;            // gate: no lifecycle mutations until loadOpenTrips() has seeded tripByMmsi
 let _flushingTripPoints = false;   // in-flight guard for the flush
+let _ferryTickCount = 0;           // updateFerryDelays ticks since boot (drives the boot-grace window)
 // CLOSE side (geofence loop): remember recent origin exits so a trip opening shortly AFTER departure
 // still gets its origin (backfillTripOrigin only catches the exit-AFTER-open order). Bounded by fleet.
 const RECENT_EXIT_TTL_MS = safeInt(process.env.TRIP_RECENT_EXIT_TTL_MS, 6 * 60 * 60_000, 30 * 60_000);
@@ -2251,6 +2257,7 @@ async function registerTrips(n, now = Date.now()) {
 
 function updateFerryDelays(now = Date.now()) {
   try {
+    _ferryTickCount++;
     let newTrips = 0;
     for (const [mmsi, v] of vessels) {
       const stat = vesselStatic.get(mmsi);
@@ -2324,7 +2331,10 @@ function updateFerryDelays(now = Date.now()) {
     // Phase B: anchor-loss reconciliation. Any tracked trip whose vessel no longer has a voyage
     // (not-freight now, destination unresolved, or history pruned) has lost its anchor → abandon +
     // forget. One place, so the abandon path isn't scattered across the delete sites above.
-    if (TRIPS_ENABLED && tripsReady) {
+    // Skipped during the boot-grace window (see TRIP_BOOT_GRACE_TICKS): right after a restart the fleet
+    // maps are still refilling, so a seeded trip's vessel may just not have reported yet — abandoning it
+    // now would churn (abandon → re-open on the next tick when it reports).
+    if (TRIPS_ENABLED && tripsReady && _ferryTickCount > TRIP_BOOT_GRACE_TICKS) {
       for (const [mmsi, t] of tripByMmsi) {
         if (!voyageByMmsi.has(mmsi)) {
           if (t.tripId != null && t.status === 'open') void db.abandonTrips([t.tripId]);
