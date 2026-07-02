@@ -354,6 +354,12 @@ async function backfillDestDwell(exits) {
 const TRIP_SEG_MAX_KN = 40;    // a leg between two points implying >40 kn is a bad AIS position → dropped
 const TRIP_MOVING_MIN_KN = 1;  // speed above this counts as "under way" (excludes idle/berth samples)
 const TRIP_SPEED_MIN_PTS = 3;  // need this many moving samples before an avg speed is trustworthy
+// Wait this long after arrival before finalizing. Capture STOPS at arrival, so the point set is then
+// fixed — but the last points captured while open may still sit in the relay's pendingTripPoints buffer
+// (flushed every ~60s, requeued on a transient failure). Finalizing sooner would compute from a partial
+// track and then the `distance_km IS NULL` gate would skip the trip forever, undercounting distance/speed.
+// 5 min safely clears the 60s flush + a couple of requeues.
+const TRIP_FINALIZE_GRACE_SEC = 300;
 
 /**
  * Compute distance_km + avg_speed_kn for arrived trips from the TRIP_POINTS PATH (not great-circle
@@ -378,6 +384,7 @@ async function finalizeArrivedGeo() {
         FROM trip_points tp
         JOIN trips t ON t.id = tp.trip_id
         WHERE t.status = 'arrived' AND t.distance_km IS NULL
+          AND t.arrived_at < now() - make_interval(secs => ${TRIP_FINALIZE_GRACE_SEC})  -- let buffered points flush first
         WINDOW w AS (PARTITION BY tp.trip_id ORDER BY tp.ts)
       ),
       agg AS (
