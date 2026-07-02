@@ -1712,7 +1712,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
-const { decideTrip, planGeofenceActions, originFromRecentExit } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips } = require('./trip-lifecycle.cjs');
 const { relayFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
@@ -2216,6 +2216,11 @@ const TRIP_POINT_GAP_MS = safeInt(process.env.TRIP_POINT_GAP_MS, 5 * 60_000, 60_
 const TRIP_POINTS_FLUSH_MS = safeInt(process.env.TRIP_POINTS_FLUSH_MS, 60_000, 15_000); // batch flush cadence
 const TRIP_POINTS_BUFFER_MAX = safeInt(process.env.TRIP_POINTS_BUFFER_MAX, 5000, 100);  // drop-oldest hard cap
 const TRIP_DEST_STABLE_TICKS = safeInt(process.env.TRIP_DEST_STABLE_TICKS, 2, 1);       // re-route flicker guard
+const TRIP_MAX_OPEN_AGE_H = safeInt(process.env.TRIP_MAX_OPEN_AGE_H, 120, 1);           // abandon open trips older than 5d
+const TRIP_POINTS_RETENTION_DAYS = safeInt(process.env.TRIP_POINTS_RETENTION_DAYS, 90, 1);
+const TRIP_SWEEP_MS = safeInt(process.env.TRIP_SWEEP_MS, 24 * 60 * 60_000, 60 * 60_000); // daily abandon/prune maintenance
+const TRIP_FINALIZE_MS = safeInt(process.env.TRIP_FINALIZE_MS, 5 * 60_000, 60_000);      // fill distance/speed soon after arrival
+const TRIP_POINTS_HIGH_WATER = Math.floor(TRIP_POINTS_BUFFER_MAX * 0.8);                 // /health degraded threshold
 const TRIP_OPTS = { minPointGapMs: TRIP_POINT_GAP_MS, destStableTicks: TRIP_DEST_STABLE_TICKS };
 const tripByMmsi = new Map();      // mmsi -> tripState (see trip-lifecycle.cjs); DB is authoritative, seeded on boot
 const pendingTripPoints = [];      // buffered trip_points, flushed in batches off the hot loop
@@ -2399,6 +2404,45 @@ async function flushTripPoints() {
   }
 }
 
+// Daily trips maintenance: abandon open trips that outlived the cap (never reached / dark / untracked
+// destination) and prune old closed trips' points (trip ROWS/aggregates are kept forever). Both are
+// status-guarded + idempotent in db.cjs, so re-runs are safe.
+async function tripMaintenance() {
+  if (!TRIPS_ENABLED || !db.enabled) return;
+  const [abandoned, pruned] = await Promise.all([   // independent tables/filters — run concurrently
+    db.abandonStaleTrips(TRIP_MAX_OPEN_AGE_H),
+    db.pruneTripPoints(TRIP_POINTS_RETENTION_DAYS),
+  ]);
+  if (abandoned || pruned) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale, pruned ${pruned} old points`);
+}
+
+// Build the /health `trips` block (sync — no I/O). Mixes the db.cjs writer counters with the relay's
+// in-memory gauges: open trips tracked, oldest-open age (the direct leak indicator), buffered points.
+function buildTripsHealth() {
+  const g = summarizeTrips(tripByMmsi, Date.now());
+  const enabled = TRIPS_ENABLED && db.enabled;
+  return {
+    enabled,
+    openTripsTracked: g.openCount,
+    oldestOpenTripAgeMin: g.oldestOpenAgeMin, // leak indicator (should stay < TRIP_MAX_OPEN_AGE_H*60)
+    tripPointsBuffered: pendingTripPoints.length,
+    recentExitsTracked: recentExitByMmsi.size,
+    tripsOpened: db.stats.tripsOpened,
+    tripsArrived: db.stats.tripsArrived,
+    tripsAbandoned: db.stats.tripsAbandoned,
+    tripPointRows: db.stats.tripPointRows,
+    tripPointsDropped: db.stats.tripPointsDropped,
+    lastTripWriteAt: db.stats.lastTripWriteAt,
+    lastTripWriteOk: db.stats.lastTripWriteOk,
+    lastTripError: db.stats.lastTripError,
+    degraded: enabled && (
+      db.stats.lastTripWriteOk === false
+      || pendingTripPoints.length >= TRIP_POINTS_HIGH_WATER
+      || (g.oldestOpenAgeMin != null && g.oldestOpenAgeMin > TRIP_MAX_OPEN_AGE_H * 60)
+    ),
+  };
+}
+
 async function persistFerryHistory() {
   if (!UPSTASH_ENABLED || !_ferryHistoryDirty) return;
   try {
@@ -2468,7 +2512,11 @@ function startFerryDelayLoop() {
     updateFerryDelays();
     setInterval(updateFerryDelays, FERRY_DELAY_INTERVAL_MS).unref?.();
     setInterval(persistFerryHistory, FERRY_DELAY_PERSIST_MS).unref?.();
-    if (TRIPS_ENABLED) scheduleWithBootRun(flushTripPoints, TRIP_POINTS_FLUSH_MS);
+    if (TRIPS_ENABLED) {
+      scheduleWithBootRun(flushTripPoints, TRIP_POINTS_FLUSH_MS);
+      scheduleWithBootRun(() => db.finalizeArrivedGeo(), TRIP_FINALIZE_MS); // fill distance/avg_speed for arrived trips
+      scheduleWithBootRun(tripMaintenance, TRIP_SWEEP_MS);                  // daily abandon-stale + prune-old-points
+    }
   });
 }
 
@@ -4526,6 +4574,7 @@ const handleRequest = async (req, res) => {
         vesselsSyncedAt: db.stats.vesselsSyncedAt,
         lastError: db.stats.lastError,
       },
+      trips: buildTripsHealth(),
     }));
   } else if (pathname === '/metrics') {
     return sendCompressed(req, res, 200, {
