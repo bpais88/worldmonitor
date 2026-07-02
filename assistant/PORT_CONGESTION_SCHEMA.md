@@ -117,7 +117,10 @@ Every sample tick (5 min), `computePortStatus` already yields the per-port field
 
 ## Rollup + serving
 
-**Baseline refresh** (scheduled, e.g. nightly) — LOCAL-time bucketed, degraded rows excluded:
+**Baseline refresh** (scheduled, e.g. nightly) — LOCAL-time bucketed, degraded rows excluded. This
+snippet mirrors `refreshBaselines()` in `scripts/db.cjs` (the runnable source of truth); keep them in
+sync. Note `n` = **DISTINCT local days**, not `count(*)` — cadence-independent, so six adjacent 5-min
+samples from one hour can't trip the trust gate:
 ```sql
 INSERT INTO port_baselines (port_id, dow, hour, p50, p75, p90, mean, stddev, n, updated_at)
 SELECT s.port_id,
@@ -126,18 +129,22 @@ SELECT s.port_id,
        percentile_cont(0.5)  WITHIN GROUP (ORDER BY s.at_berth),
        percentile_cont(0.75) WITHIN GROUP (ORDER BY s.at_berth),
        percentile_cont(0.90) WITHIN GROUP (ORDER BY s.at_berth),
-       avg(s.at_berth), stddev_pop(s.at_berth), count(*), now()
+       avg(s.at_berth), stddev_pop(s.at_berth),
+       count(DISTINCT (s.ts AT TIME ZONE p.tz)::date), now()   -- n = distinct local days (trust gate)
 FROM port_snapshots s JOIN ports p USING (port_id)
-WHERE s.coverage_ok AND s.ts > now() - interval '8 weeks'
+WHERE s.coverage_ok AND s.at_berth IS NOT NULL AND s.ts > now() - interval '8 weeks'
 GROUP BY 1,2,3
 ON CONFLICT (port_id, dow, hour) DO UPDATE SET
   p50=EXCLUDED.p50, p75=EXCLUDED.p75, p90=EXCLUDED.p90,
-  mean=EXCLUDED.mean, stddev=EXCLUDED.stddev, n=EXCLUDED.n, updated_at=now();
+  mean=EXCLUDED.mean, stddev=EXCLUDED.stddev, n=EXCLUDED.n, updated_at=EXCLUDED.updated_at;
+-- Then expire buckets that aged out of the 8-week window (not upserted this run):
+DELETE FROM port_baselines WHERE updated_at < now() - interval '2 days';
 ```
 
 **Relative congestion NOW** (replaces the absolute `atPort≥8`): compare current `at_berth` to that
-port's baseline bucket → `> p90` congested, `> p75` busy, else clear. `n < MIN_N` → `unknown` (not
-enough history yet). No live coverage → `unknown` (never a false "clear").
+port's baseline bucket → `> p90` congested, `> p75` busy, else clear. `n < BASELINE_MIN_DAYS` (≥3
+distinct local days) → `unknown` — so a bucket self-activates only after real history (~weeks), never
+after 30 min of one hour. No live coverage → `unknown` (never a false "clear").
 
 **Forecast (+24h)**: dwell-aware equilibrium blended toward `baseline[port][target dow,hour]`, using
 `eta_h24` for arrivals and mean dwell (from `port_events`) for departures. Write a `forecasts` row.
