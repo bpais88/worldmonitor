@@ -21,9 +21,18 @@ const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid'
 const tzForCountry = (country) => COUNTRY_TZ[country || 'IT'] || 'Europe/Rome';
 
 // In-memory counters read synchronously by /health (never do an async PG call in the health path).
-const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null, baselineBuckets: 0, baselineRefreshedAt: null, vesselsSynced: 0, vesselsSyncedAt: null };
+const stats = {
+  enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null,
+  baselineBuckets: 0, baselineRefreshedAt: null, vesselsSynced: 0, vesselsSyncedAt: null,
+  // Trips writer (Phase B) — SEPARATE health from the port-history writer above, so a trip-write
+  // failure never flips the snapshot writer's lastWriteOk (and vice versa). Driven by tripOk/tripFail.
+  tripsOpened: 0, tripsArrived: 0, tripsAbandoned: 0, tripPointRows: 0, tripPointsDropped: 0,
+  lastTripWriteAt: null, lastTripWriteOk: null, lastTripError: null,
+};
 function ok(kind, n) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = true; if (kind) stats[kind] += n; }
 function fail(e) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = false; stats.lastError = String(e && e.message || e).slice(0, 200); }
+function tripOk(kind, n) { stats.lastTripWriteAt = Date.now(); stats.lastTripWriteOk = true; if (kind) stats[kind] += n; }
+function tripFail(e) { stats.lastTripWriteAt = Date.now(); stats.lastTripWriteOk = false; stats.lastTripError = String(e && e.message || e).slice(0, 200); }
 
 // The neon HTTP driver has no built-in timeout; bound each write so a hung endpoint can't stall the
 // sampler's in-flight guard (or leak a hung fetch on the fire-and-forget event path).
@@ -141,6 +150,243 @@ async function writeEvents(events, meta = {}) {
   } catch (e) { fail(e); }
 }
 
+// ---------------------------------------------------------------------------
+// Trips lifecycle writer (Phase B). A trip = one freight vessel leg toward a destination port.
+// IDENTITY is anchor-driven (opened when the relay's voyage anchor resolves a destination); geofence
+// port_events only CLOSE (dest-enter) and DECORATE (origin/dwell backfill). Every mutation is
+// status-guarded so any replay/interleave/restart is a 0-row no-op. Writes are fire-and-forget from
+// the relay (never awaited in the geofence tick). Requires migration 003's uq_trips_one_open.
+// ---------------------------------------------------------------------------
+
+// epoch-ms → timestamptz, NULL-safe (NULL::float8/1000 → NULL → to_timestamp NULL). Values are
+// parameterized by the neon template, so ms is passed as a param and converted in SQL.
+// (helper is inlined per-call as to_timestamp(${x}::float8/1000.0))
+
+/**
+ * Open a trip (idempotent). Returns the new bigserial id, or the incumbent open trip's id on
+ * conflict, or null (disabled/failed). uq_trips_one_open (migration 003) makes the second open for a
+ * vessel a no-op; the SELECT fallback returns the incumbent so the caller can bind to it.
+ */
+async function openTrip({ mmsi, originPortId = null, destPortId, openedAt, departedAt = null, departureEta = null }) {
+  if (!enabled || !mmsi || !destPortId) return null;
+  try {
+    const rows = await withTimeout(sql`
+      INSERT INTO trips (mmsi, origin_port_id, dest_port_id, opened_at, departed_at, departure_eta, status, updated_at)
+      VALUES (${String(mmsi)}, ${originPortId}, ${destPortId},
+              to_timestamp(${openedAt}::float8 / 1000.0),
+              to_timestamp(${departedAt}::float8 / 1000.0),
+              to_timestamp(${departureEta}::float8 / 1000.0),
+              'open', now())
+      ON CONFLICT (mmsi) WHERE status = 'open' DO NOTHING
+      RETURNING id`);
+    let id = rows && rows[0] ? rows[0].id : null;
+    if (id != null) { tripOk('tripsOpened', 1); return Number(id); }
+    // Conflict: an open trip already exists — return the incumbent id so the caller rebinds to it.
+    const inc = await withTimeout(sql`SELECT id FROM trips WHERE mmsi = ${String(mmsi)} AND status = 'open' LIMIT 1`);
+    return inc && inc[0] ? Number(inc[0].id) : null;
+  } catch (e) { tripFail(e); return null; }
+}
+
+/**
+ * Close trips whose destination geofence was entered. `arrivals` = [{ mmsi, portId, ts(ms) }] (a
+ * tick's enter events). The WHERE clause IS the join (mmsi + dest_port_id + status='open'), so a
+ * jitter/double-enter updates 0 rows. Returns the count actually closed.
+ */
+async function finishTrip(arrivals) {
+  if (!enabled || !arrivals || !arrivals.length) return 0;
+  const mmsi = arrivals.map((a) => String(a.mmsi));
+  const port = arrivals.map((a) => a.portId);
+  const ts = arrivals.map((a) => new Date(a.ts).toISOString());
+  try {
+    const rows = await withTimeout(sql`
+      UPDATE trips t SET
+        arrived_at = u.ts, status = 'arrived',
+        duration_min = round(extract(epoch from (u.ts - COALESCE(t.departed_at, t.opened_at))) / 60.0)::int,
+        updated_at = now()
+      FROM unnest(${mmsi}::text[], ${port}::text[], ${ts}::timestamptz[]) AS u(mmsi, port_id, ts)
+      WHERE t.mmsi = u.mmsi AND t.dest_port_id = u.port_id AND t.status = 'open'
+      RETURNING t.id`);
+    const n = Array.isArray(rows) ? rows.length : 0;
+    if (n) tripOk('tripsArrived', n);
+    return n;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/**
+ * Append per-tick trip_points. `rows` = [{ tripId, ts(ms), lat, lon, speedKn, course, eta(ms|null),
+ * etaSlipMin(int|null) }]. PK(trip_id,ts) + ON CONFLICT DO NOTHING → replay-safe.
+ */
+async function appendTripPoints(rows) {
+  if (!enabled || !rows || !rows.length) return 0;
+  const num = (f) => rows.map((r) => (Number.isFinite(r[f]) ? r[f] : null));
+  try {
+    await withTimeout(sql`
+      INSERT INTO trip_points (trip_id, ts, lat, lon, speed_kn, course, eta, eta_slip_min)
+      SELECT u.trip_id, to_timestamp(u.ts::float8 / 1000.0), u.lat, u.lon, u.speed_kn, u.course,
+             CASE WHEN u.eta IS NOT NULL THEN to_timestamp(u.eta::float8 / 1000.0) END, u.eta_slip_min
+      FROM unnest(
+        ${rows.map((r) => r.tripId)}::bigint[], ${num('ts')}::bigint[], ${num('lat')}::float8[],
+        ${num('lon')}::float8[], ${num('speedKn')}::real[], ${num('course')}::real[],
+        ${num('eta')}::bigint[], ${num('etaSlipMin')}::int[]
+      ) AS u(trip_id, ts, lat, lon, speed_kn, course, eta, eta_slip_min)
+      ON CONFLICT (trip_id, ts) DO NOTHING`);
+    tripOk('tripPointRows', rows.length);
+    return rows.length;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/**
+ * Boot reconciliation: Postgres is authoritative for open/arrived trips. Returns
+ * Map(mmsi → { tripId, destPortId, openedAt, departureEta, originPortId, departedAt, stalled, status }).
+ * LIMIT 5000 is a leak alarm (the caller WARNs when hit); the daily sweep keeps the set bounded.
+ */
+async function loadOpenTrips() {
+  if (!enabled) return new Map();
+  const rows = await sql`
+    SELECT id, mmsi, dest_port_id, origin_port_id, stalled, status,
+           extract(epoch from opened_at) * 1000 AS opened_at,
+           extract(epoch from departure_eta) * 1000 AS departure_eta,
+           extract(epoch from departed_at) * 1000 AS departed_at
+    FROM trips WHERE status IN ('open', 'arrived') ORDER BY opened_at DESC LIMIT 5000`;
+  const m = new Map();
+  for (const r of rows) {
+    m.set(String(r.mmsi), {
+      tripId: Number(r.id), destPortId: r.dest_port_id, originPortId: r.origin_port_id,
+      openedAt: r.opened_at != null ? Number(r.opened_at) : null,
+      departureEta: r.departure_eta != null ? Number(r.departure_eta) : null,
+      departedAt: r.departed_at != null ? Number(r.departed_at) : null,
+      stalled: !!r.stalled, status: r.status,
+    });
+  }
+  return { trips: m, capped: rows.length >= 5000 };
+}
+
+/** Abandon specific open trips (anchor lost / superseded by a re-route). Status-guarded. */
+async function abandonTrips(ids) {
+  if (!enabled || !ids || !ids.length) return 0;
+  try {
+    const rows = await withTimeout(sql`
+      UPDATE trips SET status = 'abandoned', updated_at = now()
+      WHERE id = ANY(${ids.map(Number)}::bigint[]) AND status = 'open' RETURNING id`);
+    const n = Array.isArray(rows) ? rows.length : 0;
+    if (n) tripOk('tripsAbandoned', n);
+    return n;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/** Backstop sweep: abandon open trips older than maxAgeH (never reached / dark / untracked dest). */
+async function abandonStaleTrips(maxAgeH = 120) {
+  if (!enabled) return 0;
+  try {
+    const rows = await withTimeout(sql`
+      UPDATE trips SET status = 'abandoned', updated_at = now()
+      WHERE status = 'open' AND opened_at < now() - make_interval(hours => ${maxAgeH}) RETURNING id`);
+    const n = Array.isArray(rows) ? rows.length : 0;
+    if (n) tripOk('tripsAbandoned', n);
+    return n;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/** Mark a trip stalled (eager, first tick drift.stalled fires). Guarded so it writes at most once. */
+async function markStalled(tripId) {
+  if (!enabled || tripId == null) return;
+  try { await withTimeout(sql`UPDATE trips SET stalled = true, updated_at = now() WHERE id = ${Number(tripId)} AND NOT stalled`); }
+  catch (e) { tripFail(e); }
+}
+
+/** Backfill the leg's departure ETA once, when the anchor first gets a real ETA. */
+async function patchTripEta(tripId, etaTs) {
+  if (!enabled || tripId == null || !Number.isFinite(etaTs)) return;
+  try { await withTimeout(sql`UPDATE trips SET departure_eta = to_timestamp(${etaTs}::float8 / 1000.0), updated_at = now() WHERE id = ${Number(tripId)} AND departure_eta IS NULL`); }
+  catch (e) { tripFail(e); }
+}
+
+/** Raise a trip's worst ETA slip (delay magnitude). Guarded to a monotonic max. */
+async function bumpTripEtaSlip(tripId, slipMin) {
+  if (!enabled || tripId == null || !Number.isFinite(slipMin)) return;
+  try { await withTimeout(sql`UPDATE trips SET max_eta_slip_min = ${Math.round(slipMin)}, updated_at = now() WHERE id = ${Number(tripId)} AND (max_eta_slip_min IS NULL OR max_eta_slip_min < ${Math.round(slipMin)})`); }
+  catch (e) { tripFail(e); }
+}
+
+/**
+ * Backfill origin_port_id + departed_at from an observed geofence EXIT at leg start. `exits` =
+ * [{ mmsi, portId, ts(ms) }]. Guards: only unset departed_at, never the destination's own exit
+ * (dest_port_id <> exit port), and only within a window around opened_at (a stray neighbor-zone exit
+ * can't clobber a real departure).
+ */
+async function backfillTripOrigin(exits) {
+  if (!enabled || !exits || !exits.length) return 0;
+  const mmsi = exits.map((e) => String(e.mmsi));
+  const port = exits.map((e) => e.portId);
+  const ts = exits.map((e) => new Date(e.ts).toISOString());
+  try {
+    await withTimeout(sql`
+      UPDATE trips t SET origin_port_id = COALESCE(t.origin_port_id, u.port_id), departed_at = u.ts, updated_at = now()
+      FROM unnest(${mmsi}::text[], ${port}::text[], ${ts}::timestamptz[]) AS u(mmsi, port_id, ts)
+      WHERE t.mmsi = u.mmsi AND t.status = 'open' AND t.departed_at IS NULL
+        AND t.dest_port_id <> u.port_id
+        AND u.ts BETWEEN t.opened_at - interval '30 min' AND t.opened_at + interval '6 hours'`);
+    return 1;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/** Backfill dest_dwell_min on an arrived trip from the destination's geofence exit dwell. */
+async function backfillDestDwell(exits) {
+  if (!enabled || !exits || !exits.length) return 0;
+  const mmsi = exits.map((e) => String(e.mmsi));
+  const port = exits.map((e) => e.portId);
+  const dwell = exits.map((e) => (Number.isFinite(e.dwellMin) ? e.dwellMin : null));
+  try {
+    await withTimeout(sql`
+      UPDATE trips t SET dest_dwell_min = u.dwell, updated_at = now()
+      FROM unnest(${mmsi}::text[], ${port}::text[], ${dwell}::real[]) AS u(mmsi, port_id, dwell)
+      WHERE t.mmsi = u.mmsi AND t.dest_port_id = u.port_id AND t.status = 'arrived'
+        AND t.dest_dwell_min IS NULL AND u.dwell IS NOT NULL`);
+    return 1;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/**
+ * Compute distance_km + avg_speed_kn for arrived trips that have a known origin, in SQL from the
+ * ports dimension — great-circle (haversine, R=6371, matching ferry-eta.cjs haversineKm), so it is
+ * reproducible and gap-robust. Stays NULL when origin is unknown (the JOIN excludes null-origin).
+ * avg_speed carries the km/h→kn (/1.852) conversion. Idempotent: only fills where distance_km IS NULL.
+ */
+async function finalizeArrivedGeo() {
+  if (!enabled) return 0;
+  try {
+    const rows = await withTimeout(sql`
+      UPDATE trips t SET
+        distance_km = gc.km,
+        avg_speed_kn = CASE WHEN t.duration_min > 0 THEN (gc.km / (t.duration_min / 60.0)) / 1.852 END,
+        updated_at = now()
+      FROM (
+        SELECT t2.id,
+               2 * 6371 * asin(sqrt(
+                 power(sin(radians(pd.lat - po.lat) / 2), 2) +
+                 cos(radians(po.lat)) * cos(radians(pd.lat)) * power(sin(radians(pd.lon - po.lon) / 2), 2)
+               )) AS km
+        FROM trips t2
+        JOIN ports po ON po.port_id = t2.origin_port_id
+        JOIN ports pd ON pd.port_id = t2.dest_port_id
+        WHERE t2.status = 'arrived' AND t2.distance_km IS NULL AND t2.origin_port_id IS NOT NULL
+      ) gc
+      WHERE t.id = gc.id RETURNING t.id`);
+    return Array.isArray(rows) ? rows.length : 0;
+  } catch (e) { tripFail(e); return 0; }
+}
+
+/** Retention: drop trip_points of non-open trips older than `days`. Trip ROWS (aggregates) kept forever. */
+async function pruneTripPoints(days = 90) {
+  if (!enabled) return 0;
+  try {
+    await withTimeout(sql`
+      DELETE FROM trip_points tp USING trips t
+      WHERE tp.trip_id = t.id AND t.status <> 'open' AND t.updated_at < now() - make_interval(days => ${days})`, 30_000);
+    return 1;
+  } catch (e) { tripFail(e); return 0; }
+}
+
 /**
  * Serve /ais/port-history from Postgres, reshaped to the existing client contract
  * ({ snapshots:[{ts,ports:[...]}], events:[{ts,portId,mmsi,kind,dwellMin}], counts }).
@@ -254,5 +500,9 @@ function relativeCongestion(baselines, portId, atBerth, dow, hour, minDays = BAS
 module.exports = {
   enabled, syncPorts, syncVessels, writeSnapshot, writeEvents, queryPortHistory,
   refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_DAYS,
+  // Trips lifecycle (Phase B)
+  openTrip, finishTrip, appendTripPoints, loadOpenTrips, abandonTrips, abandonStaleTrips,
+  markStalled, patchTripEta, bumpTripEtaSlip, backfillTripOrigin, backfillDestDwell,
+  finalizeArrivedGeo, pruneTripPoints,
   stats, COUNTRY_TZ, tzForCountry,
 };
