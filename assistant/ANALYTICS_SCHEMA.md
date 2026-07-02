@@ -84,6 +84,13 @@ Plus `ix_trips_status_opened` for the `loadOpenTrips`/`abandonStaleTrips` sweeps
 `scripts/db.cjs` (openTrip/finishTrip/appendTripPoints/loadOpenTrips/abandon*/backfill*/finalizeArrivedGeo/
 pruneTripPoints), fire-and-forget from the relay, with health kept separate from the port-history writer.
 
+**Relay wiring (behind `TRIPS_ENABLED`, default off):** OPEN + `trip_points` capture in the ferry-delay
+loop; CLOSE + origin/dwell backfills in the geofence loop; periodic sweeps via `scheduleWithBootRun` —
+`finalizeArrivedGeo` (~5 min, distance/avg_speed for arrived trips; **migration 004** adds
+`ix_trips_arrived_unfinalized` so it's an indexed lookup) and a daily `abandonStaleTrips` +
+`pruneTripPoints`. `/health.trips` surfaces open-trips-tracked, oldest-open-age (leak indicator),
+buffered points, the write counters, and a `degraded` flag.
+
 ### `trip_points` — per-trip time-series (the "rich" option) — Phase B
 
 ```sql

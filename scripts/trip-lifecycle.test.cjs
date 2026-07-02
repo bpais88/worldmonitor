@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decideTrip, planGeofenceActions, originFromRecentExit, DEFAULTS } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, DEFAULTS } = require('./trip-lifecycle.cjs');
 
 const T0 = 1_700_000_000_000;
 const MIN = 60_000;
@@ -206,4 +206,26 @@ test('an exit long after the open is rejected', () => {
 
 test('null recent exit yields null origin', () => {
   assert.strictEqual(originFromRecentExit(null, 'ancona', T0), null);
+});
+
+// --- summarizeTrips (/health gauges) ---------------------------------------
+
+test('summarizeTrips counts open trips and the oldest open age, ignoring arrived', () => {
+  const m = new Map([
+    ['1', { status: 'open', openedAt: T0 - 30 * MIN }],
+    ['2', { status: 'open', openedAt: T0 - 90 * MIN }],   // oldest
+    ['3', { status: 'arrived', openedAt: T0 - 500 * MIN }], // ignored (not open)
+  ]);
+  const g = summarizeTrips(m, T0);
+  assert.strictEqual(g.openCount, 2);
+  assert.strictEqual(g.oldestOpenAgeMin, 90);
+});
+
+test('summarizeTrips with no open trips reports null oldest age', () => {
+  const m = new Map([['3', { status: 'arrived', openedAt: T0 - 500 * MIN }]]);
+  assert.deepStrictEqual(summarizeTrips(m, T0), { openCount: 0, oldestOpenAgeMin: null });
+});
+
+test('summarizeTrips on an empty map is zero/null', () => {
+  assert.deepStrictEqual(summarizeTrips(new Map(), T0), { openCount: 0, oldestOpenAgeMin: null });
 });

@@ -146,4 +146,21 @@ function originFromRecentExit(recentExit, destPortId, openedAt, opts = {}) {
   return { portId: recentExit.portId, ts: recentExit.ts };
 }
 
-module.exports = { decideTrip, planGeofenceActions, originFromRecentExit, DEFAULTS };
+/**
+ * In-memory trip gauges for the /health endpoint (sync — no I/O). Counts OPEN trips and the age of
+ * the oldest, the direct leak indicator (a healthy fleet's oldest open trip is younger than the
+ * abandon cap; a climbing oldest age means trips aren't closing).
+ * @returns { openCount, oldestOpenAgeMin } (oldestOpenAgeMin null when nothing is open)
+ */
+function summarizeTrips(tripByMmsi, now) {
+  let openCount = 0;
+  let oldestOpenedAt = null;
+  for (const t of tripByMmsi.values()) {
+    if (t.status !== 'open') continue;
+    openCount++;
+    if (oldestOpenedAt == null || t.openedAt < oldestOpenedAt) oldestOpenedAt = t.openedAt;
+  }
+  return { openCount, oldestOpenAgeMin: oldestOpenedAt == null ? null : Math.round((now - oldestOpenedAt) / 60_000) };
+}
+
+module.exports = { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, DEFAULTS };
