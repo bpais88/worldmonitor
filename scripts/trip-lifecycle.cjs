@@ -36,7 +36,11 @@ const DEFAULTS = {
  */
 function decideTrip(prev, voyage, ctx) {
   const { now, fresh, speedStalled, etaSlipMin } = ctx;
-  const O = { ...DEFAULTS, ...(ctx.opts || {}) };
+  // Read the two tunables with a per-field fallback (no per-call object spread — this runs for every
+  // freight vessel every tick). Callers pass a stable opts object (relay TRIP_OPTS); tests may omit it.
+  const opts = ctx.opts || {};
+  const minPointGapMs = opts.minPointGapMs ?? DEFAULTS.minPointGapMs;
+  const destStableTicks = opts.destStableTicks ?? DEFAULTS.destStableTicks;
   const actions = [];
 
   // No destination this tick → the anchor is gone. Abandon any open trip; forget the vessel.
@@ -49,7 +53,7 @@ function decideTrip(prev, voyage, ctx) {
   // trip's. Require the NEW dest to hold destStableTicks consecutive ticks before acting on it.
   if (prev && prev.destPortId !== voyage.destPortId) {
     const pendingTicks = prev.pendingDest === voyage.destPortId ? prev.pendingTicks + 1 : 1;
-    if (pendingTicks < O.destStableTicks) {
+    if (pendingTicks < destStableTicks) {
       return { actions, nextState: { ...prev, pendingDest: voyage.destPortId, pendingTicks } };
     }
     // Stable re-route: abandon the old open trip (never fabricate an arrival), then open the new leg.
@@ -76,7 +80,7 @@ function decideTrip(prev, voyage, ctx) {
   // Existing tracked trip (same dest) — decorate it while it's open and its id is known.
   const next = { ...prev };
   if (prev.tripId != null && prev.status === 'open') {
-    if (fresh && now - prev.lastPointTs >= O.minPointGapMs) {
+    if (fresh && now - prev.lastPointTs >= minPointGapMs) {
       actions.push({ type: 'capturePoint', tripId: prev.tripId });
       next.lastPointTs = now;
     }

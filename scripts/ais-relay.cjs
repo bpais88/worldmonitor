@@ -2311,6 +2311,11 @@ function updateFerryDelays(now = Date.now()) {
   }
 }
 
+// Drop-oldest hard cap on the trip_points buffer, so a persistent DB outage can't grow it unbounded.
+function capTripPoints() {
+  while (pendingTripPoints.length > TRIP_POINTS_BUFFER_MAX) { pendingTripPoints.shift(); db.stats.tripPointsDropped++; }
+}
+
 // Dispatch the pure decideTrip() actions to Postgres (fire-and-forget) + buffer trip_points. `ctx`
 // carries the live vessel frame for point capture. openTrip's async id is bound back onto tripByMmsi.
 function applyTripActions(mmsi, actions, ctx) {
@@ -2320,10 +2325,14 @@ function applyTripActions(mmsi, actions, ctx) {
       case 'abandon':
         void db.abandonTrips([a.tripId]);
         break;
-      case 'open':
-        void db.openTrip({ mmsi, destPortId: a.destPortId, openedAt: a.openedAt, departureEta: a.departureEta })
-          .then((id) => { const e = tripByMmsi.get(mmsi); if (e && e.tripId == null && id != null) e.tripId = id; });
+      case 'open': {
+        const { destPortId } = a;
+        void db.openTrip({ mmsi, destPortId, openedAt: a.openedAt, departureEta: a.departureEta })
+          // Bind the id only if the entry is still THIS open trip (guard against a re-route having
+          // replaced it while the insert was in flight).
+          .then((id) => { const e = tripByMmsi.get(mmsi); if (e && e.tripId == null && e.destPortId === destPortId && id != null) e.tripId = id; });
         break;
+      }
       case 'markStalled': void db.markStalled(a.tripId); break;
       case 'patchEta': void db.patchTripEta(a.tripId, a.etaTs); break;
       case 'bumpSlip': void db.bumpTripEtaSlip(a.tripId, a.slipMin); break;
@@ -2335,8 +2344,7 @@ function applyTripActions(mmsi, actions, ctx) {
           eta: eta ? eta.etaTs : null,
           etaSlipMin: drift && Number.isFinite(drift.etaGrowthMin) ? Math.round(drift.etaGrowthMin) : null,
         });
-        // Drop-oldest hard cap: a persistent DB outage can't grow the buffer unbounded.
-        while (pendingTripPoints.length > TRIP_POINTS_BUFFER_MAX) { pendingTripPoints.shift(); db.stats.tripPointsDropped++; }
+        capTripPoints();
         break;
       default: break;
     }
@@ -2352,8 +2360,8 @@ async function flushTripPoints() {
   try {
     const n = await db.appendTripPoints(batch);
     if (n === 0 && batch.length && db.enabled) {
-      pendingTripPoints.unshift(...batch);
-      while (pendingTripPoints.length > TRIP_POINTS_BUFFER_MAX) { pendingTripPoints.shift(); db.stats.tripPointsDropped++; }
+      pendingTripPoints.unshift(...batch); // write failed — re-queue (bounded) so a transient blip doesn't lose the trail
+      capTripPoints();
     }
   } catch (e) {
     console.warn('[Relay] trip_points flush failed:', e.message);
@@ -2431,7 +2439,7 @@ function startFerryDelayLoop() {
     updateFerryDelays();
     setInterval(updateFerryDelays, FERRY_DELAY_INTERVAL_MS).unref?.();
     setInterval(persistFerryHistory, FERRY_DELAY_PERSIST_MS).unref?.();
-    if (TRIPS_ENABLED) setInterval(() => { void flushTripPoints(); }, TRIP_POINTS_FLUSH_MS).unref?.();
+    if (TRIPS_ENABLED) scheduleWithBootRun(flushTripPoints, TRIP_POINTS_FLUSH_MS);
   });
 }
 
