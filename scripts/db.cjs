@@ -16,6 +16,9 @@ const sql = enabled ? neon(DATABASE_URL) : null;
 // country → IANA tz. All four covered countries are single-zone for our ports; the baseline is
 // bucketed in local port time (congestion follows local working hours), so tz must be accurate.
 const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid', NL: 'Europe/Amsterdam' };
+// Single source for the country→tz derivation (used by syncPorts on write AND the relay's PORT_TZ on
+// read — they must agree or the baseline's write/read bucket keys diverge). IT is the no-`country` default.
+const tzForCountry = (country) => COUNTRY_TZ[country || 'IT'] || 'Europe/Rome';
 
 // In-memory counters read synchronously by /health (never do an async PG call in the health path).
 const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null, baselineBuckets: 0, baselineRefreshedAt: null };
@@ -43,7 +46,7 @@ async function syncPorts(portsById) {
         ${ports.map((p) => p.id)}::text[], ${ports.map((p) => p.name)}::text[],
         ${ports.map((p) => p.country || 'IT')}::text[], ${ports.map((p) => p.region || null)}::text[],
         ${ports.map((p) => p.lat)}::float8[], ${ports.map((p) => p.lon)}::float8[],
-        ${ports.map((p) => COUNTRY_TZ[p.country || 'IT'] || 'Europe/Rome')}::text[]
+        ${ports.map((p) => tzForCountry(p.country))}::text[]
       )
       ON CONFLICT (port_id) DO UPDATE SET
         name=EXCLUDED.name, country=EXCLUDED.country, region=EXCLUDED.region,
@@ -182,26 +185,23 @@ async function refreshBaselines() {
   } catch (e) { fail(e); return 0; }
 }
 
-/** Load baselines into memory: Map(portId → Map(`${dow}:${hour}` → {p75,p90,n})). Boot + post-refresh. */
+/** Load baselines into memory: Map(`${portId}:${dow}:${hour}` → {p75,p90,n}). Boot + post-refresh. */
 async function loadBaselines() {
   if (!enabled) return new Map();
   const rows = await sql`SELECT port_id, dow, hour, p75, p90, n FROM port_baselines`;
   const m = new Map();
-  for (const r of rows) {
-    if (!m.has(r.port_id)) m.set(r.port_id, new Map());
-    m.get(r.port_id).set(`${r.dow}:${r.hour}`, { p75: Number(r.p75), p90: Number(r.p90), n: Number(r.n) });
-  }
+  for (const r of rows) m.set(`${r.port_id}:${r.dow}:${r.hour}`, { p75: Number(r.p75), p90: Number(r.p90), n: Number(r.n) });
   return m;
 }
 
 /**
  * Relative congestion for a port RIGHT NOW: current at_berth vs its baseline for the matching
  * local dow×hour. Returns null ("unknown") when the bucket is too thin to trust — so it
- * self-activates as the ~2-week baseline fills. Pure: caller passes the in-memory baselines +
- * the port's LOCAL dow/hour (computed from its tz).
+ * self-activates as the baseline fills (~2 weeks of data). Pure: caller passes the in-memory
+ * baselines (see loadBaselines) + the port's LOCAL dow/hour (computed from its tz).
  */
 function relativeCongestion(baselines, portId, atBerth, dow, hour, minN = BASELINE_MIN_N) {
-  const b = baselines && baselines.get && baselines.get(portId) && baselines.get(portId).get(`${dow}:${hour}`);
+  const b = baselines?.get(`${portId}:${dow}:${hour}`);
   if (!b || b.n < minN || !Number.isFinite(atBerth)) return null; // unknown until enough history
   if (atBerth > b.p90) return 'congested';
   if (atBerth > b.p75) return 'busy';
@@ -211,5 +211,5 @@ function relativeCongestion(baselines, portId, atBerth, dow, hour, minN = BASELI
 module.exports = {
   enabled, syncPorts, writeSnapshot, writeEvents, queryPortHistory,
   refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_N,
-  stats, COUNTRY_TZ,
+  stats, COUNTRY_TZ, tzForCountry,
 };
