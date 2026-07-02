@@ -2409,9 +2409,38 @@ async function flushTripPoints() {
 // status-guarded + idempotent in db.cjs, so re-runs are safe.
 async function tripMaintenance() {
   if (!TRIPS_ENABLED || !db.enabled) return;
-  const abandoned = await db.abandonStaleTrips(TRIP_MAX_OPEN_AGE_H);
-  const pruned = await db.pruneTripPoints(TRIP_POINTS_RETENTION_DAYS);
+  const [abandoned, pruned] = await Promise.all([   // independent tables/filters — run concurrently
+    db.abandonStaleTrips(TRIP_MAX_OPEN_AGE_H),
+    db.pruneTripPoints(TRIP_POINTS_RETENTION_DAYS),
+  ]);
   if (abandoned || pruned) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale, pruned ${pruned} old points`);
+}
+
+// Build the /health `trips` block (sync — no I/O). Mixes the db.cjs writer counters with the relay's
+// in-memory gauges: open trips tracked, oldest-open age (the direct leak indicator), buffered points.
+function buildTripsHealth() {
+  const g = summarizeTrips(tripByMmsi, Date.now());
+  const enabled = TRIPS_ENABLED && db.enabled;
+  return {
+    enabled,
+    openTripsTracked: g.openCount,
+    oldestOpenTripAgeMin: g.oldestOpenAgeMin, // leak indicator (should stay < TRIP_MAX_OPEN_AGE_H*60)
+    tripPointsBuffered: pendingTripPoints.length,
+    recentExitsTracked: recentExitByMmsi.size,
+    tripsOpened: db.stats.tripsOpened,
+    tripsArrived: db.stats.tripsArrived,
+    tripsAbandoned: db.stats.tripsAbandoned,
+    tripPointRows: db.stats.tripPointRows,
+    tripPointsDropped: db.stats.tripPointsDropped,
+    lastTripWriteAt: db.stats.lastTripWriteAt,
+    lastTripWriteOk: db.stats.lastTripWriteOk,
+    lastTripError: db.stats.lastTripError,
+    degraded: enabled && (
+      db.stats.lastTripWriteOk === false
+      || pendingTripPoints.length >= TRIP_POINTS_HIGH_WATER
+      || (g.oldestOpenAgeMin != null && g.oldestOpenAgeMin > TRIP_MAX_OPEN_AGE_H * 60)
+    ),
+  };
 }
 
 async function persistFerryHistory() {
@@ -4545,29 +4574,7 @@ const handleRequest = async (req, res) => {
         vesselsSyncedAt: db.stats.vesselsSyncedAt,
         lastError: db.stats.lastError,
       },
-      trips: (() => {
-        const g = summarizeTrips(tripByMmsi, Date.now());
-        return {
-          enabled: TRIPS_ENABLED && db.enabled,
-          openTripsTracked: g.openCount,
-          oldestOpenTripAgeMin: g.oldestOpenAgeMin,   // direct leak indicator (should stay < TRIP_MAX_OPEN_AGE_H*60)
-          tripPointsBuffered: pendingTripPoints.length,
-          recentExitsTracked: recentExitByMmsi.size,
-          tripsOpened: db.stats.tripsOpened,
-          tripsArrived: db.stats.tripsArrived,
-          tripsAbandoned: db.stats.tripsAbandoned,
-          tripPointRows: db.stats.tripPointRows,
-          tripPointsDropped: db.stats.tripPointsDropped,
-          lastTripWriteAt: db.stats.lastTripWriteAt,
-          lastTripWriteOk: db.stats.lastTripWriteOk,
-          lastTripError: db.stats.lastTripError,
-          degraded: TRIPS_ENABLED && db.enabled && (
-            db.stats.lastTripWriteOk === false
-            || pendingTripPoints.length >= TRIP_POINTS_HIGH_WATER
-            || (g.oldestOpenAgeMin != null && g.oldestOpenAgeMin > TRIP_MAX_OPEN_AGE_H * 60)
-          ),
-        };
-      })(),
+      trips: buildTripsHealth(),
     }));
   } else if (pathname === '/metrics') {
     return sendCompressed(req, res, 200, {
