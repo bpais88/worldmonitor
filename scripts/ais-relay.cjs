@@ -34,6 +34,9 @@ const currentApiKey = () => AIS_KEYS[aisKeyIndex] || '';
 // How long a fresh connection may stay silent before we treat the key as
 // throttled and rotate to the next one. (safeInt is hoisted, defined below.)
 const AIS_KEY_PROBE_MS = safeInt(process.env.AIS_KEY_PROBE_MS, 30_000, 5_000);
+// aisstream streams the whole world at high volume; a gap this long means the key is throttled/dark,
+// so the (Italy-only) Marinesia fallback is our only coverage — used for honest per-port coverage.
+const AIS_FRAME_STALE_MS = safeInt(process.env.AIS_FRAME_STALE_MS, 120_000, 30_000);
 const PORT = process.env.PORT || 3004;
 
 if (AIS_KEYS.length === 0) {
@@ -207,6 +210,7 @@ let upstreamQueueReadIndex = 0;
 let upstreamDrainScheduled = false;
 let clients = new Set();
 let messageCount = 0;
+let lastAisFrameAt = 0; // stamped on every aisstream frame — global-liveness signal for per-port coverage
 let droppedMessages = 0;
 const requestRateBuckets = new Map(); // key: route:ip -> { count, resetAt }
 const logThrottleState = new Map(); // key: event key -> timestamp
@@ -1716,13 +1720,40 @@ function feedFreshness() {
   if (!MARINESIA_ENABLED) return {};
   return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length });
 }
+
+// --- Per-port coverage (P0.2): honest "did THIS port have live coverage this tick?" ------------
+// Derived from feed GEOGRAPHY, not vessel counts (which conflate "quiet" with "uncovered").
+// aisstream streams the whole world → when fresh, every port is covered. When it's dark, only the
+// Marinesia fallback runs, and it polls ITALY_BBOX only → non-Italian ports are honestly uncovered.
+// (These reference marinesia state defined later; called only at runtime, like feedFreshness above.)
+function aisstreamFresh(now = Date.now()) {
+  return lastAisFrameAt > 0 && now - lastAisFrameAt <= AIS_FRAME_STALE_MS;
+}
+function marinesiaFresh(now = Date.now()) {
+  if (!MARINESIA_ENABLED) return false;
+  const f = relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length, now });
+  return !f.stale && !f.warming; // usable only after a full tile sweep + a recent poll
+}
+function inItalyBbox(lat, lon) {
+  return Number.isFinite(lat) && Number.isFinite(lon) &&
+    lat >= ITALY_BBOX.lat_min && lat <= ITALY_BBOX.lat_max &&
+    lon >= ITALY_BBOX.long_min && lon <= ITALY_BBOX.long_max;
+}
+// Which feed covers this coordinate right now + whether that feed is fresh. Pure geography.
+function portFeed(lat, lon, now = Date.now()) {
+  if (aisstreamFresh(now)) return { source: 'aisstream', coverageOk: true };
+  if (marinesiaFresh(now) && inItalyBbox(lat, lon)) return { source: 'marinesia', coverageOk: true };
+  // Neither fresh (or non-Italian while only Marinesia runs): name the feed that OWNS this
+  // geography, but coverageOk=false — an honest "we can't currently see this port".
+  return { source: inItalyBbox(lat, lon) ? 'marinesia' : 'aisstream', coverageOk: false };
+}
 const { runExplainers } = require('./delay-explainers.cjs');
 const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
-const { ITALY_TILES, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+const { ITALY_TILES, ITALY_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
@@ -1798,7 +1829,10 @@ function buildFreightVesselList() {
 }
 
 let lastPortSnapshotAt = 0; // snapshot-cadence gate, decoupled from where the series is stored (PG vs memory)
-function samplePortHistory(now = Date.now()) {
+let _sampling = false;
+async function samplePortHistory(now = Date.now()) {
+  if (_sampling) return; // don't overlap if a DB write is slow (the awaited snapshot below)
+  _sampling = true;
   try {
     // Same freshness cutoff as the /ais/ports snapshot (computePortStatus): a contact
     // that stopped reporting while inside a zone is treated as gone, so its exit fires
@@ -1807,13 +1841,17 @@ function samplePortHistory(now = Date.now()) {
     const fresh = buildFreightVesselList().filter(
       (v) => !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_STATUS_DEFAULTS.freshMs,
     );
-    // Feed provenance stamped on every row this tick. Coarse for now — per-region coverage is the
-    // P1 refinement; today coverage is "degraded" only when the Marinesia fallback is warming/stale.
-    const f = feedFreshness();
-    const meta = { source: MARINESIA_ENABLED && f.stale ? 'marinesia' : 'aisstream', coverageOk: !(f.warming || f.stale) };
-    // Geofence membership diff -> enter/exit events (arrivals/departures/dwell).
-    const next = computeMembership(fresh, PORT_GEOFENCES);
-    const events = diffMembership(portHistoryState.membership, next, now, portHistoryState.enterTimes, PORT_GEOFENCES);
+    // Per-tick feed decision (P0.2): aisstream streams the world → when fresh, all ports covered;
+    // when dark, only the Italy-only Marinesia fallback runs → coverage is per-PORT. This scalar is
+    // the events/fallback source (within a tick it's uniform: aisstream, or — if dark — marinesia).
+    const meta = { source: aisstreamFresh(now) ? 'aisstream' : 'marinesia' };
+    // Only diff/emit events for zones whose region is covered THIS tick; freeze the rest so a feed
+    // going dark doesn't fire phantom exits, and dwell keeps accruing across the gap.
+    const coveredGf = PORT_GEOFENCES.filter((gf) => portFeed(gf.geometry.center.lat, gf.geometry.center.lon, now).coverageOk);
+    const nextCovered = computeMembership(fresh, coveredGf);
+    const next = new Map(portHistoryState.membership);       // carry ALL prev forward (freezes uncovered zones)
+    for (const gf of coveredGf) next.set(gf.id, nextCovered.get(gf.id) || new Set());
+    const events = diffMembership(portHistoryState.membership, next, now, portHistoryState.enterTimes, coveredGf);
     portHistoryState.membership = next;
     if (events.length) {
       // Postgres owns the durable series; the in-memory array is only a no-DB fallback.
@@ -1825,21 +1863,25 @@ function samplePortHistory(now = Date.now()) {
     if (now - lastPortSnapshotAt >= PORT_SNAPSHOT_MS) {
       const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
       smoothPortStatus(ports, portSnapshotHistory);
-      // Bank every DYNAMIC port field (portId, atPort smoothed + atPortRaw, atAnchor/atBerth,
-      // inbound + inboundEta, congestion); new computePortStatus fields flow in automatically —
-      // capture everything for the backtest. writeSnapshot reads dynamic fields by name and ignores
-      // the static ones, so the DB path takes `ports` directly; only the fallback trims them.
+      // Stamp per-port coverage/source from feed GEOGRAPHY (P0.2), not vessel counts — survives into
+      // ...dyn on the fallback path. writeSnapshot reads these (+ dynamic fields) by name.
+      for (const p of ports) { const fp = portFeed(p.lat, p.lon, now); p.source = fp.source; p.coverageOk = fp.coverageOk; }
       if (db.enabled) {
-        void db.writeSnapshot(now, ports, meta);
+        // Advance the cadence ONLY on a confirmed write — a transient DB failure leaves the gate open
+        // so the next tick RETRIES, rather than silently dropping the 5-min sample (a baseline gap).
+        const wrote = await db.writeSnapshot(now, ports, meta);
+        if (wrote) { lastPortSnapshotAt = now; portHistoryState._persistVersion++; }
       } else {
         const snapshot = { ts: now, ports: ports.map(({ name, lat, lon, region, ...dyn }) => dyn) };
         portHistoryState.snapshots = pushCapped(portHistoryState.snapshots, [snapshot], PORT_HISTORY_MAX_SNAPSHOTS);
+        lastPortSnapshotAt = now;
+        portHistoryState._persistVersion++;
       }
-      lastPortSnapshotAt = now;
-      portHistoryState._persistVersion++;
     }
   } catch (e) {
     console.warn('[Relay] port-history sample error:', e.message);
+  } finally {
+    _sampling = false;
   }
 }
 
@@ -4947,6 +4989,7 @@ function connectUpstream() {
 
   socket.on('message', (data) => {
     if (upstreamSocket !== socket) return;
+    lastAisFrameAt = Date.now(); // global-liveness stamp (before the queue cap, so a dropped frame still counts)
     if (!gotData) { gotData = true; clearKeyProbe(); } // healthy key — cancel rotation
 
     const raw = data instanceof Buffer ? data : Buffer.from(data);
