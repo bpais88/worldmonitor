@@ -22,6 +22,15 @@ const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWrit
 function ok(kind, n) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = true; if (kind) stats[kind] += n; }
 function fail(e) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = false; stats.lastError = String(e && e.message || e).slice(0, 200); }
 
+// The neon HTTP driver has no built-in timeout; bound each write so a hung endpoint can't stall the
+// sampler's in-flight guard (or leak a hung fetch on the fire-and-forget event path).
+const WRITE_TIMEOUT_MS = 10_000;
+function withTimeout(promise, ms = WRITE_TIMEOUT_MS) {
+  let t;
+  const timeout = new Promise((_, rej) => { t = setTimeout(() => rej(new Error('pg write timeout')), ms); t.unref?.(); });
+  return Promise.race([promise, timeout]).finally(() => clearTimeout(t)); // don't leave the timer pending on success
+}
+
 /** Upsert the commercial ports dimension (idempotent) with tz derived per country. Boot-only. */
 async function syncPorts(portsById) {
   if (!enabled) return;
@@ -43,45 +52,53 @@ async function syncPorts(portsById) {
   } catch (e) { fail(e); throw e; }
 }
 
-/** Batch-insert one congestion snapshot (all ports for a tick). `rows` = the per-port entries. */
+/**
+ * Batch-insert one congestion snapshot (all ports for a tick). Returns true on success, false on
+ * failure — the sampler advances its 5-min cadence ONLY on true, so a transient DB error retries
+ * next tick instead of dropping the sample (a permanent baseline gap). `rows` = per-port entries;
+ * each may carry its own source/coverageOk (P0.2), falling back to meta.* for callers that don't.
+ */
 async function writeSnapshot(tsMs, rows, meta = {}) {
-  if (!enabled || !rows || !rows.length) return;
+  if (!enabled || !rows || !rows.length) return true; // nothing to write = success (don't block the cadence)
   const ts = new Date(tsMs).toISOString();
   const eta = (h) => rows.map((r) => (r.inboundEta && Number.isFinite(r.inboundEta[h]) ? r.inboundEta[h] : null));
   const col = (f) => rows.map((r) => (Number.isFinite(r[f]) ? r[f] : null));
+  const src = rows.map((r) => r.source || meta.source || 'relay');
+  const cov = rows.map((r) => r.coverageOk !== false); // per-row coverage (P0.2 stamps it); missing → true
   try {
-    await sql`
+    await withTimeout(sql`
       INSERT INTO port_snapshots
         (ts, port_id, at_port, at_port_raw, at_berth, at_anchor, inbound, eta_h6, eta_h12, eta_h24, eta_h48, feed_label, source, coverage_ok)
       SELECT ${ts}::timestamptz, u.port_id, u.at_port, u.at_port_raw, u.at_berth, u.at_anchor, u.inbound,
-             u.eta_h6, u.eta_h12, u.eta_h24, u.eta_h48, u.feed_label, ${meta.source || 'relay'}, ${meta.coverageOk !== false}
+             u.eta_h6, u.eta_h12, u.eta_h24, u.eta_h48, u.feed_label, u.source, u.coverage_ok
       FROM unnest(
         ${rows.map((r) => r.portId)}::text[], ${col('atPort')}::int[], ${col('atPortRaw')}::int[],
         ${col('atBerth')}::int[], ${col('atAnchor')}::int[], ${col('inbound')}::int[],
         ${eta('h6')}::int[], ${eta('h12')}::int[], ${eta('h24')}::int[], ${eta('h48')}::int[],
-        ${rows.map((r) => r.congestion || null)}::text[]
-      ) AS u(port_id, at_port, at_port_raw, at_berth, at_anchor, inbound, eta_h6, eta_h12, eta_h24, eta_h48, feed_label)
+        ${rows.map((r) => r.congestion || null)}::text[], ${src}::text[], ${cov}::bool[]
+      ) AS u(port_id, at_port, at_port_raw, at_berth, at_anchor, inbound, eta_h6, eta_h12, eta_h24, eta_h48, feed_label, source, coverage_ok)
       ON CONFLICT (port_id, ts) DO UPDATE SET
         at_port=EXCLUDED.at_port, at_port_raw=EXCLUDED.at_port_raw, at_berth=EXCLUDED.at_berth,
         at_anchor=EXCLUDED.at_anchor, inbound=EXCLUDED.inbound, eta_h6=EXCLUDED.eta_h6,
         eta_h12=EXCLUDED.eta_h12, eta_h24=EXCLUDED.eta_h24, eta_h48=EXCLUDED.eta_h48,
-        feed_label=EXCLUDED.feed_label, source=EXCLUDED.source, coverage_ok=EXCLUDED.coverage_ok`;
+        feed_label=EXCLUDED.feed_label, source=EXCLUDED.source, coverage_ok=EXCLUDED.coverage_ok`);
     ok('snapshotRows', rows.length);
-  } catch (e) { fail(e); }
+    return true;
+  } catch (e) { fail(e); return false; }
 }
 
 /** Batch-insert geofence enter/exit events (dwell_min on exit, nullable). */
 async function writeEvents(events, meta = {}) {
   if (!enabled || !events || !events.length) return;
   try {
-    await sql`
+    await withTimeout(sql`
       INSERT INTO port_events (ts, port_id, mmsi, kind, dwell_min, source)
       SELECT to_timestamp(u.ts / 1000.0), u.port_id, u.mmsi, u.kind, u.dwell_min, ${meta.source || 'relay'}
       FROM unnest(
         ${events.map((e) => e.ts)}::bigint[], ${events.map((e) => e.portId)}::text[],
         ${events.map((e) => String(e.mmsi))}::text[], ${events.map((e) => e.kind)}::text[],
         ${events.map((e) => (Number.isFinite(e.dwellMin) ? e.dwellMin : null))}::real[]
-      ) AS u(ts, port_id, mmsi, kind, dwell_min)`;
+      ) AS u(ts, port_id, mmsi, kind, dwell_min)`);
     ok('eventRows', events.length);
   } catch (e) { fail(e); }
 }
@@ -89,12 +106,14 @@ async function writeEvents(events, meta = {}) {
 /**
  * Serve /ais/port-history from Postgres, reshaped to the existing client contract
  * ({ snapshots:[{ts,ports:[...]}], events:[{ts,portId,mmsi,kind,dwellMin}], counts }).
- * `sinceMs` defaults to 24h ago. `limitSnap` = max SNAPSHOTS (distinct ticks, all ports each) —
- * NOT rows, so it can't slice a tick in half; `limitEvt` = max event rows.
+ * No `sinceMs` → defaults to the full ~14-day retention window (matches limitSnap's cap), preserving
+ * the old endpoint's "return the accumulated history" contract for baseline/backtest consumers.
+ * `limitSnap` = max SNAPSHOTS (distinct ticks, all ports each) — NOT rows, so it can't slice a tick
+ * in half; `limitEvt` = max event rows.
  */
 async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, ports } = {}) {
   if (!enabled) return { snapshots: [], events: [], snapshotCount: 0, eventCount: 0, generatedAt: Date.now(), db: false };
-  const since = new Date(Number.isFinite(sinceMs) ? sinceMs : Date.now() - 24 * 3600 * 1000).toISOString();
+  const since = new Date(Number.isFinite(sinceMs) ? sinceMs : Date.now() - 14 * 24 * 3600 * 1000).toISOString();
   // null → no port filter; an array → filter. Null-safe in one query (no nested-fragment composition,
   // which the neon serverless template doesn't support): `pf IS NULL OR port_id = ANY(pf)`.
   const pf = Array.isArray(ports) && ports.length ? ports : null;

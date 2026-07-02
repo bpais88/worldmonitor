@@ -46,6 +46,34 @@ function marinesiaTypeToShipType(type) {
   }
 }
 
+// Marinesia reports `status` as a human AIS navigational-status STRING ('At anchor', 'Moored',
+// 'Under way using engine', …); the rest of the system stores navStatus as the numeric ITU-R
+// M.1371 code (aisstream passes pos.NavigationalStatus). Map to that numeric domain so
+// port-status's atAnchor(=1)/atBerth(=5) split fires — without this, EVERY Marinesia-sourced
+// vessel gets navStatus=undefined and both buckets read 0. Unknown → undefined (never a wrong
+// code: a mislabeled vessel falls back to the speed test, not miscounted as anchored/berthed).
+function marinesiaStatusToNavStatus(status) {
+  if (status == null || status === '') return undefined;
+  const n = Number(status); // passthrough: already a numeric AIS code (or its numeric string)
+  if (Number.isInteger(n) && n >= 0 && n <= 15 && String(status).trim() !== '') return n;
+  switch (String(status).trim().toLowerCase()) {
+    case 'under way using engine': case 'underway using engine': return 0;
+    case 'at anchor': case 'anchored': case 'anchor': return 1;
+    case 'not under command': return 2;
+    case 'restricted manoeuvrability': case 'restricted maneuverability': case 'restricted manoeuverability': return 3;
+    case 'constrained by her draught': case 'constrained by draught': case 'constrained by her draft': case 'constrained by draft': return 4;
+    case 'moored': case 'berthed': return 5;
+    case 'aground': return 6;
+    case 'engaged in fishing': case 'fishing': return 7;
+    case 'under way sailing': case 'underway sailing': case 'sailing': return 8;
+    case 'power-driven vessel towing astern': case 'towing astern': return 11;
+    case 'power-driven vessel pushing ahead or towing alongside': case 'pushing ahead or towing alongside': return 12;
+    case 'ais-sart is active': case 'ais-sart': case 'sart': case 'mob': case 'epirb': return 14;
+    case 'undefined': case 'not defined': case 'default': return 15;
+    default: return undefined; // unknown label → let isStopped fall back to speed
+  }
+}
+
 const numOrUndef = (x) => {
   if (x == null) return undefined;
   const n = Number(x);
@@ -69,7 +97,7 @@ function normalizeMarinesiaVessel(raw, now = Date.now()) {
     speed: numOrUndef(raw.sog),
     course: numOrUndef(raw.cog),
     heading: numOrUndef(raw.hdt),
-    navStatus: numOrUndef(raw.status),
+    navStatus: marinesiaStatusToNavStatus(raw.status),
     destination: String(raw.dest || '').trim(),
     etaAis: raw.eta || '',
     draught: Number.isFinite(raw.draught) && raw.draught > 0 ? raw.draught : undefined,
@@ -172,5 +200,5 @@ async function fetchTile(tile, key, fetchImpl = fetch) {
 
 module.exports = {
   AREA_URL, VESSEL_CAP, ITALY_BBOX, ITALY_TILES,
-  marinesiaTypeToShipType, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile,
+  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile,
 };

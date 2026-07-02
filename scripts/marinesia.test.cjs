@@ -4,8 +4,22 @@ const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
 const {
-  marinesiaTypeToShipType, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile, ITALY_TILES,
+  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile, ITALY_TILES,
 } = require('./marinesia.cjs');
+
+test('marinesiaStatusToNavStatus maps AIS status labels to numeric codes', () => {
+  // The bug: Marinesia sends status as strings, so the port-status atAnchor(=1)/atBerth(=5) split
+  // read 0 for all fallback vessels. These must map to the numeric domain aisstream uses.
+  assert.equal(marinesiaStatusToNavStatus('At anchor'), 1);
+  assert.equal(marinesiaStatusToNavStatus('Moored'), 5);
+  assert.equal(marinesiaStatusToNavStatus('Under way using engine'), 0);
+  assert.equal(marinesiaStatusToNavStatus('MOORED'), 5); // case-insensitive
+  assert.equal(marinesiaStatusToNavStatus(1), 1); // numeric passthrough (mixed payloads)
+  assert.equal(marinesiaStatusToNavStatus(15), 15);
+  assert.equal(marinesiaStatusToNavStatus('nonsense'), undefined); // unknown → undefined (never a wrong code)
+  assert.equal(marinesiaStatusToNavStatus(''), undefined);
+  assert.equal(marinesiaStatusToNavStatus(null), undefined);
+});
 
 test('marinesiaTypeToShipType maps strings to the right AIS band', () => {
   assert.equal(marinesiaTypeToShipType('Cargo'), 70);
