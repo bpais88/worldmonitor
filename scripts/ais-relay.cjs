@@ -2409,21 +2409,24 @@ async function flushTripPoints() {
 // status-guarded + idempotent in db.cjs, so re-runs are safe.
 async function tripMaintenance() {
   if (!TRIPS_ENABLED || !db.enabled) return;
-  const [abandoned, pruned] = await Promise.all([   // independent tables/filters — run concurrently
+  const [abandonedIds, pruned] = await Promise.all([   // independent tables/filters — run concurrently
     db.abandonStaleTrips(TRIP_MAX_OPEN_AGE_H),
     db.pruneTripPoints(TRIP_POINTS_RETENTION_DAYS),
   ]);
-  // Reconcile in-memory state with the DB sweep. abandonStaleTrips just flipped over-age OPEN trips to
-  // 'abandoned' in Postgres, but a vessel whose voyage anchor is still live keeps its tripByMmsi entry
-  // marked 'open' — so decideTrip would keep capturing points against the now-abandoned trip id and
-  // never open a replacement. Mark those entries 'abandoned' by the same age rule (decideTrip then stops
-  // decorating them; the entry clears on the next re-route / anchor-loss). Run every sweep so any drift
-  // self-heals. openedAt = voyage.startTs, the same value abandonStaleTrips compares in SQL.
-  const cutoff = Date.now() - TRIP_MAX_OPEN_AGE_H * 60 * 60_000;
+  // Reconcile in-memory state with EXACTLY the trips the DB sweep abandoned — by id, not a recomputed
+  // age cutoff. A vessel whose voyage anchor is still live keeps its tripByMmsi entry 'open', so without
+  // this decideTrip would keep capturing points against the now-abandoned trip and never open a
+  // replacement. Reconciling by id (vs a fresh Date.now() cutoff) avoids the race where a slightly later
+  // cutoff marks a trip the SQL now() left open → which would then mis-bind a re-route onto the still-open
+  // DB row via the unique-open-trip ON CONFLICT. Marked entries clear on the next re-route / anchor-loss.
   let reconciled = 0;
-  for (const t of tripByMmsi.values()) {
-    if (t.status === 'open' && t.openedAt < cutoff) { t.status = 'abandoned'; reconciled++; }
+  if (abandonedIds.length) {
+    const ab = new Set(abandonedIds);
+    for (const t of tripByMmsi.values()) {
+      if (t.status === 'open' && t.tripId != null && ab.has(t.tripId)) { t.status = 'abandoned'; reconciled++; }
+    }
   }
+  const abandoned = abandonedIds.length;
   if (abandoned || pruned || reconciled) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale (${reconciled} in-memory), pruned ${pruned} old points`);
 }
 
