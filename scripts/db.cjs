@@ -157,10 +157,8 @@ async function writeEvents(events, meta = {}) {
 // status-guarded so any replay/interleave/restart is a 0-row no-op. Writes are fire-and-forget from
 // the relay (never awaited in the geofence tick). Requires migration 003's uq_trips_one_open.
 // ---------------------------------------------------------------------------
-
-// epoch-ms → timestamptz, NULL-safe (NULL::float8/1000 → NULL → to_timestamp NULL). Values are
-// parameterized by the neon template, so ms is passed as a param and converted in SQL.
-// (helper is inlined per-call as to_timestamp(${x}::float8/1000.0))
+// epoch-ms columns are written as to_timestamp(${x}::float8 / 1000.0) — NULL-safe (a NULL param
+// flows through as NULL) — since the neon template parameterizes values, not raw SQL fragments.
 
 /**
  * Open a trip (idempotent). Returns the new bigserial id, or the incumbent open trip's id on
@@ -241,7 +239,7 @@ async function appendTripPoints(rows) {
  * LIMIT 5000 is a leak alarm (the caller WARNs when hit); the daily sweep keeps the set bounded.
  */
 async function loadOpenTrips() {
-  if (!enabled) return new Map();
+  if (!enabled) return { trips: new Map(), capped: false };
   const rows = await sql`
     SELECT id, mmsi, dest_port_id, origin_port_id, stalled, status,
            extract(epoch from opened_at) * 1000 AS opened_at,
@@ -320,13 +318,14 @@ async function backfillTripOrigin(exits) {
   const port = exits.map((e) => e.portId);
   const ts = exits.map((e) => new Date(e.ts).toISOString());
   try {
-    await withTimeout(sql`
+    const rows = await withTimeout(sql`
       UPDATE trips t SET origin_port_id = COALESCE(t.origin_port_id, u.port_id), departed_at = u.ts, updated_at = now()
       FROM unnest(${mmsi}::text[], ${port}::text[], ${ts}::timestamptz[]) AS u(mmsi, port_id, ts)
       WHERE t.mmsi = u.mmsi AND t.status = 'open' AND t.departed_at IS NULL
         AND t.dest_port_id <> u.port_id
-        AND u.ts BETWEEN t.opened_at - interval '30 min' AND t.opened_at + interval '6 hours'`);
-    return 1;
+        AND u.ts BETWEEN t.opened_at - interval '30 min' AND t.opened_at + interval '6 hours'
+      RETURNING t.id`);
+    return Array.isArray(rows) ? rows.length : 0;
   } catch (e) { tripFail(e); return 0; }
 }
 
@@ -337,12 +336,13 @@ async function backfillDestDwell(exits) {
   const port = exits.map((e) => e.portId);
   const dwell = exits.map((e) => (Number.isFinite(e.dwellMin) ? e.dwellMin : null));
   try {
-    await withTimeout(sql`
+    const rows = await withTimeout(sql`
       UPDATE trips t SET dest_dwell_min = u.dwell, updated_at = now()
       FROM unnest(${mmsi}::text[], ${port}::text[], ${dwell}::real[]) AS u(mmsi, port_id, dwell)
       WHERE t.mmsi = u.mmsi AND t.dest_port_id = u.port_id AND t.status = 'arrived'
-        AND t.dest_dwell_min IS NULL AND u.dwell IS NOT NULL`);
-    return 1;
+        AND t.dest_dwell_min IS NULL AND u.dwell IS NOT NULL
+      RETURNING t.id`);
+    return Array.isArray(rows) ? rows.length : 0;
   } catch (e) { tripFail(e); return 0; }
 }
 
@@ -380,10 +380,11 @@ async function finalizeArrivedGeo() {
 async function pruneTripPoints(days = 90) {
   if (!enabled) return 0;
   try {
-    await withTimeout(sql`
+    const rows = await withTimeout(sql`
       DELETE FROM trip_points tp USING trips t
-      WHERE tp.trip_id = t.id AND t.status <> 'open' AND t.updated_at < now() - make_interval(days => ${days})`, 30_000);
-    return 1;
+      WHERE tp.trip_id = t.id AND t.status <> 'open' AND t.updated_at < now() - make_interval(days => ${days})
+      RETURNING tp.trip_id`, 30_000);
+    return Array.isArray(rows) ? rows.length : 0;
   } catch (e) { tripFail(e); return 0; }
 }
 
