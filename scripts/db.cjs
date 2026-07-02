@@ -18,7 +18,7 @@ const sql = enabled ? neon(DATABASE_URL) : null;
 const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid', NL: 'Europe/Amsterdam' };
 
 // In-memory counters read synchronously by /health (never do an async PG call in the health path).
-const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null };
+const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null, baselineBuckets: 0, baselineRefreshedAt: null };
 function ok(kind, n) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = true; if (kind) stats[kind] += n; }
 function fail(e) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = false; stats.lastError = String(e && e.message || e).slice(0, 200); }
 
@@ -148,4 +148,68 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
   return { snapshots, events, snapshotCount: snapshots.length, eventCount: events.length, generatedAt: Date.now(), db: true };
 }
 
-module.exports = { enabled, syncPorts, writeSnapshot, writeEvents, queryPortHistory, stats, COUNTRY_TZ };
+// --- P0.3: relative congestion baseline ---------------------------------------------------------
+// Congestion "for THIS port, right now" vs its own normal for the matching LOCAL day-of-week × hour
+// (congestion follows local working hours). Replaces the meaningless absolute atPort≥8 threshold
+// (every mega-port always "congested"). Built on at_berth (the clean occupancy signal), and only
+// from coverage_ok rows (P0.2) so dark/degraded windows never poison the baseline.
+const BASELINE_MIN_N = 6; // min samples in a dow×hour bucket before the relative label is trusted
+
+/** Recompute all per-port × local-dow × local-hour at_berth percentiles. Returns bucket count. */
+async function refreshBaselines() {
+  if (!enabled) return 0;
+  try {
+    const res = await withTimeout(sql`
+      INSERT INTO port_baselines (port_id, dow, hour, p50, p75, p90, mean, stddev, n, updated_at)
+      SELECT s.port_id,
+             EXTRACT(dow  FROM s.ts AT TIME ZONE p.tz)::smallint,
+             EXTRACT(hour FROM s.ts AT TIME ZONE p.tz)::smallint,
+             percentile_cont(0.5)  WITHIN GROUP (ORDER BY s.at_berth),
+             percentile_cont(0.75) WITHIN GROUP (ORDER BY s.at_berth),
+             percentile_cont(0.90) WITHIN GROUP (ORDER BY s.at_berth),
+             avg(s.at_berth), stddev_pop(s.at_berth), count(*), now()
+      FROM port_snapshots s JOIN ports p USING (port_id)
+      WHERE s.coverage_ok AND s.at_berth IS NOT NULL AND s.ts > now() - interval '8 weeks'
+      GROUP BY 1, 2, 3
+      ON CONFLICT (port_id, dow, hour) DO UPDATE SET
+        p50=EXCLUDED.p50, p75=EXCLUDED.p75, p90=EXCLUDED.p90,
+        mean=EXCLUDED.mean, stddev=EXCLUDED.stddev, n=EXCLUDED.n, updated_at=EXCLUDED.updated_at
+      RETURNING 1`, 30_000);
+    const n = Array.isArray(res) ? res.length : 0;
+    stats.baselineBuckets = n;
+    stats.baselineRefreshedAt = Date.now();
+    return n;
+  } catch (e) { fail(e); return 0; }
+}
+
+/** Load baselines into memory: Map(portId → Map(`${dow}:${hour}` → {p75,p90,n})). Boot + post-refresh. */
+async function loadBaselines() {
+  if (!enabled) return new Map();
+  const rows = await sql`SELECT port_id, dow, hour, p75, p90, n FROM port_baselines`;
+  const m = new Map();
+  for (const r of rows) {
+    if (!m.has(r.port_id)) m.set(r.port_id, new Map());
+    m.get(r.port_id).set(`${r.dow}:${r.hour}`, { p75: Number(r.p75), p90: Number(r.p90), n: Number(r.n) });
+  }
+  return m;
+}
+
+/**
+ * Relative congestion for a port RIGHT NOW: current at_berth vs its baseline for the matching
+ * local dow×hour. Returns null ("unknown") when the bucket is too thin to trust — so it
+ * self-activates as the ~2-week baseline fills. Pure: caller passes the in-memory baselines +
+ * the port's LOCAL dow/hour (computed from its tz).
+ */
+function relativeCongestion(baselines, portId, atBerth, dow, hour, minN = BASELINE_MIN_N) {
+  const b = baselines && baselines.get && baselines.get(portId) && baselines.get(portId).get(`${dow}:${hour}`);
+  if (!b || b.n < minN || !Number.isFinite(atBerth)) return null; // unknown until enough history
+  if (atBerth > b.p90) return 'congested';
+  if (atBerth > b.p75) return 'busy';
+  return 'clear';
+}
+
+module.exports = {
+  enabled, syncPorts, writeSnapshot, writeEvents, queryPortHistory,
+  refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_N,
+  stats, COUNTRY_TZ,
+};

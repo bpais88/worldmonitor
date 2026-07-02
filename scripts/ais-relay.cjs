@@ -1830,6 +1830,20 @@ function buildFreightVesselList() {
   return out;
 }
 
+// P0.3 relative-congestion baseline: loaded on boot + refreshed nightly. congestionRel on /ais/ports
+// self-activates per port as its local dow×hour bucket accrues ≥ db.BASELINE_MIN_N samples (null until).
+let portBaselines = new Map();
+const PORT_TZ = new Map(ITALY_PORTS_BY_ID.map((p) => [p.id, db.COUNTRY_TZ[p.country || 'IT'] || 'Europe/Rome']));
+const LOCAL_DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+// A port's LOCAL day-of-week (0=Sun) + hour — congestion follows local working hours, and the
+// baseline is bucketed in the port's own tz, so the lookup must be too.
+function portLocalDowHour(now, tz) {
+  const parts = new Intl.DateTimeFormat('en-US', { timeZone: tz || 'Europe/Rome', weekday: 'short', hour: '2-digit', hour12: false }).formatToParts(new Date(now));
+  const wd = parts.find((p) => p.type === 'weekday')?.value;
+  const hr = Number(parts.find((p) => p.type === 'hour')?.value);
+  return { dow: LOCAL_DOW[wd] ?? 0, hour: (Number.isFinite(hr) ? hr : 0) % 24 };
+}
+
 let lastPortSnapshotAt = 0; // snapshot-cadence gate, decoupled from where the series is stored (PG vs memory)
 let _sampling = false;
 async function samplePortHistory(now = Date.now()) {
@@ -1962,6 +1976,19 @@ async function startPortHistoryLoop() {
   setInterval(() => samplePortHistory(), GEOFENCE_TICK_MS).unref?.();
   setInterval(() => { void persistPortHistory(); }, PORT_PERSIST_MS).unref?.();
   console.log(`[Relay] port-history + geofence sampler on (tick ${GEOFENCE_TICK_MS / 1000}s, snapshot ${PORT_SNAPSHOT_MS / 60000}min, persist ${PORT_PERSIST_MS / 60000}min, ${PORT_GEOFENCES.length} port zones, sink ${db.enabled ? 'postgres' : 'memory+redis'})`);
+  // P0.3: refresh the relative-congestion baseline on boot, then daily. Cheap when data is thin
+  // (buckets are `unknown` until ≥MIN_N samples), and it keeps the baseline current as data accrues.
+  if (db.enabled) {
+    const refreshBaselines = async () => {
+      try {
+        const n = await db.refreshBaselines();
+        portBaselines = await db.loadBaselines();
+        console.log(`[Relay] congestion baseline refreshed (${n} port×dow×hour buckets)`);
+      } catch (e) { console.warn('[Relay] baseline refresh failed:', e.message); }
+    };
+    void refreshBaselines();
+    setInterval(() => { void refreshBaselines(); }, 24 * 60 * 60_000).unref?.();
+  }
 }
 
 // --- Marinesia polled provider (REST AIS source) ---------------------------
@@ -4310,6 +4337,8 @@ const handleRequest = async (req, res) => {
         lastWriteOk: db.stats.lastWriteOk,
         snapshotRows: db.stats.snapshotRows,
         eventRows: db.stats.eventRows,
+        baselineBuckets: db.stats.baselineBuckets,
+        baselineRefreshedAt: db.stats.baselineRefreshedAt,
         lastError: db.stats.lastError,
       },
     }));
@@ -4413,6 +4442,12 @@ const handleRequest = async (req, res) => {
     );
     // Median-smooth atPort over recent calls + recompute congestion, then re-sort.
     smoothPortStatus(ports, portStatusHistory);
+    // P0.3: additive relative-congestion label — this port's at_berth vs its OWN local dow×hour
+    // baseline (null/"unknown" until the baseline fills; leaves the absolute `congestion` untouched).
+    for (const p of ports) {
+      const { dow, hour } = portLocalDowHour(now, PORT_TZ.get(p.portId));
+      p.congestionRel = db.relativeCongestion(portBaselines, p.portId, p.atBerth, dow, hour);
+    }
     const rank = { congested: 2, busy: 1, clear: 0 };
     ports.sort((a, b) => (rank[b.congestion] - rank[a.congestion]) || (b.atPort - a.atPort) || (b.inbound - a.inbound));
     return sendCompressed(req, res, 200, {
