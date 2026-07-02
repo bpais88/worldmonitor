@@ -12,13 +12,13 @@ import { EUROPE_BBOX, type Bbox } from '@/config/italy-ferries';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
-import { fetchTripByMmsi, type TripDetail, type TripPoint } from '@/services/logistics/trip-detail';
+import { fetchTripByMmsi, type TripDetail } from '@/services/logistics/trip-detail';
+import { VoyageReplay } from './VoyageReplay';
 
 // Same basemap as DeckGLMap (keyless Carto vector style).
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const SOURCE_ID = 'ferries';
 const GEOFENCE_SOURCE_ID = 'geofences';
-const TRACK_SOURCE_ID = 'trip-track'; // the clicked vessel's voyage track (Phase C get_trip)
 const GEOFENCE_LAYERS = ['geofence-fill', 'geofence-line'];
 const ARROW_ICON = 'ferry-arrow';
 
@@ -122,10 +122,6 @@ function voyageHtml(d: TripDetail): string {
   </div>`;
 }
 
-const EMPTY_TRACK: GeoJSON.FeatureCollection = { type: 'FeatureCollection', features: [] };
-function trackToLine(track: TripPoint[]): GeoJSON.FeatureCollection {
-  return { type: 'FeatureCollection', features: [{ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: track.map((p) => [p.lon, p.lat]) } }] };
-}
 
 export class ItalyFerryMap {
   private map: maplibregl.Map;
@@ -134,6 +130,7 @@ export class ItalyFerryMap {
   private pendingGeofences: Geofence[] | null = null;
   private zonesVisible = false;
   private popup: maplibregl.Popup;
+  private replay: VoyageReplay | null = null;   // voyage replay overlay (route + trail + waypoints + playhead)
   private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
 
   constructor(container: HTMLElement) {
@@ -149,7 +146,7 @@ export class ItalyFerryMap {
       pitchWithRotate: false,
     });
     this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 12 });
-    this.popup.on('close', () => { this.selectedMmsi = null; this.clearTrack(); });
+    this.popup.on('close', () => { this.selectedMmsi = null; this.replay?.clear(); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
   }
@@ -174,15 +171,8 @@ export class ItalyFerryMap {
       paint: { 'line-color': ['get', 'color'], 'line-width': 1.2, 'line-opacity': 0.7 },
     });
 
-    // Clicked vessel's voyage track (Phase C). Added before the vessels so the line renders UNDER them.
-    this.map.addSource(TRACK_SOURCE_ID, { type: 'geojson', data: EMPTY_TRACK });
-    this.map.addLayer({
-      id: 'trip-track',
-      type: 'line',
-      source: TRACK_SOURCE_ID,
-      layout: { 'line-cap': 'round', 'line-join': 'round' },
-      paint: { 'line-color': '#4da3ff', 'line-width': 2.5, 'line-opacity': 0.85 },
-    });
+    // Voyage replay (Phase C): its route/trail/waypoints/playhead render UNDER the vessels (added first).
+    this.replay = new VoyageReplay(this.map);
 
     this.map.addSource(SOURCE_ID, { type: 'geojson', data: ferriesToGeoJSON([]) });
 
@@ -287,7 +277,7 @@ export class ItalyFerryMap {
   private async loadVoyage(props: FerryFeatureProps): Promise<void> {
     const mmsi = props.mmsi;
     this.selectedMmsi = mmsi;
-    this.clearTrack();
+    this.replay?.clear();
     let detail: TripDetail;
     try {
       detail = await fetchTripByMmsi(mmsi);
@@ -295,18 +285,8 @@ export class ItalyFerryMap {
       return; // relay/proxy hiccup — the vessel popup still stands
     }
     if (this.selectedMmsi !== mmsi || !detail.found) return; // superseded by another click, or no trip
-    if (detail.track && detail.track.length) this.setTrack(detail.track);
+    if (detail.track && detail.track.length) this.replay?.load(detail.track); // replay overlay + controls
     this.popup.setHTML(popupHtml(props) + voyageHtml(detail));
-  }
-
-  private setTrack(track: TripPoint[]): void {
-    const src = this.map.getSource(TRACK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-    src?.setData(trackToLine(track));
-  }
-
-  private clearTrack(): void {
-    const src = this.map.getSource(TRACK_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
-    src?.setData(EMPTY_TRACK);
   }
 
   /** Build an upward-pointing arrow as an SDF icon so it can be tinted per status. */
