@@ -2413,7 +2413,18 @@ async function tripMaintenance() {
     db.abandonStaleTrips(TRIP_MAX_OPEN_AGE_H),
     db.pruneTripPoints(TRIP_POINTS_RETENTION_DAYS),
   ]);
-  if (abandoned || pruned) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale, pruned ${pruned} old points`);
+  // Reconcile in-memory state with the DB sweep. abandonStaleTrips just flipped over-age OPEN trips to
+  // 'abandoned' in Postgres, but a vessel whose voyage anchor is still live keeps its tripByMmsi entry
+  // marked 'open' — so decideTrip would keep capturing points against the now-abandoned trip id and
+  // never open a replacement. Mark those entries 'abandoned' by the same age rule (decideTrip then stops
+  // decorating them; the entry clears on the next re-route / anchor-loss). Run every sweep so any drift
+  // self-heals. openedAt = voyage.startTs, the same value abandonStaleTrips compares in SQL.
+  const cutoff = Date.now() - TRIP_MAX_OPEN_AGE_H * 60 * 60_000;
+  let reconciled = 0;
+  for (const t of tripByMmsi.values()) {
+    if (t.status === 'open' && t.openedAt < cutoff) { t.status = 'abandoned'; reconciled++; }
+  }
+  if (abandoned || pruned || reconciled) console.log(`[Relay] trips maintenance: abandoned ${abandoned} stale (${reconciled} in-memory), pruned ${pruned} old points`);
 }
 
 // Build the /health `trips` block (sync — no I/O). Mixes the db.cjs writer counters with the relay's

@@ -139,6 +139,32 @@ test('DEFAULTS are exposed and sane', () => {
   assert.strictEqual(DEFAULTS.destStableTicks, 2);
 });
 
+// --- in-memory 'abandoned' entries (the stale-sweep reconciliation, tripMaintenance) --------------
+// tripMaintenance marks over-age open entries 'abandoned' in memory after abandonStaleTrips does so in
+// the DB. decideTrip must then stop decorating them and not reopen the same leg — only re-route/anchor
+// loss clears them. These lock that contract.
+
+const abandonedTrip = (destPortId) => ({ tripId: 7, destPortId, openedAt: T0, status: 'abandoned', lastPointTs: 0, stalledMarked: true, etaPatched: true, pendingDest: null, pendingTicks: 0 });
+
+test('an abandoned in-memory entry captures nothing and does not reopen the same leg', () => {
+  const r = decideTrip(abandonedTrip('ancona'), voyage('ancona', T0), { now: T0 + 60 * MIN, fresh: true, speedStalled: true, etaSlipMin: 40 });
+  assert.deepStrictEqual(r.actions, []);            // no capturePoint / markStalled / bumpSlip
+  assert.strictEqual(r.nextState.status, 'abandoned'); // stays abandoned, no new open
+});
+
+test('an abandoned entry with no voyage clears without re-abandoning', () => {
+  const r = decideTrip(abandonedTrip('ancona'), null, { now: T0 + 60 * MIN });
+  assert.deepStrictEqual(r.actions, []);            // already abandoned in DB — no duplicate abandon
+  assert.strictEqual(r.nextState, null);            // entry cleared on anchor loss
+});
+
+test('an abandoned entry that re-routes opens a fresh leg (and does not re-abandon the old)', () => {
+  const r = decideTrip(abandonedTrip('ancona'), voyage('genova', T0 + 200), { now: T0 + 200, fresh: true, opts: { destStableTicks: 1 } });
+  assert.deepStrictEqual(types(r.actions), ['open']);   // just open the new leg; no 'abandon' for the terminal old one
+  assert.strictEqual(r.actions[0].destPortId, 'genova');
+  assert.strictEqual(r.nextState.status, 'open');
+});
+
 // --- planGeofenceActions (CLOSE side) --------------------------------------
 
 const openTrip = (destPortId) => ({ tripId: 1, destPortId, openedAt: T0, status: 'open', lastPointTs: 0, stalledMarked: false, etaPatched: true, pendingDest: null, pendingTicks: 0 });
