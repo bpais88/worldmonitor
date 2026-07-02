@@ -21,7 +21,7 @@ const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid'
 const tzForCountry = (country) => COUNTRY_TZ[country || 'IT'] || 'Europe/Rome';
 
 // In-memory counters read synchronously by /health (never do an async PG call in the health path).
-const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null, baselineBuckets: 0, baselineRefreshedAt: null };
+const stats = { enabled, portsSynced: 0, snapshotRows: 0, eventRows: 0, lastWriteAt: null, lastWriteOk: null, lastError: null, baselineBuckets: 0, baselineRefreshedAt: null, vesselsSynced: 0, vesselsSyncedAt: null };
 function ok(kind, n) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = true; if (kind) stats[kind] += n; }
 function fail(e) { stats.lastWriteAt = Date.now(); stats.lastWriteOk = false; stats.lastError = String(e && e.message || e).slice(0, 200); }
 
@@ -53,6 +53,40 @@ async function syncPorts(portsById) {
         lat=EXCLUDED.lat, lon=EXCLUDED.lon, tz=EXCLUDED.tz`;
     stats.portsSynced = ports.length;
   } catch (e) { fail(e); throw e; }
+}
+
+/**
+ * Upsert the vessel dimension (durable per-vessel profile). `first_seen` set once on insert;
+ * `last_seen` + attributes update on conflict. COALESCE keeps a known imo/name/dimension from being
+ * overwritten by a null on a position-only frame; classification fields always reflect the latest.
+ * Each row: { mmsi, imo, name, shipType, category, isFreight, freightReason, operatorId, operatorName, length, beam, draught }.
+ */
+async function syncVessels(vessels) {
+  if (!enabled || !vessels || !vessels.length) return 0;
+  const now = new Date().toISOString();
+  const s = (f) => vessels.map((v) => v[f] || null);
+  const num = (f) => vessels.map((v) => (Number.isFinite(v[f]) ? v[f] : null));
+  try {
+    await withTimeout(sql`
+      INSERT INTO vessels (mmsi, imo, name, ship_type, category, is_freight, freight_reason, operator_id, operator_name, length_m, beam_m, draught_m, first_seen, last_seen)
+      SELECT u.mmsi, u.imo, u.name, u.ship_type, u.category, u.is_freight, u.freight_reason, u.operator_id, u.operator_name, u.length_m, u.beam_m, u.draught_m, ${now}::timestamptz, ${now}::timestamptz
+      FROM unnest(
+        ${s('mmsi')}::text[], ${s('imo')}::text[], ${s('name')}::text[], ${num('shipType')}::int[],
+        ${s('category')}::text[], ${vessels.map((v) => !!v.isFreight)}::bool[], ${s('freightReason')}::text[],
+        ${s('operatorId')}::text[], ${s('operatorName')}::text[], ${num('length')}::real[], ${num('beam')}::real[], ${num('draught')}::real[]
+      ) AS u(mmsi, imo, name, ship_type, category, is_freight, freight_reason, operator_id, operator_name, length_m, beam_m, draught_m)
+      ON CONFLICT (mmsi) DO UPDATE SET
+        imo=COALESCE(EXCLUDED.imo, vessels.imo), name=COALESCE(EXCLUDED.name, vessels.name),
+        ship_type=COALESCE(EXCLUDED.ship_type, vessels.ship_type), category=EXCLUDED.category,
+        is_freight=EXCLUDED.is_freight, freight_reason=EXCLUDED.freight_reason,
+        operator_id=COALESCE(EXCLUDED.operator_id, vessels.operator_id),
+        operator_name=COALESCE(EXCLUDED.operator_name, vessels.operator_name),
+        length_m=COALESCE(EXCLUDED.length_m, vessels.length_m), beam_m=COALESCE(EXCLUDED.beam_m, vessels.beam_m),
+        draught_m=COALESCE(EXCLUDED.draught_m, vessels.draught_m), last_seen=EXCLUDED.last_seen`);
+    stats.vesselsSynced = vessels.length;
+    stats.vesselsSyncedAt = Date.now();
+    return vessels.length;
+  } catch (e) { fail(e); return 0; }
 }
 
 /**
@@ -217,7 +251,7 @@ function relativeCongestion(baselines, portId, atBerth, dow, hour, minDays = BAS
 }
 
 module.exports = {
-  enabled, syncPorts, writeSnapshot, writeEvents, queryPortHistory,
+  enabled, syncPorts, syncVessels, writeSnapshot, writeEvents, queryPortHistory,
   refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_DAYS,
   stats, COUNTRY_TZ, tzForCountry,
 };
