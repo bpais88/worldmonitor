@@ -181,6 +181,21 @@ function makeGrid(bbox, rows, cols) {
 // at observed densities; a full sweep is 9 requests (~108s at 5 req/min).
 const ITALY_TILES = makeGrid(ITALY_BBOX, 3, 3);
 
+/**
+ * Index of the tile containing (lat, lon), or -1 if outside the grid. Bounds are inclusive, so a
+ * point on a shared tile edge resolves to the first (lowest-index) matching tile — deterministic,
+ * and harmless: both candidate tiles belong to the same sweep. Powers per-TILE coverage (a port is
+ * Marinesia-covered only if ITS tile polled successfully recently, not just any tile).
+ */
+function tileIndexFor(tiles, lat, lon) {
+  if (!Number.isFinite(lat) || !Number.isFinite(lon)) return -1;
+  for (let i = 0; i < tiles.length; i++) {
+    const t = tiles[i];
+    if (lat >= t.lat_min && lat <= t.lat_max && lon >= t.long_min && lon <= t.long_max) return i;
+  }
+  return -1;
+}
+
 /** Fetch one tile. Returns the raw vessel array (possibly empty). Throws on error. */
 async function fetchTile(tile, key, fetchImpl = fetch) {
   const qs = new URLSearchParams({
@@ -200,5 +215,5 @@ async function fetchTile(tile, key, fetchImpl = fetch) {
 
 module.exports = {
   AREA_URL, VESSEL_CAP, ITALY_BBOX, ITALY_TILES,
-  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, fetchTile,
+  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile,
 };

@@ -69,7 +69,7 @@ export const profileTools = [
   {
     name: 'get_port_profile',
     description:
-      'Look up ONE tracked port\'s profile by port_id (lowercase, e.g. "rotterdam", "genova"): identity and '
+      'Look up ONE tracked port\'s profile by port_id (lowercase, e.g. "rotterdam", "genoa"): identity and '
       + 'a coverage block (always present — how completely the port was observed: coverage fraction, source '
       + 'mix, last degraded time) plus live relative congestion vs the port\'s own normal for this local hour '
       + '(null means "unknown", NEVER "clear") and gated 45-day arrival stats (unique vessels, arrivals last '

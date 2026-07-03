@@ -29,4 +29,18 @@ function relayFreshness({ lastPollAt, tilesSeen, tileCount, now = Date.now(), st
   return { warming, stale, ageSec };
 }
 
-module.exports = { relayFreshness, DEFAULT_STALE_MS };
+/**
+ * Per-TILE freshness (P0.2 follow-up): has THIS tile been successfully polled recently? Shares
+ * DEFAULT_STALE_MS with relayFreshness so the global and per-tile signals can never disagree on
+ * what "recent" means (a ~117s sweep + a 60s rate-limit backoff both fit inside it).
+ * @param {object} s
+ * @param {number|null|undefined} s.lastOkAt  epoch ms of the tile's last successful poll
+ * @param {number} [s.now]
+ * @param {number} [s.staleMs]
+ * @returns {boolean}
+ */
+function tileFreshness({ lastOkAt, now = Date.now(), staleMs = DEFAULT_STALE_MS }) {
+  return Number.isFinite(lastOkAt) && now - lastOkAt <= staleMs;
+}
+
+module.exports = { relayFreshness, tileFreshness, DEFAULT_STALE_MS };

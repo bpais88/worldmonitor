@@ -1713,7 +1713,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
 const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips } = require('./trip-lifecycle.cjs');
-const { relayFreshness } = require('./freshness.cjs');
+const { relayFreshness, tileFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
 // would falsely mark live aisstream-backed data as permanently warming/stale.
@@ -1740,14 +1740,24 @@ function inItalyBbox(lat, lon) {
     lat >= ITALY_BBOX.lat_min && lat <= ITALY_BBOX.lat_max &&
     lon >= ITALY_BBOX.long_min && lon <= ITALY_BBOX.long_max;
 }
-// Which feed covers this coordinate, given the tick's already-computed feed liveness. Pure geography
-// (aisFresh/marinesiaOk are decided once per tick in the sampler, not recomputed per port).
-function portFeed(lat, lon, aisFresh, marinesiaOk) {
+// Per-TILE freshness (P0.2 follow-up): the global marinesiaFresh() can stay true while ONE tile
+// quietly fails after the initial sweep (lastPollAt is global, tilesSeen cumulative-since-boot) —
+// which would leave ports in the dark tile falsely covered. A port is Marinesia-covered only if
+// ITS OWN tile succeeded recently. (References marinesiaTileLastOkAt defined later, like the
+// marinesia state above — called only at runtime.)
+function marinesiaTileFresh(lat, lon, now = Date.now()) {
+  const idx = tileIndexFor(ITALY_TILES, lat, lon);
+  return idx >= 0 && tileFreshness({ lastOkAt: marinesiaTileLastOkAt.get(idx), now });
+}
+// Which feed covers this coordinate, given the tick's already-computed feed liveness. Geography +
+// per-tile poll recency (aisFresh/marinesiaOk are decided once per tick in the sampler; the tile
+// check is per-port because tiles fail independently).
+function portFeed(lat, lon, aisFresh, marinesiaOk, now = Date.now()) {
   if (aisFresh) return { source: 'aisstream', coverageOk: true };
   const italy = inItalyBbox(lat, lon);
-  if (marinesiaOk && italy) return { source: 'marinesia', coverageOk: true };
-  // Neither fresh (or non-Italian while only Marinesia runs): name the feed that OWNS this
-  // geography, but coverageOk=false — an honest "we can't currently see this port".
+  if (marinesiaOk && italy && marinesiaTileFresh(lat, lon, now)) return { source: 'marinesia', coverageOk: true };
+  // Neither fresh (or non-Italian while only Marinesia runs, or this port's tile is dark): name the
+  // feed that OWNS this geography, but coverageOk=false — an honest "we can't currently see this port".
   return { source: italy ? 'marinesia' : 'aisstream', coverageOk: false };
 }
 const { runExplainers } = require('./delay-explainers.cjs');
@@ -1756,7 +1766,7 @@ const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
-const { ITALY_TILES, ITALY_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+const { ITALY_TILES, ITALY_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
@@ -1869,7 +1879,7 @@ async function samplePortHistory(now = Date.now()) {
     const meta = { source: aisFresh ? 'aisstream' : 'marinesia' };
     // Only diff/emit events for zones whose region is covered THIS tick; freeze the rest so a feed
     // going dark doesn't fire phantom exits, and dwell keeps accruing across the gap.
-    const coveredGf = PORT_GEOFENCES.filter((gf) => portFeed(gf.geometry.center.lat, gf.geometry.center.lon, aisFresh, marinesiaOk).coverageOk);
+    const coveredGf = PORT_GEOFENCES.filter((gf) => portFeed(gf.geometry.center.lat, gf.geometry.center.lon, aisFresh, marinesiaOk, now).coverageOk);
     const nextCovered = computeMembership(fresh, coveredGf);
     const next = new Map(portHistoryState.membership);       // carry ALL prev forward (freezes uncovered zones)
     for (const gf of coveredGf) next.set(gf.id, nextCovered.get(gf.id) || new Set());
@@ -1902,7 +1912,7 @@ async function samplePortHistory(now = Date.now()) {
       smoothPortStatus(ports, portSnapshotHistory);
       // Stamp per-port coverage/source from feed GEOGRAPHY (P0.2), not vessel counts — survives into
       // ...dyn on the fallback path. writeSnapshot reads these (+ dynamic fields) by name.
-      for (const p of ports) { const fp = portFeed(p.lat, p.lon, aisFresh, marinesiaOk); p.source = fp.source; p.coverageOk = fp.coverageOk; }
+      for (const p of ports) { const fp = portFeed(p.lat, p.lon, aisFresh, marinesiaOk, now); p.source = fp.source; p.coverageOk = fp.coverageOk; }
       if (db.enabled) {
         // Advance the cadence ONLY on a confirmed write — a transient DB failure leaves the gate open
         // so the next tick RETRIES, rather than silently dropping the 5-min sample (a baseline gap).
@@ -2062,6 +2072,10 @@ let marinesiaBackoffUntil = 0;
 // (not a counter) so a tile that keeps failing during cold start can't be masked by
 // duplicate successes from other tiles in later cycles.
 const marinesiaTilesSeen = new Set();
+// Per-tile LAST-SUCCESS timestamps — drives per-port coverage (marinesiaTileFresh). The Set above
+// answers "has this tile EVER succeeded" (warming); this Map answers "is it succeeding NOW", so a
+// single tile failing after the initial sweep marks only ITS ports uncovered.
+const marinesiaTileLastOkAt = new Map();
 
 function applyMarinesiaVessel(v, now) {
   if (!v || !v.mmsi) return;
@@ -2092,6 +2106,7 @@ async function pollMarinesiaTick() {
     marinesiaLastPollAt = now;
     marinesiaLastError = null;
     if (marinesiaTilesSeen.size < ITALY_TILES.length) marinesiaTilesSeen.add(tileIdx);
+    marinesiaTileLastOkAt.set(tileIdx, Date.now()); // per-tile recency (post-fetch, not tick start)
     if (raw.length >= MARINESIA_CAP) {
       console.warn(`[Relay] Marinesia tile hit the ${MARINESIA_CAP}-vessel cap — grid may need subdividing`);
     }
@@ -4527,6 +4542,10 @@ const handleRequest = async (req, res) => {
         enabled: MARINESIA_ENABLED,
         tiles: ITALY_TILES.length,
         lastPollAt: marinesiaLastPollAt ? new Date(marinesiaLastPollAt).toISOString() : null,
+        // Per-tile last-success age (sec) — null = never polled. A single high/never entry while the
+        // others cycle is exactly the dark-tile case marinesiaTileFresh guards coverage against.
+        tileAgesSec: ITALY_TILES.map((_, i) => (marinesiaTileLastOkAt.has(i)
+          ? Math.round((Date.now() - marinesiaTileLastOkAt.get(i)) / 1000) : null)),
         upserts: marinesiaUpserts,
         lastError: marinesiaLastError,
         ...feedFreshness(),
