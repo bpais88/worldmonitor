@@ -84,10 +84,15 @@ Whole launch gated behind `/health` `trips.degraded===false` holding ≥1 week o
 4. ~~**PR-4 (`get_port_profile`)**~~ **SHIPPED 2026-07-03:** identity + coverage block always; live
    congestion reuses the `relativeCongestion` gate fed from the LATEST stored snapshot + matching local
    dow×hour baseline bucket (fully DB-side — no relay in-memory state); aggregates gated per catalog.
-5. **PR-5 (metric unlock, ~4wk+):** on_time / peak_hours / arrivals_per_day unlock as gates clear; add the
-   3 tools to the tool-grounding eval; shareable arrived-trip deep-links + free/paid split.
-6. **PR-6 (materialize — ONLY if the trigger fires):** migration 006 vessel_stats/port_stats + nightly refresh +
-   staleness flag + /health.profiles. May never be needed.
+5. **PR-5 (metric unlock) — METRICS + EVAL SHIPPED 2026-07-03:** `on_time_fraction` (vessel; arrived
+   within +15 min of the ETA declared at open, ≥20 eligible — the +15 default is open decision #5),
+   `peak_hours` (port, local tz, ≥100 arrivals — rotterdam/genoa already unlock), `arrivals_per_day`
+   (port; rate over the OBSERVED span so young tracking can't read as a low rate, ≥20 arrivals over ≥3
+   days); the 3 profile tools added to the tool-grounding eval (10/10 on a live run). REMAINING from
+   this item: shareable arrived-trip deep-links + the free/paid teaser split (UI work, separate PR).
+6. **PR-6 (materialize — ONLY if the trigger fires):** migration 007 (006 = eta_at_open, taken by the
+   PR-5 on-time integrity fix) vessel_stats/port_stats + nightly refresh + staleness flag +
+   /health.profiles. May never be needed.
 
 ## Open decisions (need the owner)
 

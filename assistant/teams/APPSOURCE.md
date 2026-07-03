@@ -42,6 +42,7 @@ Partner Center **store-listing assets** (separate from the manifest, and they **
 Pre-validate the zip with the automated tool: **https://dev.teams.microsoft.com/tools/store-validation** (also in the Developer Portal for Teams).
 
 **Bot must-fixes (most common rejections):**
+
 - Responds to generic **`Hi` / `Hello` / `Help`** (any case) — a `help` response is **mandatory** and must keep the user **inside Teams** (no external redirect).
 - Valid response **even when the user isn't logged in**; **no dead ends** on any input.
 - Personal-scope **welcome message** auto-sends **once** on install, app name matching the manifest (✓ — ⑤a does this).
@@ -73,6 +74,7 @@ Pre-validate the zip with the automated tool: **https://dev.teams.microsoft.com/
 Have the partner's **Teams Administrator**: Teams admin center → **Teams apps → Manage apps → Actions → Upload new app** → upload `marco-teams.zip` → available to their org in a few hours (an *admin* upload needs no separate approval). This is how to onboard real customers **before** tackling the Store.
 
 ## What to do first (recommended order)
+
 1. **Set a real publisher domain** on the app registration (not `*.onmicrosoft.com`) — unblocks publisher verification.
 2. **Get CPP/PGA verified** (the long pole — start early).
 3. Add the **AI-generated content indicator + report affordance** (validation requirement for LLM bots).
@@ -80,6 +82,7 @@ Have the partner's **Teams Administrator**: Teams admin center → **Teams apps 
 5. Then run the Store submission loop.
 
 ### Key MS Learn sources
+
 - Publish overview · submission-checklist · teams-store-validation-guidelines · common-reasons-for-app-validation-failure
 - Partner Center account + marketplace submit · publisher-verification-overview / mark-app-as-publisher-verified
 - Manifest schema (root) · apps-package · manage-apps (org catalog) · deep-link-application
