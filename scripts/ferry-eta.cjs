@@ -89,12 +89,22 @@ function resolveOperatorName(vesselName) {
   return op ? op.name : '';
 }
 
+// One matcher for keywords (substring) + fleet-name prefixes/suffixes (anchored). Anchoring matters:
+// Evergreen hulls are "EVER APEX" (substring 'EVER' would also hit "CLEVER LADY"), Grimaldi RoRos
+// "GRANDE TOGO", DFDS "PERGAMON SEAWAYS", Spliethoff "SPAARNEGRACHT". Name is trimmed — AIS names
+// arrive space-padded ("WILSON LIVERPOOL    ").
+function operatorMatches(upperTrimmedName, op) {
+  if ((op.keywords || []).some((k) => upperTrimmedName.includes(k))) return true;
+  if ((op.prefixes || []).some((p) => upperTrimmedName.startsWith(p))) return true;
+  return (op.suffixes || []).some((s) => upperTrimmedName.endsWith(s));
+}
+
 /** Match a vessel name to a known operator, returning { id, name } or null. */
 function resolveOperator(vesselName) {
   if (!vesselName) return null;
-  const upper = String(vesselName).toUpperCase();
+  const upper = String(vesselName).toUpperCase().trim();
   for (const op of data.operators || []) {
-    if ((op.keywords || []).some((k) => upper.includes(k))) return { id: op.id, name: op.name };
+    if (operatorMatches(upper, op)) return { id: op.id, name: op.name };
   }
   return null;
 }
@@ -102,9 +112,9 @@ function resolveOperator(vesselName) {
 /** True if a vessel name belongs to a freight RoPax / RoRo operator. */
 function isFreightOperator(vesselName) {
   if (!vesselName) return false;
-  const upper = String(vesselName).toUpperCase();
+  const upper = String(vesselName).toUpperCase().trim();
   for (const op of data.operators || []) {
-    if (op.freight && (op.keywords || []).some((k) => upper.includes(k))) return true;
+    if (op.freight && operatorMatches(upper, op)) return true;
   }
   return false;
 }
@@ -145,5 +155,5 @@ function __setImoRegistryForTests(reg) {
 
 module.exports = {
   resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, resolveOperator,
-  isFreightVessel, freightReason, __setImoRegistryForTests,
+  isFreightOperator, isFreightVessel, freightReason, __setImoRegistryForTests,
 };

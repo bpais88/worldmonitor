@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, __setImoRegistryForTests } = require('./ferry-eta.cjs');
+const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightOperator, isFreightVessel, __setImoRegistryForTests } = require('./ferry-eta.cjs');
 
 test('resolves a plain LOCODE to its port', () => {
   const p = resolveDestinationPort('ITNAP');
@@ -106,4 +106,27 @@ test('isFreightVessel: IMO registry (Equasis) overrides the heuristic', () => {
   } finally {
     __setImoRegistryForTests(null); // restore real registry
   }
+});
+
+test('resolveOperator matches fleet-name prefixes (anchored, not substring)', () => {
+  assert.equal(resolveOperator('EVER APEX').id, 'evergreen');       // Evergreen hull naming
+  assert.equal(resolveOperator('GRANDE TOGO').id, 'grimaldi');      // Grimaldi deep-sea RoRo fleet
+  assert.equal(resolveOperator('ZIM CHINA').id, 'zim');
+  assert.equal(resolveOperator('WILSON LIVERPOOL    ').id, 'wilson'); // AIS pads names with spaces
+  assert.equal(resolveOperator('BBC SCANDINAVIA').id, 'bbc_chartering');
+  // Anchoring: 'EVER ' must NOT match mid-word ("clEVER lady").
+  assert.equal(resolveOperator('CLEVER LADY'), null);
+});
+
+test('resolveOperator matches fleet-name suffixes', () => {
+  assert.equal(resolveOperator('PERGAMON SEAWAYS').id, 'dfds');     // DFDS fleet suffix
+  assert.equal(resolveOperator('SPAARNEGRACHT').id, 'spliethoff');  // Spliethoff -GRACHT hulls
+  // Suffix is anchored: International Seaways names hulls "SEAWAYS X" (prefix) — must NOT hit DFDS.
+  assert.equal(resolveOperator('SEAWAYS REYMAR'), null);
+});
+
+test('isFreightOperator honours prefix/suffix fleets on freight lines', () => {
+  assert.equal(isFreightOperator('GRANDE TOGO'), true);       // grimaldi freight:true via prefix
+  assert.equal(isFreightOperator('PERGAMON SEAWAYS'), true);  // dfds freight:true via suffix
+  assert.equal(isFreightOperator('EVER APEX'), false);        // evergreen is freight:false (pure container; cargo-type classifies it)
 });
