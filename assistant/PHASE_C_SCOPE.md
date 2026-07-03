@@ -72,8 +72,12 @@ Whole launch gated behind `/health` `trips.degraded===false` holding ≥1 week o
 1. **PR-1 (ship first — `get_trip` tracer bullet):** `db.queryTrip` + relay `/ais/trip` + proxy + `profiles.mjs`
    (get_trip only) + `trip-detail.ts` + ferry.html click-to-trip track render. **No migration.** Proves the
    whole spine (relay → proxy → auth → tool → UI) on a cheap PK lookup + a shareable voyage record.
-2. **PR-2 (index guard):** EXPLAIN the per-mmsi/per-dest 45d GROUP BYs; add a covering index (migration 005)
-   ONLY if a seq-scan appears.
+2. ~~**PR-2 (index guard)**~~ **RESOLVED 2026-07-03 → no index needed.** EXPLAIN (ANALYZE, BUFFERS) on the
+   four representative shapes against prod Neon (8,579 trips / 120k points, worst-case subjects): per-mmsi
+   shapes hit `ix_trips_mmsi` (0.2 ms), per-dest shapes hit `ix_trips_status_opened` (0.5–3.3 ms) — no
+   seq-scan on `trips`, all ~100x under the 200 ms materialization trigger, so per the guard NO migration
+   ships. Evidence + re-runnable check: `scripts/profile-queries-explain.sql` (re-run before PR-5 goes paid
+   or if on-demand p95 creeps toward the trigger).
 3. **PR-3 (`get_vessel_profile`, ~2wk accrual):** on-demand, gates in the fn. Identity always ships.
 4. **PR-4 (`get_port_profile`, baselines warm n≥3):** reuses `relativeCongestion` + coverage_frac + gated aggregates.
 5. **PR-5 (metric unlock, ~4wk+):** on_time / peak_hours / arrivals_per_day unlock as gates clear; add the
