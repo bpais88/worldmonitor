@@ -49,6 +49,21 @@
       .ferry-popup-voyage-title { font-size: 10px; font-weight: 700; color: #4da3ff; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 3px; }
       .ferry-popup-chip { display: inline-block; margin: 3px 4px 0 0; padding: 1px 6px; border-radius: 8px;
         background: rgba(255,255,255,0.08); color: #cdd2d6; font-size: 10px; }
+      /* Phase C voyage replay — play/scrub control bar over the map + waypoint hover tooltip. */
+      .voyage-replay { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5;
+        display: flex; align-items: center; gap: 10px; max-width: 92%;
+        background: rgba(20,22,24,0.92); border: 1px solid rgba(255,255,255,0.12); border-radius: 999px;
+        padding: 6px 14px; box-shadow: 0 4px 18px rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+        font-size: 12px; color: #e8eaed; }
+      .vr-play { appearance: none; border: 0; background: #4da3ff; color: #08111f; width: 26px; height: 26px;
+        border-radius: 50%; font-size: 12px; line-height: 1; cursor: pointer; flex: 0 0 auto;
+        display: flex; align-items: center; justify-content: center; }
+      .vr-play:hover { background: #6fb6ff; }
+      .vr-scrub { flex: 1 1 160px; min-width: 120px; accent-color: #4da3ff; cursor: pointer; }
+      .vr-readout { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #cdd2d6; white-space: nowrap; font-size: 11px; }
+      .maplibregl-popup.vr-hover .maplibregl-popup-content { padding: 5px 9px; font-size: 11px; }
+      .vr-hover-row { white-space: nowrap; }
+      .vr-hover-dim { color: #9aa0a6; font-size: 10px; }
       .ferry-delay-badge { margin-left: 6px; padding: 1px 6px; border-radius: 9px; font-size: 10px;
         background: rgba(240,162,59,0.18); color: #f0a23b; white-space: nowrap; }
       .ferry-status { padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
