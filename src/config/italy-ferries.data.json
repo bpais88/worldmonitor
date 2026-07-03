@@ -1029,7 +1029,10 @@
       "keywords": [
         "GRIMALDI"
       ],
-      "freight": true
+      "freight": true,
+      "prefixes": [
+        "GRANDE "
+      ]
     },
     {
       "id": "corsica_sardinia",
@@ -1170,7 +1173,10 @@
       "keywords": [
         "EVERGREEN"
       ],
-      "freight": false
+      "freight": false,
+      "prefixes": [
+        "EVER "
+      ]
     },
     {
       "id": "stena",
@@ -1186,7 +1192,10 @@
       "keywords": [
         "DFDS"
       ],
-      "freight": true
+      "freight": true,
+      "suffixes": [
+        " SEAWAYS"
+      ]
     },
     {
       "id": "po_ferries",
@@ -1204,6 +1213,45 @@
         "BRITTANY"
       ],
       "freight": true
+    },
+    {
+      "id": "zim",
+      "name": "ZIM",
+      "keywords": [],
+      "prefixes": [
+        "ZIM "
+      ]
+    },
+    {
+      "id": "wilson",
+      "name": "Wilson",
+      "keywords": [],
+      "prefixes": [
+        "WILSON "
+      ]
+    },
+    {
+      "id": "bbc_chartering",
+      "name": "BBC Chartering",
+      "keywords": [],
+      "prefixes": [
+        "BBC "
+      ]
+    },
+    {
+      "id": "xpress_feeders",
+      "name": "X-Press Feeders",
+      "keywords": [
+        "X-PRESS"
+      ]
+    },
+    {
+      "id": "spliethoff",
+      "name": "Spliethoff",
+      "keywords": [],
+      "suffixes": [
+        "GRACHT"
+      ]
     }
   ],
   "imoRegistry": {}

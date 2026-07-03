@@ -41,6 +41,14 @@ export interface FerryOperator {
   name: string;
   /** UPPERCASE substrings to match against an AIS ship name. */
   keywords: string[];
+  /**
+   * UPPERCASE fleet-name prefixes/suffixes (matched against the trimmed name). For lines whose
+   * hulls never carry the company string — Evergreen's "EVER APEX", Grimaldi's "GRANDE TOGO",
+   * DFDS's "PERGAMON SEAWAYS" — where a bare substring keyword would either never match or
+   * false-positive mid-word ("EVER" is inside "CLEVER").
+   */
+  prefixes?: string[];
+  suffixes?: string[];
   /** True for freight RoPax / RoRo lines (carry trucks/containers), not tourist. */
   freight?: boolean;
 }

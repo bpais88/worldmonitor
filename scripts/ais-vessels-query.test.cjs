@@ -129,10 +129,18 @@ test('resolveOperator attaches authoritative operatorId/operatorName', () => {
   const moby = out.find((v) => v.mmsi === '247111111');
   assert.equal(moby.operatorId, 'moby');
   assert.equal(moby.operatorName, 'Moby Lines');
-  // Non-operator cargo gets empty operator fields, not undefined.
+  // EVER GIVEN now resolves via the Evergreen fleet-name prefix ('EVER ' — hulls never carry
+  // the company string). Anchored, so "CLEVER ..." style names can't false-positive.
   const ever = out.find((v) => v.mmsi === '636000001');
-  assert.equal(ever.operatorId, '');
-  assert.equal(ever.operatorName, '');
+  assert.equal(ever.operatorId, 'evergreen');
+  assert.equal(ever.operatorName, 'Evergreen');
+  // A cargo name matching no operator still gets EMPTY operator fields, not undefined.
+  const solo = buildVesselList(
+    new Map([['477000001', { mmsi: '477000001', name: 'PACIFIC DALIAN', lat: 41.0, lon: 12.0, speed: 10, navStatus: 0, shipType: 70, timestamp: 1000 }]]),
+    new Map(), { bounds: ITALY, wantTypes: null, limit: 10, resolveOperator },
+  );
+  assert.equal(solo[0].operatorId, '');
+  assert.equal(solo[0].operatorName, '');
 });
 
 test('wantOperator restricts the result to one operator (server-side filter)', () => {
