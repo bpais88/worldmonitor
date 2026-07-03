@@ -578,6 +578,126 @@ async function queryTrip({ id, mmsi } = {}) {
   };
 }
 
+// --- Phase C PR-3: get_vessel_profile -----------------------------------------------------------
+// Identity ALWAYS (Phase A dim is mature); stats gated per the PHASE_C_SCOPE.md metric catalog and
+// computed HERE (single-gate) — a failed gate suppresses the field with {value:null, note}, never a
+// silent 0. Window = 45 rolling days (disclosed as windowDays); lifetime counters all-time.
+const PROFILE_WINDOW_DAYS = 45;
+const VP_MIN_ARRIVED_45D = 5;   // trips_arrived_45d shown only at ≥5 (below that it reads as noise)
+const VP_MIN_DWELL_OBS = 3;     // median_dwell_min needs ≥3 dwell observations
+const VP_MIN_SPEED_OBS = 3;     // avg_speed_kn needs ≥3 finalized speeds
+const VP_MIN_ROUTE_REPEAT = 3;  // top_routes: the top route must repeat ≥3×…
+const VP_MIN_DISTINCT_ROUTES = 3; // …and the vessel must have ≥3 distinct routes in window
+const VP_DORMANT_MS = 7 * 24 * 60 * 60_000; // no arrival in >7d → dormant flag
+
+/**
+ * One vessel's profile by mmsi: identity (always) + gated 45d stats + lifetime counters.
+ * Returns { found, vessel:{…identity, dormant}, stats:{…gated}, counts:{raw observation counts},
+ * windowDays, notes:{field→note}, generatedAt, db } — same contract shape as queryTrip.
+ */
+async function queryVesselProfile({ mmsi } = {}) {
+  if (!enabled) return { found: false, db: false, generatedAt: Date.now() };
+  const mmsiParam = mmsi != null && String(mmsi).trim() !== '' ? String(mmsi).trim() : null;
+  if (!mmsiParam) return { found: false, db: true, generatedAt: Date.now() };
+
+  const num = (x) => (x == null ? null : Number(x));
+  let v, agg, routeRows;
+  try {
+    // Identity + one aggregate pass + top routes, concurrently. The trips queries are per-mmsi
+    // (ix_trips_mmsi; per-subject cardinality is tiny — PR-2 EXPLAIN: 0.2 ms worst-case subject).
+    const [vrows, aggRows, rrows] = await Promise.all([
+      sql`SELECT mmsi, imo, name, category, is_freight, operator_id, operator_name,
+                 length_m, beam_m, draught_m,
+                 extract(epoch from first_seen) * 1000 AS first_seen,
+                 extract(epoch from last_seen)  * 1000 AS last_seen
+          FROM vessels WHERE mmsi = ${mmsiParam}`,
+      sql`SELECT count(*) FILTER (WHERE status = 'arrived') AS arrived_total,
+                 extract(epoch from max(arrived_at) FILTER (WHERE status = 'arrived')) * 1000 AS last_arrival,
+                 count(*) FILTER (WHERE status = 'arrived'
+                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS arrived_45d,
+                 count(dest_dwell_min) FILTER (WHERE status = 'arrived'
+                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS dwell_obs,
+                 percentile_cont(0.5) WITHIN GROUP (ORDER BY dest_dwell_min)
+                   FILTER (WHERE status = 'arrived'
+                     AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS median_dwell,
+                 count(avg_speed_kn) FILTER (WHERE status = 'arrived'
+                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS speed_obs,
+                 avg(avg_speed_kn) FILTER (WHERE status = 'arrived'
+                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS avg_speed,
+                 count(DISTINCT origin_port_id || '>' || dest_port_id) FILTER (WHERE status = 'arrived'
+                   AND origin_port_id IS NOT NULL
+                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS distinct_routes
+          FROM trips WHERE mmsi = ${mmsiParam}`,
+      // Routes need an OBSERVED origin (~5%+ of opens are mid-sea → origin null → excluded, noted below).
+      sql`SELECT t.origin_port_id, t.dest_port_id, count(*) AS n,
+                 po.name AS origin_name, pd.name AS dest_name
+          FROM trips t
+          LEFT JOIN ports po ON po.port_id = t.origin_port_id
+          LEFT JOIN ports pd ON pd.port_id = t.dest_port_id
+          WHERE t.mmsi = ${mmsiParam} AND t.status = 'arrived' AND t.origin_port_id IS NOT NULL
+            AND t.opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})
+          GROUP BY 1, 2, 4, 5 ORDER BY n DESC, 1, 2 LIMIT 5`,
+    ]);
+    v = vrows && vrows[0];
+    agg = aggRows && aggRows[0];
+    routeRows = rrows || [];
+  } catch (e) { fail(e); return { found: false, db: true, error: 'query failed', generatedAt: Date.now() }; }
+  if (!v) return { found: false, db: true, generatedAt: Date.now() };
+
+  const notes = {};
+  const arrivedTotal = num(agg?.arrived_total) || 0;
+  const arrived45 = num(agg?.arrived_45d) || 0;
+  const dwellObs = num(agg?.dwell_obs) || 0;
+  const speedObs = num(agg?.speed_obs) || 0;
+  const distinctRoutes = num(agg?.distinct_routes) || 0;
+  const lastArrival = num(agg?.last_arrival);
+
+  // The gate (spec: metric catalog). Suppressed = null + note; NEVER a silent 0.
+  const stats = { tripsArrivedTotal: arrivedTotal, tripsArrived45d: null, medianDwellMin: null, avgSpeedKn: null, topRoutes: null };
+  if (arrived45 >= VP_MIN_ARRIVED_45D) stats.tripsArrived45d = arrived45;
+  else notes.tripsArrived45d = `insufficient arrived trips in window (${arrived45} of ${VP_MIN_ARRIVED_45D} needed)`;
+  if (dwellObs >= VP_MIN_DWELL_OBS) stats.medianDwellMin = num(agg.median_dwell);
+  else notes.medianDwellMin = `insufficient dwell observations (${dwellObs} of ${VP_MIN_DWELL_OBS} needed)`;
+  if (speedObs >= VP_MIN_SPEED_OBS) {
+    stats.avgSpeedKn = num(agg.avg_speed);
+    notes.avgSpeedKn = 'average AIS speed while under way (arrived trips in window)';
+  } else notes.avgSpeedKn = `insufficient speed observations (${speedObs} of ${VP_MIN_SPEED_OBS} needed)`;
+  const topRepeat = routeRows.length ? num(routeRows[0].n) : 0;
+  if (distinctRoutes >= VP_MIN_DISTINCT_ROUTES && topRepeat >= VP_MIN_ROUTE_REPEAT) {
+    stats.topRoutes = routeRows.map((r) => ({
+      originPortId: r.origin_port_id, origin: r.origin_name || r.origin_port_id,
+      destPortId: r.dest_port_id, dest: r.dest_name || r.dest_port_id, trips: num(r.n),
+    }));
+    notes.topRoutes = 'observed-origin voyages only (mid-sea opens excluded)';
+  } else {
+    notes.topRoutes = `insufficient route history (${distinctRoutes} distinct route${distinctRoutes === 1 ? '' : 's'}, top repeat ${topRepeat}; need ≥${VP_MIN_DISTINCT_ROUTES} distinct and top ≥${VP_MIN_ROUTE_REPEAT})`;
+  }
+  notes.onTimeFraction = 'not yet served (unlocks at ≥20 eligible trips — PR-5)';
+
+  // Dormant: had arrivals, but none in >7d. No arrivals at all is its own (weaker) note.
+  let dormant = false;
+  if (lastArrival != null && Date.now() - lastArrival > VP_DORMANT_MS) {
+    dormant = true;
+    notes.dormant = 'no arrival in >7 days';
+  } else if (lastArrival == null) {
+    notes.lastArrival = 'no arrivals recorded yet';
+  }
+
+  return {
+    found: true, db: true, generatedAt: Date.now(),
+    vessel: {
+      mmsi: v.mmsi, imo: v.imo || null, name: v.name || null, category: v.category || null,
+      isFreight: !!v.is_freight, operatorId: v.operator_id || null, operator: v.operator_name || null,
+      lengthM: num(v.length_m), beamM: num(v.beam_m), draughtM: num(v.draught_m),
+      firstSeen: num(v.first_seen), lastSeen: num(v.last_seen), lastArrival, dormant,
+    },
+    stats,
+    counts: { arrived45d: arrived45, dwellObs, speedObs, distinctRoutes, topRepeat },
+    windowDays: PROFILE_WINDOW_DAYS,
+    notes,
+  };
+}
+
 // --- P0.3: relative congestion baseline ---------------------------------------------------------
 // Congestion "for THIS port, right now" vs its own normal for the matching LOCAL day-of-week × hour
 // (congestion follows local working hours). Replaces the meaningless absolute atPort≥8 threshold
@@ -651,6 +771,6 @@ module.exports = {
   markStalled, patchTripEta, bumpTripEtaSlip, backfillTripOrigin, backfillDestDwell,
   finalizeArrivedGeo, pruneTripPoints,
   // Phase C serving
-  queryTrip,
+  queryTrip, queryVesselProfile,
   stats, COUNTRY_TZ, tzForCountry,
 };
