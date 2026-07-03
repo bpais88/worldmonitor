@@ -90,8 +90,9 @@ Whole launch gated behind `/health` `trips.degraded===false` holding ≥1 week o
    (port; rate over the OBSERVED span so young tracking can't read as a low rate, ≥20 arrivals over ≥3
    days); the 3 profile tools added to the tool-grounding eval (10/10 on a live run). REMAINING from
    this item: shareable arrived-trip deep-links + the free/paid teaser split (UI work, separate PR).
-6. **PR-6 (materialize — ONLY if the trigger fires):** migration 006 vessel_stats/port_stats + nightly refresh +
-   staleness flag + /health.profiles. May never be needed.
+6. **PR-6 (materialize — ONLY if the trigger fires):** migration 007 (006 = eta_at_open, taken by the
+   PR-5 on-time integrity fix) vessel_stats/port_stats + nightly refresh + staleness flag +
+   /health.profiles. May never be needed.
 
 ## Open decisions (need the owner)
 

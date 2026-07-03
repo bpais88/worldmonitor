@@ -169,11 +169,12 @@ async function openTrip({ mmsi, originPortId = null, destPortId, openedAt, depar
   if (!enabled || !mmsi || !destPortId) return null;
   try {
     const rows = await withTimeout(sql`
-      INSERT INTO trips (mmsi, origin_port_id, dest_port_id, opened_at, departed_at, departure_eta, status, updated_at)
+      INSERT INTO trips (mmsi, origin_port_id, dest_port_id, opened_at, departed_at, departure_eta, eta_at_open, status, updated_at)
       VALUES (${String(mmsi)}, ${originPortId}, ${destPortId},
               to_timestamp(${openedAt}::float8 / 1000.0),
               to_timestamp(${departedAt}::float8 / 1000.0),
               to_timestamp(${departureEta}::float8 / 1000.0),
+              ${Number.isFinite(departureEta)},
               'open', now())
       ON CONFLICT (mmsi) WHERE status = 'open' DO NOTHING
       RETURNING id`);
@@ -631,9 +632,12 @@ async function queryVesselProfile({ mmsi } = {}) {
                  count(DISTINCT origin_port_id || '>' || dest_port_id) FILTER (WHERE status = 'arrived'
                    AND origin_port_id IS NOT NULL
                    AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS distinct_routes,
-                 count(*) FILTER (WHERE status = 'arrived' AND departure_eta IS NOT NULL
+                 -- eta_at_open (migration 006), NOT departure_eta IS NOT NULL: patchTripEta fills a
+                 -- null ETA mid-voyage, and a late promise is trivially keepable — only the ETA
+                 -- declared AT OPEN may score reliability.
+                 count(*) FILTER (WHERE status = 'arrived' AND eta_at_open
                    AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS ontime_eligible,
-                 count(*) FILTER (WHERE status = 'arrived' AND departure_eta IS NOT NULL
+                 count(*) FILTER (WHERE status = 'arrived' AND eta_at_open
                    AND arrived_at <= departure_eta + make_interval(mins => ${VP_ONTIME_TOLERANCE_MIN})
                    AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS ontime_hits
           FROM trips WHERE mmsi = ${mmsiParam}`,
