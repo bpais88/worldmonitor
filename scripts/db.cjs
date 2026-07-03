@@ -749,7 +749,7 @@ async function queryPortProfile({ port } = {}) {
           GROUP BY 1 ORDER BY n DESC`,
       // Latest snapshot + the baseline bucket for the port's CURRENT local dow×hour (tz from the dim,
       // so the bucket matches how refreshBaselines built them).
-      sql`SELECT s.at_berth, extract(epoch from s.ts) * 1000 AS ts,
+      sql`SELECT s.at_berth, s.coverage_ok, extract(epoch from s.ts) * 1000 AS ts,
                  EXTRACT(dow  FROM now() AT TIME ZONE p.tz)::smallint AS dow,
                  EXTRACT(hour FROM now() AT TIME ZONE p.tz)::smallint AS hour,
                  b.p75, b.p90, b.n AS days
@@ -785,6 +785,10 @@ async function queryPortProfile({ port } = {}) {
     notes.congestionRel = 'no snapshots recorded for this port';
   } else if (snapTs == null || Date.now() - snapTs > PP_SNAPSHOT_FRESH_MS) {
     notes.congestionRel = 'stale snapshot (no fresh position data)';
+  } else if (!live.coverage_ok) {
+    // A dark feed still writes fresh rows (coverage_ok=false, empty counts) — comparing that
+    // zero against a warm baseline would read as 'clear'. No coverage → unknown, never 'clear'.
+    notes.congestionRel = 'no live coverage for this port right now (feed dark)';
   } else {
     const dow = num(live.dow);
     const hour = num(live.hour);

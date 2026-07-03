@@ -28,3 +28,6 @@ jobs:
           cache: 'npm'
       - run: npm ci
       - run: npm run test:assistant
+      # Relay unit suites (trip lifecycle, geofences, Marinesia grid/coverage, freshness, …) —
+      # they guard the monetized trips/coverage pipeline and were previously not run in CI at all.
+      - run: npm run test:relay
