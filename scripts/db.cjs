@@ -405,15 +405,19 @@ async function finalizeArrivedGeo() {
   } catch (e) { tripFail(e); return 0; }
 }
 
-const TRIP_POINTS_RETENTION_DAYS = 90; // single source for the retention window (prune + the get_trip 'track expired' note)
+const TRIP_POINTS_RETENTION_DAYS = 90; // single source for the ABANDONED-trip retention window (prune + the get_trip 'track expired' note)
 
-/** Retention: drop trip_points of non-open trips older than `days`. Trip ROWS (aggregates) kept forever. */
+/**
+ * Retention: drop trip_points of ABANDONED trips older than `days`. Arrived-trip points are kept
+ * forever — they ARE the voyage-replay/route-history artifact (PHASE_C_SCOPE.md decision #2,
+ * resolved 2026-07-03). Trip ROWS (aggregates) kept forever regardless.
+ */
 async function pruneTripPoints(days = TRIP_POINTS_RETENTION_DAYS) {
   if (!enabled) return 0;
   try {
     const rows = await withTimeout(sql`
       DELETE FROM trip_points tp USING trips t
-      WHERE tp.trip_id = t.id AND t.status <> 'open' AND t.updated_at < now() - make_interval(days => ${days})
+      WHERE tp.trip_id = t.id AND t.status = 'abandoned' AND t.updated_at < now() - make_interval(days => ${days})
       RETURNING tp.trip_id`, 30_000);
     return Array.isArray(rows) ? rows.length : 0;
   } catch (e) { tripFail(e); return 0; }
@@ -532,7 +536,9 @@ async function queryTrip({ id, mmsi } = {}) {
         extract(epoch from eta) * 1000 AS eta, eta_slip_min
         FROM trip_points WHERE trip_id = ${tripId} ORDER BY ts ASC LIMIT 5000`;
     pointCount = pts.length;
-    const trackExpired = pointCount === 0 && status !== 'open' && updatedAt != null && Date.now() - updatedAt > TRIP_POINTS_RETENTION_MS;
+    // Only abandoned tracks expire now (arrived-trip points are kept forever). Arrived trips pruned
+    // under the pre-2026-07 policy fall through to the honest 'sparse; 0 waypoints' note instead.
+    const trackExpired = pointCount === 0 && status === 'abandoned' && updatedAt != null && Date.now() - updatedAt > TRIP_POINTS_RETENTION_MS;
     if (pointCount >= TRIP_TRACK_MIN_POINTS) {
       track = pts.map((p) => ({ ts: num(p.ts), lat: num(p.lat), lon: num(p.lon), speedKn: num(p.speed_kn), course: num(p.course), eta: num(p.eta), etaSlipMin: num(p.eta_slip_min) }));
       const spanH = (track[track.length - 1].ts - track[0].ts) / 3_600_000;

@@ -92,8 +92,12 @@ Whole launch gated behind `/health` `trips.degraded===false` holding ≥1 week o
    trips; the path-integral (sailed distance from the stored points, GPS-jump legs > 40 kn dropped) lifts
    coverage to ~73%. `avg_speed_kn` = mean AIS speed while under way (not distance/time, which conflated
    cruising with port idle). Both reproducible from the durable points.
-2. **trip_points as a sold artifact** — if we sell voyage-replay/route-history, the 90d prune destroys it.
-   Keep 90d + on-demand export, or extend + month-partition?
+2. ~~**trip_points as a sold artifact**~~ **RESOLVED 2026-07-03 → keep arrived, prune abandoned.**
+   Voyage replay shipped (#82), so arrived-trip points are the sold route-history artifact and are kept
+   forever; abandoned-trip points still prune at 90d (`pruneTripPoints` now filters `status='abandoned'`).
+   Volume is tiny (120k points at decision time) — month-partitioning deferred until the table is in the
+   millions of rows. Arrived trips pruned under the old policy show `'sparse; 0 waypoints'`, self-healing
+   as new voyages accrue.
 3. **coverageOk weighting** — suppress a metric computed over a window with degraded snapshots, or show with
    a discount/caveat? What coverage_frac threshold (~0.95?) flips the port 'degraded coverage' flag?
 4. **Materialize trigger + owner** — confirm the p95>200ms / cross-fleet-percentile rule + who watches it.
