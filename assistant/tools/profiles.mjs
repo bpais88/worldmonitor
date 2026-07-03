@@ -1,4 +1,4 @@
-// Phase C profile tools — get_trip + get_vessel_profile (get_port_profile follows). All
+// Phase C profile tools — get_trip + get_vessel_profile + get_port_profile. All
 // read-only, served by the relay's DB-backed /ais/* endpoints. The sufficiency gate / field flags are
 // computed server-side (scripts/db.cjs), so this layer just relays the already-flagged payload — no
 // re-derivation, no db import (stays on the clean HTTP boundary via relayGet).
@@ -63,6 +63,36 @@ export const profileTools = [
         return res;
       } catch {
         return { found: false, error: 'vessel profile lookup failed' };
+      }
+    },
+  },
+  {
+    name: 'get_port_profile',
+    description:
+      'Look up ONE tracked port\'s profile by port_id (lowercase, e.g. "rotterdam", "genova"): identity and '
+      + 'a coverage block (always present — how completely the port was observed: coverage fraction, source '
+      + 'mix, last degraded time) plus live relative congestion vs the port\'s own normal for this local hour '
+      + '(null means "unknown", NEVER "clear") and gated 45-day arrival stats (unique vessels, arrivals last '
+      + '7 days, median dwell, operator mix). A stat below its evidence threshold comes back null with the '
+      + 'reason in `notes` — ALWAYS lead with that note and never present a suppressed stat as zero, and '
+      + 'never read congestion null as "not congested". Stats cover tracked freight vessels only, NOT total '
+      + 'port throughput. Use get_vessel_profile for a vessel, get_trip for a voyage. Read-only.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        port: { type: 'string', description: 'port_id (lowercase), e.g. "rotterdam" — as shown on the freight board' },
+      },
+      required: ['port'],
+      additionalProperties: false,
+    },
+    handler: async ({ port }) => {
+      if (!port) return { found: false, error: 'provide port' };
+      try {
+        const res = await relayGet(`/ais/port-profile?port=${encodeURIComponent(port)}`);
+        if (!res || res.found === false) return { found: false, ...(res && res.notes ? { notes: res.notes } : {}) };
+        return res;
+      } catch {
+        return { found: false, error: 'port profile lookup failed' };
       }
     },
   },

@@ -614,19 +614,19 @@ async function queryVesselProfile({ mmsi } = {}) {
       sql`SELECT count(*) FILTER (WHERE status = 'arrived') AS arrived_total,
                  extract(epoch from max(arrived_at) FILTER (WHERE status = 'arrived')) * 1000 AS last_arrival,
                  count(*) FILTER (WHERE status = 'arrived'
-                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS arrived_45d,
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS arrived_45d,
                  count(dest_dwell_min) FILTER (WHERE status = 'arrived'
-                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS dwell_obs,
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS dwell_obs,
                  percentile_cont(0.5) WITHIN GROUP (ORDER BY dest_dwell_min)
                    FILTER (WHERE status = 'arrived'
-                     AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS median_dwell,
+                     AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS median_dwell,
                  count(avg_speed_kn) FILTER (WHERE status = 'arrived'
-                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS speed_obs,
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS speed_obs,
                  avg(avg_speed_kn) FILTER (WHERE status = 'arrived'
-                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS avg_speed,
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS avg_speed,
                  count(DISTINCT origin_port_id || '>' || dest_port_id) FILTER (WHERE status = 'arrived'
                    AND origin_port_id IS NOT NULL
-                   AND opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS distinct_routes
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS distinct_routes
           FROM trips WHERE mmsi = ${mmsiParam}`,
       // Routes need an OBSERVED origin (~5%+ of opens are mid-sea → origin null → excluded, noted below).
       sql`SELECT t.origin_port_id, t.dest_port_id, count(*) AS n,
@@ -635,7 +635,7 @@ async function queryVesselProfile({ mmsi } = {}) {
           LEFT JOIN ports po ON po.port_id = t.origin_port_id
           LEFT JOIN ports pd ON pd.port_id = t.dest_port_id
           WHERE t.mmsi = ${mmsiParam} AND t.status = 'arrived' AND t.origin_port_id IS NOT NULL
-            AND t.opened_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})
+            AND t.arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})
           GROUP BY 1, 2, 4, 5 ORDER BY n DESC, 1, 2 LIMIT 5`,
     ]);
     v = vrows && vrows[0];
@@ -693,6 +693,143 @@ async function queryVesselProfile({ mmsi } = {}) {
     },
     stats,
     counts: { arrived45d: arrived45, dwellObs, speedObs, distinctRoutes, topRepeat },
+    windowDays: PROFILE_WINDOW_DAYS,
+    notes,
+  };
+}
+
+// --- Phase C PR-4: get_port_profile -------------------------------------------------------------
+// Identity + coverage block ALWAYS; aggregates gated per the metric catalog; live congestion REUSES
+// relativeCongestion (already gated n≥BASELINE_MIN_DAYS → null/'unknown', never 'clear'), fed from
+// the LATEST stored snapshot (5-min cadence) + the matching local dow×hour baseline bucket — fully
+// DB-side, so this stays a single-gate query fn with no relay in-memory state.
+const PP_MIN_UNIQUE_VESSELS = 5;
+const PP_MIN_ARRIVALS_7D = 5;
+const PP_MIN_DWELL_OBS = 3;
+const PP_MIN_OPERATOR_ARRIVALS = 20; // operator_mix needs ≥20 arrivals in window
+const PP_SNAPSHOT_FRESH_MS = 15 * 60_000; // live congestion only off a fresh (<15 min) snapshot
+const PP_COVERAGE_WINDOW_DAYS = 7;   // coverage block = last 7d of snapshots
+
+/**
+ * One port's profile by port_id: identity (always) + live relative congestion (gated) + gated 45d
+ * arrival stats + a coverage block (always — source mix, coverage_frac, last_degraded_at).
+ * Same contract shape as queryTrip/queryVesselProfile: { found, port, congestion, stats, counts,
+ * coverage, windowDays, notes, generatedAt, db }.
+ */
+async function queryPortProfile({ port } = {}) {
+  if (!enabled) return { found: false, db: false, generatedAt: Date.now() };
+  const portParam = port != null && String(port).trim() !== '' ? String(port).trim().toLowerCase() : null;
+  if (!portParam) return { found: false, db: true, generatedAt: Date.now() };
+
+  const num = (x) => (x == null ? null : Number(x));
+  let p, agg, opRows, cov, srcRows, live;
+  try {
+    const [prows, aggRows, orows, covRows, srows, lrows] = await Promise.all([
+      sql`SELECT port_id, name, country, region, tz, commercial FROM ports WHERE port_id = ${portParam}`,
+      sql`SELECT count(*) AS arrived_45d,
+                 count(DISTINCT mmsi) AS unique_vessels,
+                 count(*) FILTER (WHERE arrived_at >= now() - interval '7 days') AS arrivals_7d,
+                 count(dest_dwell_min) AS dwell_obs,
+                 percentile_cont(0.5) WITHIN GROUP (ORDER BY dest_dwell_min) AS median_dwell
+          FROM trips
+          WHERE dest_port_id = ${portParam} AND status = 'arrived'
+            AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})`,
+      sql`SELECT coalesce(v.operator_name, v.operator_id, 'unknown') AS operator, count(*) AS n
+          FROM trips t LEFT JOIN vessels v ON v.mmsi = t.mmsi
+          WHERE t.dest_port_id = ${portParam} AND t.status = 'arrived'
+            AND t.arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})
+          GROUP BY 1 ORDER BY n DESC, 1 LIMIT 8`,
+      sql`SELECT count(*) AS n, count(*) FILTER (WHERE coverage_ok) AS n_ok,
+                 extract(epoch from max(ts) FILTER (WHERE NOT coverage_ok)) * 1000 AS last_degraded_at
+          FROM port_snapshots
+          WHERE port_id = ${portParam} AND ts > now() - make_interval(days => ${PP_COVERAGE_WINDOW_DAYS})`,
+      sql`SELECT source, count(*) AS n
+          FROM port_snapshots
+          WHERE port_id = ${portParam} AND ts > now() - make_interval(days => ${PP_COVERAGE_WINDOW_DAYS})
+          GROUP BY 1 ORDER BY n DESC`,
+      // Latest snapshot + the baseline bucket for the port's CURRENT local dow×hour (tz from the dim,
+      // so the bucket matches how refreshBaselines built them).
+      sql`SELECT s.at_berth, extract(epoch from s.ts) * 1000 AS ts,
+                 EXTRACT(dow  FROM now() AT TIME ZONE p.tz)::smallint AS dow,
+                 EXTRACT(hour FROM now() AT TIME ZONE p.tz)::smallint AS hour,
+                 b.p75, b.p90, b.n AS days
+          FROM port_snapshots s
+          JOIN ports p ON p.port_id = s.port_id
+          LEFT JOIN port_baselines b ON b.port_id = s.port_id
+            AND b.dow  = EXTRACT(dow  FROM now() AT TIME ZONE p.tz)::smallint
+            AND b.hour = EXTRACT(hour FROM now() AT TIME ZONE p.tz)::smallint
+          WHERE s.port_id = ${portParam}
+          ORDER BY s.ts DESC LIMIT 1`,
+    ]);
+    p = prows && prows[0];
+    agg = aggRows && aggRows[0];
+    opRows = orows || [];
+    cov = covRows && covRows[0];
+    srcRows = srows || [];
+    live = lrows && lrows[0];
+  } catch (e) { fail(e); return { found: false, db: true, error: 'query failed', generatedAt: Date.now() }; }
+  if (!p) return { found: false, db: true, generatedAt: Date.now() };
+
+  const notes = {};
+  const arrived45 = num(agg?.arrived_45d) || 0;
+  const uniqueVessels = num(agg?.unique_vessels) || 0;
+  const arrivals7d = num(agg?.arrivals_7d) || 0;
+  const dwellObs = num(agg?.dwell_obs) || 0;
+
+  // Live relative congestion — REUSE the one gate (n≥BASELINE_MIN_DAYS inside relativeCongestion),
+  // fed a single-bucket map keyed exactly like loadBaselines builds it. Stale snapshot → suppressed.
+  let congestionRel = null;
+  let congestionAsOf = null;
+  const snapTs = num(live?.ts);
+  if (!live) {
+    notes.congestionRel = 'no snapshots recorded for this port';
+  } else if (snapTs == null || Date.now() - snapTs > PP_SNAPSHOT_FRESH_MS) {
+    notes.congestionRel = 'stale snapshot (no fresh position data)';
+  } else {
+    const dow = num(live.dow);
+    const hour = num(live.hour);
+    const bucket = live.days != null
+      ? new Map([[`${portParam}:${dow}:${hour}`, { p75: num(live.p75), p90: num(live.p90), days: num(live.days) }]])
+      : new Map();
+    congestionRel = relativeCongestion(bucket, portParam, num(live.at_berth), dow, hour);
+    congestionAsOf = snapTs;
+    if (congestionRel == null) notes.congestionRel = `unknown (baseline for this local hour needs ≥${BASELINE_MIN_DAYS} observed days)`;
+  }
+
+  // The gate (spec: metric catalog). Suppressed = null + note; NEVER a silent 0.
+  const stats = { uniqueVessels: null, recentArrivals7d: null, medianDwellMin: null, operatorMix: null, peakHours: null };
+  if (uniqueVessels >= PP_MIN_UNIQUE_VESSELS) stats.uniqueVessels = uniqueVessels;
+  else notes.uniqueVessels = `insufficient distinct vessels in window (${uniqueVessels} of ${PP_MIN_UNIQUE_VESSELS} needed)`;
+  if (arrivals7d >= PP_MIN_ARRIVALS_7D) stats.recentArrivals7d = arrivals7d;
+  else notes.recentArrivals7d = `insufficient arrivals in the last 7 days (${arrivals7d} of ${PP_MIN_ARRIVALS_7D} needed)`;
+  if (dwellObs >= PP_MIN_DWELL_OBS) stats.medianDwellMin = num(agg.median_dwell);
+  else notes.medianDwellMin = `insufficient dwell observations (${dwellObs} of ${PP_MIN_DWELL_OBS} needed)`;
+  if (arrived45 >= PP_MIN_OPERATOR_ARRIVALS) {
+    stats.operatorMix = opRows.map((r) => ({ operator: r.operator, trips: num(r.n), share: Math.round((num(r.n) / arrived45) * 100) / 100 }));
+  } else notes.operatorMix = `insufficient arrivals for an operator mix (${arrived45} of ${PP_MIN_OPERATOR_ARRIVALS} needed)`;
+  notes.peakHours = 'not yet served (unlocks at ≥100 arrivals — PR-5)';
+
+  // Coverage block — ALWAYS (the honesty layer: how complete was observation over the window).
+  const covN = num(cov?.n) || 0;
+  const coverage = {
+    windowDays: PP_COVERAGE_WINDOW_DAYS,
+    snapshots: covN,
+    coverageFrac: covN > 0 ? Math.round((num(cov.n_ok) / covN) * 1000) / 1000 : null,
+    lastDegradedAt: num(cov?.last_degraded_at),
+    sources: Object.fromEntries(srcRows.map((r) => [r.source, num(r.n)])),
+  };
+  if (covN === 0) notes.coverage = 'no snapshots in the coverage window';
+
+  return {
+    found: true, db: true, generatedAt: Date.now(),
+    port: {
+      portId: p.port_id, name: p.name, country: p.country, region: p.region || null,
+      tz: p.tz, commercial: !!p.commercial,
+    },
+    congestion: { relative: congestionRel, asOf: congestionAsOf },
+    stats,
+    counts: { arrived45d: arrived45, uniqueVessels, arrivals7d, dwellObs },
+    coverage,
     windowDays: PROFILE_WINDOW_DAYS,
     notes,
   };
@@ -771,6 +908,6 @@ module.exports = {
   markStalled, patchTripEta, bumpTripEtaSlip, backfillTripOrigin, backfillDestDwell,
   finalizeArrivedGeo, pruneTripPoints,
   // Phase C serving
-  queryTrip, queryVesselProfile,
+  queryTrip, queryVesselProfile, queryPortProfile,
   stats, COUNTRY_TZ, tzForCountry,
 };

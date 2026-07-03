@@ -78,8 +78,12 @@ Whole launch gated behind `/health` `trips.degraded===false` holding ≥1 week o
    seq-scan on `trips`, all ~100x under the 200 ms materialization trigger, so per the guard NO migration
    ships. Evidence + re-runnable check: `scripts/profile-queries-explain.sql` (re-run before PR-5 goes paid
    or if on-demand p95 creeps toward the trigger).
-3. **PR-3 (`get_vessel_profile`, ~2wk accrual):** on-demand, gates in the fn. Identity always ships.
-4. **PR-4 (`get_port_profile`, baselines warm n≥3):** reuses `relativeCongestion` + coverage_frac + gated aggregates.
+3. ~~**PR-3 (`get_vessel_profile`)**~~ **SHIPPED 2026-07-03 (#85):** on-demand, gates in the fn, identity
+   always. Stats unlock as accrual matures (~mid-July). Window anchors on `arrived_at` (an arrival counts
+   when it ARRIVED in-window — review catch, fixed in PR-4's branch).
+4. ~~**PR-4 (`get_port_profile`)**~~ **SHIPPED 2026-07-03:** identity + coverage block always; live
+   congestion reuses the `relativeCongestion` gate fed from the LATEST stored snapshot + matching local
+   dow×hour baseline bucket (fully DB-side — no relay in-memory state); aggregates gated per catalog.
 5. **PR-5 (metric unlock, ~4wk+):** on_time / peak_hours / arrivals_per_day unlock as gates clear; add the
    3 tools to the tool-grounding eval; shareable arrived-trip deep-links + free/paid split.
 6. **PR-6 (materialize — ONLY if the trigger fires):** migration 006 vessel_stats/port_stats + nightly refresh +
