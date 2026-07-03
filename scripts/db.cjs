@@ -589,6 +589,10 @@ const VP_MIN_SPEED_OBS = 3;     // avg_speed_kn needs ≥3 finalized speeds
 const VP_MIN_ROUTE_REPEAT = 3;  // top_routes: the top route must repeat ≥3×…
 const VP_MIN_DISTINCT_ROUTES = 3; // …and the vessel must have ≥3 distinct routes in window
 const VP_DORMANT_MS = 7 * 24 * 60 * 60_000; // no arrival in >7d → dormant flag
+const VP_MIN_ONTIME_ELIGIBLE = 20; // on_time_fraction needs ≥20 eligible trips (PR-5 metric unlock)
+// Fleet-wide +15 min tolerance (matches queryTrip's onTime.toleranceMin). Open decision #5 in
+// PHASE_C_SCOPE.md — per-operator/configurable tolerance would replace this one constant.
+const VP_ONTIME_TOLERANCE_MIN = 15;
 
 /**
  * One vessel's profile by mmsi: identity (always) + gated 45d stats + lifetime counters.
@@ -626,7 +630,12 @@ async function queryVesselProfile({ mmsi } = {}) {
                    AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS avg_speed,
                  count(DISTINCT origin_port_id || '>' || dest_port_id) FILTER (WHERE status = 'arrived'
                    AND origin_port_id IS NOT NULL
-                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS distinct_routes
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS distinct_routes,
+                 count(*) FILTER (WHERE status = 'arrived' AND departure_eta IS NOT NULL
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS ontime_eligible,
+                 count(*) FILTER (WHERE status = 'arrived' AND departure_eta IS NOT NULL
+                   AND arrived_at <= departure_eta + make_interval(mins => ${VP_ONTIME_TOLERANCE_MIN})
+                   AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})) AS ontime_hits
           FROM trips WHERE mmsi = ${mmsiParam}`,
       // Routes need an OBSERVED origin (~5%+ of opens are mid-sea → origin null → excluded, noted below).
       sql`SELECT t.origin_port_id, t.dest_port_id, count(*) AS n,
@@ -651,9 +660,11 @@ async function queryVesselProfile({ mmsi } = {}) {
   const speedObs = num(agg?.speed_obs) || 0;
   const distinctRoutes = num(agg?.distinct_routes) || 0;
   const lastArrival = num(agg?.last_arrival);
+  const ontimeEligible = num(agg?.ontime_eligible) || 0;
+  const ontimeHits = num(agg?.ontime_hits) || 0;
 
   // The gate (spec: metric catalog). Suppressed = null + note; NEVER a silent 0.
-  const stats = { tripsArrivedTotal: arrivedTotal, tripsArrived45d: null, medianDwellMin: null, avgSpeedKn: null, topRoutes: null };
+  const stats = { tripsArrivedTotal: arrivedTotal, tripsArrived45d: null, medianDwellMin: null, avgSpeedKn: null, topRoutes: null, onTimeFraction: null };
   if (arrived45 >= VP_MIN_ARRIVED_45D) stats.tripsArrived45d = arrived45;
   else notes.tripsArrived45d = `insufficient arrived trips in window (${arrived45} of ${VP_MIN_ARRIVED_45D} needed)`;
   if (dwellObs >= VP_MIN_DWELL_OBS) stats.medianDwellMin = num(agg.median_dwell);
@@ -672,7 +683,14 @@ async function queryVesselProfile({ mmsi } = {}) {
   } else {
     notes.topRoutes = `insufficient route history (${distinctRoutes} distinct route${distinctRoutes === 1 ? '' : 's'}, top repeat ${topRepeat}; need ≥${VP_MIN_DISTINCT_ROUTES} distinct and top ≥${VP_MIN_ROUTE_REPEAT})`;
   }
-  notes.onTimeFraction = 'not yet served (unlocks at ≥20 eligible trips — PR-5)';
+  // On-time = arrived within +tolerance of the ETA the leg DECLARED AT OPEN (departure_eta) — the
+  // promise made, not the last revised guess. Eligible = arrived trips where that promise exists.
+  if (ontimeEligible >= VP_MIN_ONTIME_ELIGIBLE) {
+    stats.onTimeFraction = Math.round((ontimeHits / ontimeEligible) * 100) / 100;
+    notes.onTimeFraction = `arrived within +${VP_ONTIME_TOLERANCE_MIN} min of the ETA declared at voyage open (${ontimeHits}/${ontimeEligible} eligible trips)`;
+  } else {
+    notes.onTimeFraction = `insufficient eligible trips (${ontimeEligible} of ${VP_MIN_ONTIME_ELIGIBLE} needed — needs an ETA observed at voyage open)`;
+  }
 
   // Dormant: had arrivals, but none in >7d. No arrivals at all is its own (weaker) note.
   let dormant = false;
@@ -692,7 +710,7 @@ async function queryVesselProfile({ mmsi } = {}) {
       firstSeen: num(v.first_seen), lastSeen: num(v.last_seen), lastArrival, dormant,
     },
     stats,
-    counts: { arrived45d: arrived45, dwellObs, speedObs, distinctRoutes, topRepeat },
+    counts: { arrived45d: arrived45, dwellObs, speedObs, distinctRoutes, topRepeat, ontimeEligible },
     windowDays: PROFILE_WINDOW_DAYS,
     notes,
   };
@@ -709,6 +727,9 @@ const PP_MIN_DWELL_OBS = 3;
 const PP_MIN_OPERATOR_ARRIVALS = 20; // operator_mix needs ≥20 arrivals in window
 const PP_SNAPSHOT_FRESH_MS = 15 * 60_000; // live congestion only off a fresh (<15 min) snapshot
 const PP_COVERAGE_WINDOW_DAYS = 7;   // coverage block = last 7d of snapshots
+const PP_MIN_PEAK_ARRIVALS = 100;    // peak_hours needs ≥100 arrivals in window (PR-5 metric unlock)
+const PP_MIN_RATE_ARRIVALS = 20;     // arrivals_per_day needs ≥20 arrivals…
+const PP_MIN_RATE_DAYS = 3;          // …spread over ≥3 distinct local days (else the rate is noise)
 
 /**
  * One port's profile by port_id: identity (always) + live relative congestion (gated) + gated 45d
@@ -722,18 +743,26 @@ async function queryPortProfile({ port } = {}) {
   if (!portParam) return { found: false, db: true, generatedAt: Date.now() };
 
   const num = (x) => (x == null ? null : Number(x));
-  let p, agg, opRows, cov, srcRows, live;
+  let p, agg, peakRows, opRows, cov, srcRows, live;
   try {
-    const [prows, aggRows, orows, covRows, srows, lrows] = await Promise.all([
+    const [prows, aggRows, pkrows, orows, covRows, srows, lrows] = await Promise.all([
       sql`SELECT port_id, name, country, region, tz, commercial FROM ports WHERE port_id = ${portParam}`,
       sql`SELECT count(*) AS arrived_45d,
                  count(DISTINCT mmsi) AS unique_vessels,
                  count(*) FILTER (WHERE arrived_at >= now() - interval '7 days') AS arrivals_7d,
                  count(dest_dwell_min) AS dwell_obs,
-                 percentile_cont(0.5) WITHIN GROUP (ORDER BY dest_dwell_min) AS median_dwell
-          FROM trips
+                 percentile_cont(0.5) WITHIN GROUP (ORDER BY dest_dwell_min) AS median_dwell,
+                 count(DISTINCT (t.arrived_at AT TIME ZONE p.tz)::date) AS arrival_days,
+                 extract(epoch from (now() - min(t.arrived_at))) AS span_sec
+          FROM trips t JOIN ports p ON p.port_id = t.dest_port_id
           WHERE dest_port_id = ${portParam} AND status = 'arrived'
             AND arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})`,
+      // Peak arrival hours in the port's LOCAL time (congestion follows local working hours).
+      sql`SELECT EXTRACT(hour FROM t.arrived_at AT TIME ZONE p.tz)::int AS hr, count(*) AS n
+          FROM trips t JOIN ports p ON p.port_id = t.dest_port_id
+          WHERE t.dest_port_id = ${portParam} AND t.status = 'arrived'
+            AND t.arrived_at >= now() - make_interval(days => ${PROFILE_WINDOW_DAYS})
+          GROUP BY 1 ORDER BY n DESC, hr LIMIT 3`,
       sql`SELECT coalesce(v.operator_name, v.operator_id, 'unknown') AS operator, count(*) AS n
           FROM trips t LEFT JOIN vessels v ON v.mmsi = t.mmsi
           WHERE t.dest_port_id = ${portParam} AND t.status = 'arrived'
@@ -763,6 +792,7 @@ async function queryPortProfile({ port } = {}) {
     ]);
     p = prows && prows[0];
     agg = aggRows && aggRows[0];
+    peakRows = pkrows || [];
     opRows = orows || [];
     cov = covRows && covRows[0];
     srcRows = srows || [];
@@ -801,7 +831,7 @@ async function queryPortProfile({ port } = {}) {
   }
 
   // The gate (spec: metric catalog). Suppressed = null + note; NEVER a silent 0.
-  const stats = { uniqueVessels: null, recentArrivals7d: null, medianDwellMin: null, operatorMix: null, peakHours: null };
+  const stats = { uniqueVessels: null, recentArrivals7d: null, medianDwellMin: null, operatorMix: null, peakHours: null, arrivalsPerDay: null };
   if (uniqueVessels >= PP_MIN_UNIQUE_VESSELS) stats.uniqueVessels = uniqueVessels;
   else notes.uniqueVessels = `insufficient distinct vessels in window (${uniqueVessels} of ${PP_MIN_UNIQUE_VESSELS} needed)`;
   if (arrivals7d >= PP_MIN_ARRIVALS_7D) stats.recentArrivals7d = arrivals7d;
@@ -811,7 +841,22 @@ async function queryPortProfile({ port } = {}) {
   if (arrived45 >= PP_MIN_OPERATOR_ARRIVALS) {
     stats.operatorMix = opRows.map((r) => ({ operator: r.operator, trips: num(r.n), share: Math.round((num(r.n) / arrived45) * 100) / 100 }));
   } else notes.operatorMix = `insufficient arrivals for an operator mix (${arrived45} of ${PP_MIN_OPERATOR_ARRIVALS} needed)`;
-  notes.peakHours = 'not yet served (unlocks at ≥100 arrivals — PR-5)';
+  if (arrived45 >= PP_MIN_PEAK_ARRIVALS && peakRows.length) {
+    stats.peakHours = peakRows.map((r) => ({ hour: num(r.hr), arrivals: num(r.n) }));
+    notes.peakHours = `busiest arrival hours in ${p.tz} local time`;
+  } else {
+    notes.peakHours = `insufficient arrivals for peak hours (${arrived45} of ${PP_MIN_PEAK_ARRIVALS} needed)`;
+  }
+  // Rate over the OBSERVED span, not the full window — tracking younger than 45d must not read as
+  // a low rate. Span = earliest in-window arrival → now, floored at 1 day; gated on volume + spread.
+  const arrivalDays = num(agg?.arrival_days) || 0;
+  const spanDays = Math.max(1, (num(agg?.span_sec) || 0) / 86_400);
+  if (arrived45 >= PP_MIN_RATE_ARRIVALS && arrivalDays >= PP_MIN_RATE_DAYS) {
+    stats.arrivalsPerDay = Math.round((arrived45 / spanDays) * 10) / 10;
+    notes.arrivalsPerDay = `over the ${Math.round(spanDays * 10) / 10} observed days in window`;
+  } else {
+    notes.arrivalsPerDay = `insufficient history for a daily rate (${arrived45} arrivals over ${arrivalDays} day${arrivalDays === 1 ? '' : 's'}; need ≥${PP_MIN_RATE_ARRIVALS} over ≥${PP_MIN_RATE_DAYS} days)`;
+  }
 
   // Coverage block — ALWAYS (the honesty layer: how complete was observation over the window).
   const covN = num(cov?.n) || 0;
@@ -832,7 +877,7 @@ async function queryPortProfile({ port } = {}) {
     },
     congestion: { relative: congestionRel, asOf: congestionAsOf },
     stats,
-    counts: { arrived45d: arrived45, uniqueVessels, arrivals7d, dwellObs },
+    counts: { arrived45d: arrived45, uniqueVessels, arrivals7d, dwellObs, arrivalDays },
     coverage,
     windowDays: PROFILE_WINDOW_DAYS,
     notes,

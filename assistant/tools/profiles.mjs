@@ -42,7 +42,8 @@ export const profileTools = [
     description:
       'Look up ONE vessel\'s profile by MMSI: identity (name, IMO, operator, category, dimensions — always '
       + 'present) plus gated 45-day stats (arrived-trip count, median destination dwell, average underway '
-      + 'speed, top repeated routes) and lifetime arrival count. A stat below its evidence threshold comes '
+      + 'speed, top repeated routes, on-time fraction vs the ETA declared at voyage open) and lifetime '
+      + 'arrival count. A stat below its evidence threshold comes '
       + 'back null with the reason in `notes` (e.g. "insufficient dwell observations (1 of 3 needed)") — '
       + 'ALWAYS lead with that note and never present a suppressed stat as zero. `vessel.dormant` means no '
       + 'arrival in >7 days. Use get_trip for a single voyage; this is the vessel\'s track record. '
@@ -73,7 +74,7 @@ export const profileTools = [
       + 'a coverage block (always present — how completely the port was observed: coverage fraction, source '
       + 'mix, last degraded time) plus live relative congestion vs the port\'s own normal for this local hour '
       + '(null means "unknown", NEVER "clear") and gated 45-day arrival stats (unique vessels, arrivals last '
-      + '7 days, median dwell, operator mix). A stat below its evidence threshold comes back null with the '
+      + '7 days, median dwell, operator mix, peak arrival hours in local time, average arrivals per day). A stat below its evidence threshold comes back null with the '
       + 'reason in `notes` — ALWAYS lead with that note and never present a suppressed stat as zero, and '
       + 'never read congestion null as "not congested". Stats cover tracked freight vessels only, NOT total '
       + 'port throughput. Use get_vessel_profile for a vessel, get_trip for a voyage. Read-only.',
