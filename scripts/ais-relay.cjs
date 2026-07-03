@@ -4782,6 +4782,15 @@ const handleRequest = async (req, res) => {
     const terminal = !!(payload.found && payload.trip && payload.trip.status !== 'open');
     const cache = terminal ? 'public, max-age=3600, s-maxage=86400' : 'public, max-age=30, s-maxage=30';
     return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': cache }, JSON.stringify(payload));
+  } else if (pathname === '/ais/vessel-profile') {
+    // Phase C get_vessel_profile: identity ALWAYS + gated 45d stats, computed in db.queryVesselProfile
+    // (single-gate — no consumer re-derives). PRIVATE (inherits the x-relay-key guard). On-demand by
+    // design (thin data must never freeze); stats only move when a trip closes → modest cache.
+    const q = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+    const payload = db.enabled
+      ? await db.queryVesselProfile({ mmsi: q.get('mmsi') || undefined })
+      : { found: false, db: false, generatedAt: Date.now() };
+    return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300, s-maxage=600' }, JSON.stringify(payload));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;

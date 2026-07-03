@@ -1,4 +1,4 @@
-// Phase C profile tools — get_trip ships first (get_vessel_profile / get_port_profile follow). All
+// Phase C profile tools — get_trip + get_vessel_profile (get_port_profile follows). All
 // read-only, served by the relay's DB-backed /ais/* endpoints. The sufficiency gate / field flags are
 // computed server-side (scripts/db.cjs), so this layer just relays the already-flagged payload — no
 // re-derivation, no db import (stays on the clean HTTP boundary via relayGet).
@@ -34,6 +34,35 @@ export const profileTools = [
         return { ...rest, hasTrack: Array.isArray(track) && track.length > 0 };
       } catch {
         return { found: false, error: 'trip lookup failed' };
+      }
+    },
+  },
+  {
+    name: 'get_vessel_profile',
+    description:
+      'Look up ONE vessel\'s profile by MMSI: identity (name, IMO, operator, category, dimensions — always '
+      + 'present) plus gated 45-day stats (arrived-trip count, median destination dwell, average underway '
+      + 'speed, top repeated routes) and lifetime arrival count. A stat below its evidence threshold comes '
+      + 'back null with the reason in `notes` (e.g. "insufficient dwell observations (1 of 3 needed)") — '
+      + 'ALWAYS lead with that note and never present a suppressed stat as zero. `vessel.dormant` means no '
+      + 'arrival in >7 days. Use get_trip for a single voyage; this is the vessel\'s track record. '
+      + 'Scope: freight vessels to tracked EU commercial ports only. Read-only.',
+    input_schema: {
+      type: 'object',
+      properties: {
+        mmsi: { type: 'string', description: 'vessel MMSI' },
+      },
+      required: ['mmsi'],
+      additionalProperties: false,
+    },
+    handler: async ({ mmsi }) => {
+      if (!mmsi) return { found: false, error: 'provide mmsi' };
+      try {
+        const res = await relayGet(`/ais/vessel-profile?mmsi=${encodeURIComponent(mmsi)}`);
+        if (!res || res.found === false) return { found: false, ...(res && res.notes ? { notes: res.notes } : {}) };
+        return res;
+      } catch {
+        return { found: false, error: 'vessel profile lookup failed' };
       }
     },
   },
