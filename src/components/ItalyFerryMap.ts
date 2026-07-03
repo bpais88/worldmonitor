@@ -12,7 +12,7 @@ import { EUROPE_BBOX, type Bbox } from '@/config/italy-ferries';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
-import { fetchTripByMmsi, type TripDetail } from '@/services/logistics/trip-detail';
+import { fetchTripByMmsi, fetchTripById, type TripDetail } from '@/services/logistics/trip-detail';
 import { VoyageReplay } from './VoyageReplay';
 
 // Same basemap as DeckGLMap (keyless Carto vector style).
@@ -114,12 +114,38 @@ function voyageHtml(d: TripDetail): string {
       return note ? `<div class="ferry-popup-chip">${escapeHtml(CHIP_LABEL[f] ?? f)}: ${escapeHtml(note)}</div>` : '';
     })
     .join('');
+  // Shareable deep-link (?trip=<id>): an arrived trip is immutable → a permanent voyage record;
+  // an open one shares the live leg. Bound to a click handler after the popup HTML is set.
+  const share = `<button type="button" class="ferry-share-btn" data-trip-id="${t.id}">🔗 ${t.status === 'arrived' ? 'Copy voyage link' : 'Copy live voyage link'}</button>`;
   return `<div class="ferry-popup-voyage">
     <div class="ferry-popup-voyage-title">Voyage · ${escapeHtml(t.status)}</div>
     <div class="ferry-popup-row">${route}</div>
     ${rows.join('')}
     ${chips}
+    ${share}
   </div>`;
+}
+
+/** Popup header for a deep-linked trip (the vessel may not be on the live board any more). */
+function tripHeaderHtml(d: TripDetail): string {
+  const t = d.trip;
+  if (!t) return '';
+  const name = t.vesselName || `MMSI ${t.mmsi}`;
+  const op = t.operator ? `<div class="ferry-popup-op">${escapeHtml(t.operator)}</div>` : '';
+  return `<div class="ferry-popup">
+    <div class="ferry-popup-name">${escapeHtml(name)}</div>
+    ${op}
+  </div>`;
+}
+
+/** Rewrite the `?trip=` param in place (no navigation) so the current voyage view is shareable. */
+function setTripUrlParam(id: number | null): void {
+  try {
+    const url = new URL(window.location.href);
+    if (id == null) url.searchParams.delete('trip');
+    else url.searchParams.set('trip', String(id));
+    window.history.replaceState(null, '', url);
+  } catch { /* older browsers / sandboxed iframes — sharing is best-effort */ }
 }
 
 
@@ -131,6 +157,7 @@ export class ItalyFerryMap {
   private zonesVisible = false;
   private popup: maplibregl.Popup;
   private replay: VoyageReplay | null = null;   // voyage replay overlay (route + trail + waypoints + playhead)
+  private pendingTripId: number | null = null;  // `?trip=` deep-link that arrived before the map was ready
   private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
 
   constructor(container: HTMLElement) {
@@ -146,7 +173,7 @@ export class ItalyFerryMap {
       pitchWithRotate: false,
     });
     this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 12 });
-    this.popup.on('close', () => { this.selectedMmsi = null; this.replay?.clear(); });
+    this.popup.on('close', () => { this.selectedMmsi = null; this.replay?.clear(); setTripUrlParam(null); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
   }
@@ -240,6 +267,10 @@ export class ItalyFerryMap {
       this.setGeofences(this.pendingGeofences);
       this.pendingGeofences = null;
     }
+    if (this.pendingTripId != null) {
+      void this.openTripById(this.pendingTripId);
+      this.pendingTripId = null;
+    }
     this.applyZonesVisibility();
   }
 
@@ -287,6 +318,48 @@ export class ItalyFerryMap {
     if (this.selectedMmsi !== mmsi || !detail.found) return; // superseded by another click, or no trip
     if (detail.track && detail.track.length) this.replay?.load(detail.track); // replay overlay + controls
     this.popup.setHTML(popupHtml(props) + voyageHtml(detail));
+    if (detail.trip) setTripUrlParam(detail.trip.id); // make the current voyage view shareable
+    this.bindShare();
+  }
+
+  /**
+   * Open a voyage from a `?trip=<id>` deep-link — the shareable arrived-trip record (an open trip
+   * shows its live leg). The vessel may no longer be on the live board, so the popup is built from
+   * the trip record itself and anchored to the end of the track (or the map centre when sparse).
+   */
+  public async openTripById(id: number): Promise<void> {
+    if (!Number.isFinite(id)) return;
+    if (!this.ready) { this.pendingTripId = id; return; } // replayed from onLoad()
+    let detail: TripDetail;
+    try {
+      detail = await fetchTripById(id);
+    } catch {
+      return; // relay/proxy hiccup — leave the board as-is
+    }
+    if (!detail.found || !detail.trip) { setTripUrlParam(null); return; } // stale link (expired/unknown id)
+    this.selectedMmsi = detail.trip.mmsi;
+    const track = detail.track && detail.track.length ? detail.track : null;
+    if (track) this.replay?.load(track); // frames the whole voyage (fit-to-track inside load)
+    const last = track ? track[track.length - 1] : null;
+    const at: [number, number] = last ? [last.lon, last.lat] : this.map.getCenter().toArray() as [number, number];
+    this.popup.setLngLat(at).setHTML(tripHeaderHtml(detail) + voyageHtml(detail)).addTo(this.map);
+    setTripUrlParam(detail.trip.id);
+    this.bindShare();
+  }
+
+  /** Wire the popup's share button: copy the deep-link, flash confirmation. (Popup HTML is a string.) */
+  private bindShare(): void {
+    const btn = this.popup.getElement()?.querySelector<HTMLButtonElement>('.ferry-share-btn');
+    btn?.addEventListener('click', () => {
+      const url = new URL(window.location.href);
+      url.searchParams.set('trip', btn.dataset.tripId || '');
+      void navigator.clipboard?.writeText(url.toString()).then(() => {
+        const label = btn.textContent;
+        btn.textContent = '✓ Link copied';
+        btn.disabled = true;
+        setTimeout(() => { btn.textContent = label; btn.disabled = false; }, 1500);
+      });
+    }, { once: false });
   }
 
   /** Build an upward-pointing arrow as an SDF icon so it can be tinted per status. */

@@ -312,6 +312,11 @@ export class ItalyFerryPanel extends Panel {
     const host = this.content.querySelector<HTMLElement>('.ferry-map-host');
     if (host) this.map = new ItalyFerryMap(host);
 
+    // `?trip=<id>` deep-link (Phase C shareable voyage record): open that voyage on boot. The map
+    // queues it until its style loads; a stale/unknown id quietly clears the param.
+    const tripParam = Number(new URLSearchParams(window.location.search).get('trip'));
+    if (Number.isFinite(tripParam) && tripParam > 0) void this.map?.openTripById(tripParam);
+
     // Region filter: scopes both views to one country (or the Europe-wide union),
     // and zooms the map to that region. Switching region clears the operator filter
     // (a carrier present in one country may be absent in another).
