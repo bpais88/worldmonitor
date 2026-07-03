@@ -4791,6 +4791,16 @@ const handleRequest = async (req, res) => {
       ? await db.queryVesselProfile({ mmsi: q.get('mmsi') || undefined })
       : { found: false, db: false, generatedAt: Date.now() };
     return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300, s-maxage=600' }, JSON.stringify(payload));
+  } else if (pathname === '/ais/port-profile') {
+    // Phase C get_port_profile: identity + coverage ALWAYS, aggregates gated, live congestion reusing
+    // the relativeCongestion gate off the latest STORED snapshot — all computed in db.queryPortProfile
+    // (single-gate, no relay in-memory state). PRIVATE (x-relay-key). Congestion moves with the 5-min
+    // snapshot cadence → short cache.
+    const qp = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+    const ppPayload = db.enabled
+      ? await db.queryPortProfile({ port: qp.get('port') || undefined })
+      : { found: false, db: false, generatedAt: Date.now() };
+    return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=120' }, JSON.stringify(ppPayload));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;
