@@ -75,3 +75,9 @@ export function fetchTripByMmsi(mmsi: string): Promise<TripDetail> {
   const qs = `?mmsi=${encodeURIComponent(mmsi)}`;
   return relayFetch(`${TRIP_PROXY_URL}${qs}`, `${LOCAL_RELAY_TRIP_URL}${qs}`, parseTripDetail);
 }
+
+/** Fetch one trip by its numeric id (the `?trip=` deep-link). Arrived trips are immutable → a stable permalink. */
+export function fetchTripById(id: number): Promise<TripDetail> {
+  const qs = `?id=${encodeURIComponent(String(id))}`;
+  return relayFetch(`${TRIP_PROXY_URL}${qs}`, `${LOCAL_RELAY_TRIP_URL}${qs}`, parseTripDetail);
+}
