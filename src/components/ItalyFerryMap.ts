@@ -158,6 +158,7 @@ export class ItalyFerryMap {
   private popup: maplibregl.Popup;
   private replay: VoyageReplay | null = null;   // voyage replay overlay (route + trail + waypoints + playhead)
   private pendingTripId: number | null = null;  // `?trip=` deep-link that arrived before the map was ready
+  private voyageSeq = 0;                        // bumps on every selection/close; stale async voyage loads bail
   private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
 
   constructor(container: HTMLElement) {
@@ -173,7 +174,7 @@ export class ItalyFerryMap {
       pitchWithRotate: false,
     });
     this.popup = new maplibregl.Popup({ closeButton: true, closeOnClick: true, offset: 12 });
-    this.popup.on('close', () => { this.selectedMmsi = null; this.replay?.clear(); setTripUrlParam(null); });
+    this.popup.on('close', () => { this.selectedMmsi = null; this.voyageSeq++; this.replay?.clear(); setTripUrlParam(null); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
   }
@@ -308,6 +309,7 @@ export class ItalyFerryMap {
   private async loadVoyage(props: FerryFeatureProps): Promise<void> {
     const mmsi = props.mmsi;
     this.selectedMmsi = mmsi;
+    this.voyageSeq++; // a click supersedes any in-flight deep-link (or older) voyage load
     this.replay?.clear();
     let detail: TripDetail;
     try {
@@ -330,12 +332,14 @@ export class ItalyFerryMap {
   public async openTripById(id: number): Promise<void> {
     if (!Number.isFinite(id)) return;
     if (!this.ready) { this.pendingTripId = id; return; } // replayed from onLoad()
+    const seq = ++this.voyageSeq; // token: a vessel click (or popup close) while we fetch supersedes us
     let detail: TripDetail;
     try {
       detail = await fetchTripById(id);
     } catch {
       return; // relay/proxy hiccup — leave the board as-is
     }
+    if (seq !== this.voyageSeq) return; // the user selected something newer during the fetch — theirs wins
     if (!detail.found || !detail.trip) { setTripUrlParam(null); return; } // stale link (expired/unknown id)
     this.selectedMmsi = detail.trip.mmsi;
     const track = detail.track && detail.track.length ? detail.track : null;
