@@ -5,18 +5,24 @@
 --
 --   psql "$DATABASE_URL" -v mmsi=<busiest_mmsi> -v dest=<busiest_port> -f scripts/profile-queries-explain.sql
 --
--- Pick worst-case subjects first (busiest vessel / busiest destination port):
---   SELECT mmsi, count(*) FROM trips GROUP BY 1 ORDER BY 2 DESC LIMIT 1;
---   SELECT dest_port_id, count(*) FROM trips GROUP BY 1 ORDER BY 2 DESC LIMIT 1;
+-- Pick worst-case subjects first — with the SAME status/window predicates as the profiled shapes
+-- below, so once the table holds >45d of history (or traffic shifts) the picker can't hand the guard
+-- an all-time-busiest subject that is low-cardinality inside the actual 45d arrived window:
+--   SELECT mmsi, count(*) FROM trips
+--     WHERE status='arrived' AND opened_at >= now() - interval '45 days'
+--     GROUP BY 1 ORDER BY 2 DESC LIMIT 1;
+--   SELECT dest_port_id, count(*) FROM trips
+--     WHERE status='arrived' AND opened_at >= now() - interval '45 days'
+--     GROUP BY 1 ORDER BY 2 DESC LIMIT 1;
 --
--- Verdict 2026-07-03 (8,579 trips / 120,005 trip_points; mmsi 247128500 = 57 trips,
--- dest rotterdam = 2,202 trips): NO seq-scan on trips in any shape → per the spec,
--- NO covering index added. V1/V2 hit ix_trips_mmsi (mmsi + opened_at both as index
--- conditions), 0.2 ms. P1/P2 hit ix_trips_status_opened (planner prefers the
--- status+window index over ix_trips_dest at current cardinalities; either is fine —
--- it will switch as dest selectivity improves), 0.5–3.3 ms. The vessels seq-scan in
--- P2 is the hash-join build side over the whole (small) vessels table, not a guarded
--- trips scan. All ~100x under the 200 ms materialization trigger.
+-- Verdict 2026-07-03 (8,579 trips / 120k trip_points; subjects picked WITH the arrived+45d
+-- predicates: mmsi 563279500 = 19 arrived-in-window, dest rotterdam = 139 arrived-in-window):
+-- NO seq-scan on trips in any shape → per the spec, NO covering index added. V1/V2 hit
+-- ix_trips_mmsi (mmsi + opened_at both as index conditions), 0.2 ms. P1/P2 hit
+-- ix_trips_status_opened (planner prefers the status+window index over ix_trips_dest at
+-- current cardinalities; either is fine — it will switch as dest selectivity improves),
+-- 0.5–3.4 ms. The vessels seq-scan in P2 is the hash-join build side over the whole (small)
+-- vessels table, not a guarded trips scan. All ~100x under the 200 ms materialization trigger.
 
 \echo '=== V1: vessel 45d aggregate (get_vessel_profile)'
 EXPLAIN (ANALYZE, BUFFERS, COSTS OFF)
