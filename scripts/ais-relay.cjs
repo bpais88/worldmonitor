@@ -2415,8 +2415,9 @@ async function flushTripPoints() {
 }
 
 // Daily trips maintenance: abandon open trips that outlived the cap (never reached / dark / untracked
-// destination) and prune old closed trips' points (trip ROWS/aggregates are kept forever). Both are
-// status-guarded + idempotent in db.cjs, so re-runs are safe.
+// destination) and prune old ABANDONED trips' points. Arrived-trip points are kept forever — they are
+// the voyage-replay/route-history artifact (PHASE_C_SCOPE.md decision #2). Trip ROWS/aggregates are
+// kept forever regardless. Both sweeps are status-guarded + idempotent in db.cjs, so re-runs are safe.
 async function tripMaintenance() {
   if (!TRIPS_ENABLED || !db.enabled) return;
   const [abandonedIds, pruned] = await Promise.all([   // independent tables/filters — run concurrently
