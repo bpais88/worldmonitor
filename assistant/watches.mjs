@@ -136,6 +136,61 @@ function transitionMessage(w, prev, state, p, v) {
 }
 
 /**
+ * Proactive DISRUPTION alerts (M4, spec assistant/DISRUPTION_SOURCES_SCOPE.md). Unlike the
+ * transition watches above, a scheduled strike is a one-shot fact, not a flapping signal — so no
+ * dwell; instead each watch remembers which event ids it already announced (notifiedEvents,
+ * capped) and never repeats one. Owner decisions honored here:
+ *   - port_congestion watches AUTO-INCLUDE their port's disruption alerts (watching a port means
+ *     hearing about its strikes) + the dedicated 'port_disruption' type is disruptions-only.
+ *   - pushes are OFFICIAL-CALENDAR ONLY (kind 'strike_scheduled', confidence ~0.9): news-matched
+ *     reports stay pull-only via get_upcoming_disruptions — a hedged headline must never page you.
+ * `fetchPortDisruptions(portId)` is injected (the host wires it to /ais/disruptions?port=, which
+ * already applies the 7-day lookahead + area matching) so this stays testable without network.
+ */
+const NOTIFIED_CAP = 50;
+
+export async function evaluateDisruptionWatches({ ports = [], fetchPortDisruptions }, now = Date.now()) {
+  if (typeof fetchPortDisruptions !== 'function') return [];
+  const watches = (await listWatches()).filter((w) => w.type === 'port_congestion' || w.type === 'port_disruption');
+  if (!watches.length) return [];
+
+  // One relay call per DISTINCT watched port, not per watch.
+  const byPort = new Map(); // portId -> { port, watches: [] }
+  for (const w of watches) {
+    const p = matchPort(ports, w.target);
+    if (!p) continue; // unknown target -> silent (the congestion path reports 'unknown' already)
+    const e = byPort.get(p.portId) || { port: p, watches: [] };
+    e.watches.push(w);
+    byPort.set(p.portId, e);
+  }
+
+  const alerts = [];
+  for (const [portId, { port, watches: ws }] of byPort) {
+    let events = [];
+    try { events = (await fetchPortDisruptions(portId)) || []; } catch { continue; } // best-effort per port
+    const scheduled = events.filter((e) => e.kind === 'strike_scheduled' && e.id);
+    if (!scheduled.length) continue;
+    for (const w of ws) {
+      const seen = new Set(w.notifiedEvents || []);
+      let dirty = false;
+      for (const e of scheduled) {
+        if (seen.has(e.id)) continue;
+        seen.add(e.id);
+        dirty = true;
+        const days = e.startsAt != null ? Math.ceil((e.startsAt - now) / 86_400_000) : null;
+        const when = e.startsAt == null ? '' : days > 1 ? ` — starts ${new Date(e.startsAt).toISOString().slice(0, 10)} (in ${days} days)` : days === 1 ? ' — starts TOMORROW' : ' — in effect';
+        alerts.push({ watch: w, message: `⚠️ *Scheduled strike affecting ${port.name}*${when}\n${e.summary}\n_Source: official strike registry · you're watching ${port.name} — say "stop watching ${port.name}" to mute._` });
+      }
+      if (dirty) {
+        w.notifiedEvents = [...seen].slice(-NOTIFIED_CAP);
+        await kvSet(key(w.id), w);
+      }
+    }
+  }
+  return alerts;
+}
+
+/**
  * Evaluate all watches against fresh { ports, vessels } at time `now`. Returns
  * [{ watch, message }] for SUSTAINED transitions worth alerting, and persists
  * state. First evaluation just records a baseline (no alert). A raw state flip

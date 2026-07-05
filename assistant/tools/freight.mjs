@@ -235,7 +235,9 @@ export const freightTools = [
       + '(IT/GB/ES/NL) and/or port id. kind "strike_scheduled" (confidence ~0.9, has startsAt) is an '
       + 'official calendar entry — state its date plainly; kind "strike_report" is a news match — '
       + 'present it hedged ("reportedly", "according to news"). Use for "any strikes coming up", '
-      + '"will anything disrupt my shipments next week", "is there a strike at X".',
+      + '"will anything disrupt my shipments next week", "is there a strike at X". After answering, '
+      + 'OFFER to create a port_disruption watch (create_watch) so the user is alerted automatically '
+      + 'when new strikes are scheduled for their ports.',
     input_schema: {
       type: 'object',
       properties: {

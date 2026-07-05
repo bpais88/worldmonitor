@@ -61,18 +61,21 @@ no match → "no known disruption reported". Voice re-provision after the tool-d
 - Deferred from M3: port-authority operational notices (Rotterdam/Valencia/Genoa) — revisit if
   the news layer proves too thin.
 
-## M4 — Proactive disruption notifications
+## M4 — Proactive disruption notifications (SHIPPED 2026-07-05)
 
-New watch type `port_disruption` on the EXISTING watch ticker (assistant/server.mjs — evaluate →
-state-change → platform-neutral send()). Port-congestion watches auto-include their port's
-disruption alerts; Marco offers watches in conversation. Upstash dedupe per disruption id (one
-strike ≠ daily spam). Pull tool `get_upcoming_disruptions` (next 7 days, per port/country).
-Delivery: Slack/Teams/Telegram now; WhatsApp needs pre-approved templates outside the 24h session
-window (defer); voice = outbound calls (park).
+`evaluateDisruptionWatches` in assistant/watches.mjs, on the EXISTING ticker (same tick, same
+platform-neutral send()): port_congestion watches AUTO-INCLUDE their port's scheduled-strike
+alerts (owner decision) + new watch type `port_disruption` (disruptions only). One-shot semantics
+(a strike is a fact, not a flapping signal): per-watch `notifiedEvents` dedupe (capped 50,
+persisted) — one strike never pages twice. One /ais/disruptions?port= fetch per DISTINCT watched
+port per tick (relay applies the 7-day lookahead + area matching). Marco offers a watch after
+answering get_upcoming_disruptions. Delivery: whatever platform the watch was created on
+(Slack/Teams work today; WhatsApp templates + voice outbound stay deferred).
 
-## Open questions (revisit at M3/M4)
+## Open questions
 
-1. Confidence floor for proactive pushes (only official/structured sources? news ≥0.45?).
+1. ~~Confidence floor for proactive pushes~~ RESOLVED in M4: pushes are OFFICIAL-CALENDAR ONLY
+   (kind strike_scheduled); news-matched reports stay pull-only — a hedged headline never pages.
 2. Quiet hours / digest batching for multi-disruption days.
 3. Whether GB weather alerts need the Met Office CAP feed instead of Meteoalarm (UK feed exists
    but had 0 active entries when checked — verify it populates during a real warning).
