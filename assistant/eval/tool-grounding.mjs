@@ -43,7 +43,13 @@ const CASES = [
   { q: "What's Rotterdam's track record — median dwell time and which operators call there?", expect: ['get_port_profile'] },
 ];
 
+// An API-level rejection (billing/auth/quota) means the eval COULD NOT RUN — that must never be
+// reported as "Marco answered from memory" (a behavioural regression it isn't). Detect, abort the
+// remaining cases (they'd all fail the same way), and exit with a distinct message + code.
+const API_OUTAGE_RE = /credit balance|billing|authentication_error|invalid x-api-key|rate_limit_error|overloaded_error/i;
+
 let failures = 0;
+let apiErrors = 0;
 for (const c of CASES) {
   try {
     const { calls } = await runAgent({ userText: c.q, tools: STUB_TOOLS, system: SYSTEM });
@@ -51,11 +57,22 @@ for (const c of CASES) {
     console.log(`${hit ? '✅' : '❌'} "${c.q}"  → called: [${calls.join(', ') || 'none'}]  (expected one of: ${c.expect.join(', ')})`);
     if (!hit) failures++;
   } catch (e) {
-    console.log(`❌ "${c.q}"  → ERROR: ${e.message}`);
+    const msg = String(e && e.message || e);
+    console.log(`❌ "${c.q}"  → ERROR: ${msg}`);
     failures++;
+    apiErrors++;
+    if (API_OUTAGE_RE.test(msg)) {
+      console.log('\n⛔ The Anthropic API rejected the call (billing/auth/quota) — the eval could not run.');
+      console.log('   This is an INFRASTRUCTURE failure, NOT a grounding regression. Fix the account behind');
+      console.log('   the ANTHROPIC_API_KEY secret (console.anthropic.com → Plans & Billing) and re-run.');
+      process.exit(2);
+    }
   }
 }
 
 console.log(`\n${CASES.length - failures}/${CASES.length} grounded.` +
-  (failures ? ` ${failures} MISSED — Marco answered from memory instead of calling a tool.` : ' Every question triggered the right tool.'));
+  (failures
+    ? (apiErrors ? ` ${failures} failed (${apiErrors} were API errors — see above; only the rest are potential grounding misses).`
+                 : ` ${failures} MISSED — Marco answered from memory instead of calling a tool.`)
+    : ' Every question triggered the right tool.'));
 process.exit(failures ? 1 : 0);
