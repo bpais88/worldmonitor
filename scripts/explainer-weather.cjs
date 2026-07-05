@@ -76,17 +76,19 @@ const MS_TO_KTS = 1.94384;
 /** Fetch marine wave height + wind at a position (Open-Meteo, keyless). */
 async function fetchMarineWeather(lat, lon, timeoutMs = 8000) {
   const marineUrl = `https://marine-api.open-meteo.com/v1/marine?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=wave_height`;
-  const windUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=wind_speed_10m,visibility`;
+  const windUrl = `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(2)}&longitude=${lon.toFixed(2)}&current=wind_speed_10m,wind_gusts_10m,visibility`;
   const [marine, wind] = await Promise.allSettled([
     getJson(marineUrl, timeoutMs),
     getJson(windUrl, timeoutMs),
   ]);
   const waveHeightM = marine.status === 'fulfilled' ? marine.value?.current?.wave_height : undefined;
   const windMs = wind.status === 'fulfilled' ? wind.value?.current?.wind_speed_10m : undefined;
+  const gustMs = wind.status === 'fulfilled' ? wind.value?.current?.wind_gusts_10m : undefined;
   const visibilityM = wind.status === 'fulfilled' ? wind.value?.current?.visibility : undefined;
   return {
     waveHeightM: Number.isFinite(waveHeightM) ? waveHeightM : undefined,
     windKts: Number.isFinite(windMs) ? windMs * MS_TO_KTS : undefined,
+    windGustKts: Number.isFinite(gustMs) ? gustMs * MS_TO_KTS : undefined, // crane-limit inference (port context)
     visibilityM: Number.isFinite(visibilityM) ? visibilityM : undefined,
   };
 }

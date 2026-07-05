@@ -22,7 +22,13 @@ export const DEFAULT_SYSTEM =
   'Some tools take ACTIONS (saving files, posting to Slack). If an action tool ' +
   'returns {blocked}, tell the user it needs actions enabled and DO NOT retry it. ' +
   'If it returns {dryRun}, tell the user exactly what you would do and that it was ' +
-  'not performed. Never claim an action succeeded unless the tool result confirms it.';
+  'not performed. Never claim an action succeeded unless the tool result confirms it.\n\n' +
+  'Port payloads may include `context`: CANDIDATE reasons for busyness (news headline, official ' +
+  'weather alert, crane-wind conditions, above-own-baseline anomaly), each with a confidence. ' +
+  'These are HEDGED causality — present them as "possibly related" or "an official warning is ' +
+  'active", NEVER as the established cause (especially news matches, which are low-confidence). ' +
+  'Cite the source kind. If a user asks WHY a port is busy and there is no context, say plainly ' +
+  'that no disruption is currently reported and the numbers alone do not say why.';
 
 const MAX_STEPS = 6;
 

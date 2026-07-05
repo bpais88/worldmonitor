@@ -1761,11 +1761,13 @@ function portFeed(lat, lon, aisFresh, marinesiaOk, now = Date.now()) {
   return { source: italy ? 'marinesia' : 'aisstream', coverageOk: false };
 }
 const { runExplainers } = require('./delay-explainers.cjs');
-const { weatherExplainer } = require('./explainer-weather.cjs');
-const { newsExplainer } = require('./explainer-news.cjs');
+const { craneWindReason, baselineAnomalyReason, assemblePortContext } = require('./port-context.cjs');
+const { sourcesFor } = require('./country-sources.cjs');
+const { weatherExplainer, fetchMarineWeather } = require('./explainer-weather.cjs');
+const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
-const { fetchMeteoalarmAll, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
+const { fetchMeteoalarmAll, makeMeteoalarmExplainer, matchMeteoalarm } = require('./explainer-meteoalarm.cjs');
 const { ITALY_TILES, ITALY_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
@@ -2204,6 +2206,61 @@ async function enrichFerryDelays(now = Date.now()) {
 
 function startFerryEnrichLoop() {
   setInterval(() => { void enrichFerryDelays(); }, ENRICH_INTERVAL_MS).unref?.();
+}
+
+// --- Port context (M2, spec assistant/DISRUPTION_SOURCES_SCOPE.md) --------------------------
+// The "why is this port busy?" layer: for each currently busy/congested port, gather hedged
+// candidate reasons — local-press news match, official weather alerts, crane-wind inference,
+// and the port's own baseline anomaly — cached and bounded (external calls off the hot path,
+// same discipline as enrichFerryDelays). /ais/ports and /ais/port-profile attach the cache.
+const portContextCache = new Map(); // portId -> { context: Reason[], ts }
+const PORT_CONTEXT_TTL_MS = 30 * 60_000;   // a port's context is refreshed at most this often
+const PORT_CONTEXT_INTERVAL_MS = 5 * 60_000;
+const PORT_CONTEXT_MAX_PER_PASS = 4;       // bound external calls (news+weather per port) per pass
+
+function baselineBucketFor(portId, now = Date.now()) {
+  const { dow, hour } = portLocalDowHour(now, PORT_TZ.get(portId));
+  return portBaselines.get(`${portId}:${dow}:${hour}`) || null;
+}
+
+async function refreshPortContext(now = Date.now()) {
+  const freight = buildFreightVesselList();
+  const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, freight, resolveDestinationPort, now, {}, (p) => p.commercial);
+  const busy = ports.filter((p) => p.congestion === 'busy' || p.congestion === 'congested');
+  const due = busy
+    .filter((p) => { const c = portContextCache.get(p.portId); return !c || now - c.ts > PORT_CONTEXT_TTL_MS; })
+    .slice(0, PORT_CONTEXT_MAX_PER_PASS);
+  for (const p of due) {
+    const meta = ITALY_PORTS_BY_ID[p.portId] || {};
+    const country = meta.country || 'IT';
+    let newsReason = null;
+    let weather = null;
+    try {
+      const noun = (sourcesFor(country) || sourcesFor('IT')).news.freightNoun;
+      const items = await fetchNews(`${p.name} ${noun}`, 8000, country);
+      newsReason = matchNewsToDelay(items, { portName: p.name, destCountry: country }, now);
+    } catch { /* news is best-effort */ }
+    try {
+      if (Number.isFinite(meta.lat) && Number.isFinite(meta.lon)) weather = await fetchMarineWeather(meta.lat, meta.lon);
+    } catch { /* weather is best-effort */ }
+    const alertReason = matchMeteoalarm(meteoalarmWarnings || [], { destPortId: p.portId, destCountry: country, destRegion: meta.region }, now);
+    const context = assemblePortContext([
+      newsReason,
+      alertReason,
+      craneWindReason(weather || {}),
+      baselineAnomalyReason({ atBerth: p.atBerth, bucket: baselineBucketFor(p.portId, now) }),
+    ]);
+    portContextCache.set(p.portId, { context, ts: now });
+  }
+  // Drop stale entries for ports that quieted down (keep the map bounded).
+  const busyIds = new Set(busy.map((p) => p.portId));
+  for (const [id, c] of portContextCache) {
+    if (!busyIds.has(id) && now - c.ts > PORT_CONTEXT_TTL_MS) portContextCache.delete(id);
+  }
+}
+
+function startPortContextLoop() {
+  scheduleWithBootRun(refreshPortContext, PORT_CONTEXT_INTERVAL_MS);
 }
 
 const FERRY_DELAY_REDIS_KEY = `${RELAY_ENV_PREFIX}relay:ferry:eta-history:v1`;
@@ -4746,6 +4803,9 @@ const handleRequest = async (req, res) => {
     for (const p of ports) {
       const { dow, hour } = portLocalDowHour(now, PORT_TZ.get(p.portId));
       p.congestionRel = db.relativeCongestion(portBaselines, p.portId, p.atBerth, dow, hour);
+      // Port context (M2): hedged candidate reasons for busy ports (news/alerts/crane-wind/baseline).
+      const pc = portContextCache.get(p.portId);
+      if (pc && pc.context.length) { p.context = pc.context; p.contextAsOf = pc.ts; }
     }
     const rank = { congested: 2, busy: 1, clear: 0 };
     ports.sort((a, b) => (rank[b.congestion] - rank[a.congestion]) || (b.atPort - a.atPort) || (b.inbound - a.inbound));
@@ -4840,6 +4900,13 @@ const handleRequest = async (req, res) => {
     const ppPayload = db.enabled
       ? await db.queryPortProfile({ port: qp.get('port') || undefined })
       : { found: false, db: false, generatedAt: Date.now() };
+    if (ppPayload.found) {
+      // Port context (M2): relay-cached hedged reasons; empty is an honest answer, noted.
+      const pc = portContextCache.get(String(qp.get('port') || '').trim().toLowerCase());
+      ppPayload.context = pc ? pc.context : [];
+      if (pc) ppPayload.contextAsOf = pc.ts;
+      if (!ppPayload.context.length && ppPayload.notes) ppPayload.notes.context = 'no disruption context gathered (port not flagged busy, or sources quiet)';
+    }
     return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=120' }, JSON.stringify(ppPayload));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
@@ -5405,6 +5472,7 @@ server.listen(PORT, () => {
   startFerryDelayLoop();
   startFerryEnrichLoop();
   startMeteoalarmLoop();
+  startPortContextLoop();
   startPortHistoryLoop();
   startMarinesiaLoop();
 });

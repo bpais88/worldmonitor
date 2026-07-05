@@ -76,8 +76,10 @@ export const profileTools = [
       + '(null means "unknown", NEVER "clear") and gated 45-day arrival stats (unique vessels, arrivals last '
       + '7 days, median dwell, operator mix, peak arrival hours in local time, average arrivals per day). A stat below its evidence threshold comes back null with the '
       + 'reason in `notes` — ALWAYS lead with that note and never present a suppressed stat as zero, and '
-      + 'never read congestion null as "not congested". Stats cover tracked freight vessels only, NOT total '
-      + 'port throughput. Use get_vessel_profile for a vessel, get_trip for a voyage. Read-only.',
+      + 'never read congestion null as "not congested". Busy ports may carry `context`: candidate WHY-reasons '
+      + '(news, official weather alerts, crane-wind, above-baseline anomaly) with confidence — present these '
+      + 'hedged ("possibly related"), never as the established cause. Stats cover tracked freight vessels only, '
+      + 'NOT total port throughput. Use get_vessel_profile for a vessel, get_trip for a voyage. Read-only.',
     input_schema: {
       type: 'object',
       properties: {
