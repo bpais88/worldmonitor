@@ -69,17 +69,34 @@ async function tickWatches() {
   try {
     const watches = await listWatches();
     if (!watches.length) return;
-    const [portsRes, vesselsRes] = await Promise.all([
+    // Fetch in parallel but fail INDEPENDENTLY: ports is required by every watch type (no ports →
+    // outer catch), but the heavier vessels endpoint only feeds the transition watches — a
+    // transient vessels 5xx must not starve the scheduled-strike alerts (which need only
+    // ports + /ais/disruptions), and vice versa.
+    const [portsR, vesselsR] = await Promise.allSettled([
       relayGet('/ais/ports'),
       relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000'),
     ]);
-    const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
+    if (portsR.status === 'rejected') throw portsR.reason;
+    const ports = portsR.value.ports || [];
+    const alerts = [];
+    if (vesselsR.status === 'fulfilled') {
+      alerts.push(...await evaluateWatches({ ports, vessels: vesselsR.value.vessels || [] }));
+    } else {
+      // Skip (don't run with vessels: [] — a one-tick outage must not read as "vessel back on time").
+      console.warn('[host] watch tick: vessel fetch failed — transition watches skipped this tick:', vesselsR.reason?.message);
+    }
     // M4: one-shot scheduled-strike alerts for watched ports (official calendar only; relay's
-    // /ais/disruptions?port= applies the 7-day lookahead + area matching).
-    alerts.push(...await evaluateDisruptionWatches({
-      ports: portsRes.ports || [],
-      fetchPortDisruptions: (portId) => relayGet(`/ais/disruptions?port=${encodeURIComponent(portId)}`).then((j) => j.events || []),
-    }));
+    // /ais/disruptions?port= applies the 7-day lookahead + area matching). Own try — a disruption
+    // failure must not drop already-collected transition alerts either.
+    try {
+      alerts.push(...await evaluateDisruptionWatches({
+        ports,
+        fetchPortDisruptions: (portId) => relayGet(`/ais/disruptions?port=${encodeURIComponent(portId)}`).then((j) => j.events || []),
+      }));
+    } catch (e) {
+      console.warn('[host] watch tick: disruption evaluation failed:', e.message);
+    }
     for (const a of alerts) {
       let install, threadId;
       if (a.watch.platform === 'teams') {
