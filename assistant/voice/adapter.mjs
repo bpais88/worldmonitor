@@ -22,9 +22,15 @@ export const VOICE_TOOLS = [...freightTools, ...profileTools, ...weatherTools];
 const TOOL_BY_NAME = new Map(VOICE_TOOLS.map((t) => [t.name, t]));
 
 // Marco's voice identity — the channel persona (mirrors SLACK_SYSTEM / TEAMS_SYSTEM).
-// ElevenLabs runs the LLM in Option A, so provision.mjs pushes this to the agent config.
+// ElevenLabs runs the LLM in Option A, so provision.mjs pushes this to the agent config —
+// a SNAPSHOT: any change here (or to MARCO_PERSONA / the tool set) requires re-running
+// provision.mjs, or the phone keeps the old brain (see the 2026-07-05 Italy-only incident).
+// The persona is Slack-born ("lives in Slack") — swap that one phrase for the phone; the
+// targeted replace falls through harmlessly if the persona wording ever changes (deferred:
+// buildSystem(persona, addendum) to DRY all five channels).
+const VOICE_PERSONA = MARCO_PERSONA.replace('who lives in Slack', 'answering the phone');
 export const VOICE_SYSTEM =
-  `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
+  `${VOICE_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
   'You are on a VOICE CALL. Be concise and warm — the caller is listening, not reading. ' +
   'Short sentences. Say key numbers clearly and pause after them. If you lack data, say so ' +
   'plainly. You only answer freight/port/weather questions; you cannot take actions.';
