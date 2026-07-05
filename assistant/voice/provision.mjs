@@ -60,7 +60,13 @@ async function main() {
   for (const tool of VOICE_TOOLS) {
     let id = idByName.get(tool.name);
     if (id) {
-      console.log(`tool ${tool.name}: reuse ${id}`);
+      // UPDATE in place, don't just reuse: the ElevenLabs tool config is a SNAPSHOT of the tool's
+      // description/schema at provisioning time. Reuse-without-update left the original 7 tools
+      // describing "Italian" ports for days after #59 broadened everything to European — the same
+      // frozen-copy failure mode as the agent prompt.
+      const r = await el('PATCH', `/v1/convai/tools/${id}`, { tool_config: toElevenLabsToolConfig(tool, BASE, SECRET) });
+      if (r.status !== 200) die(`tool ${tool.name} update`, r);
+      console.log(`tool ${tool.name}: updated ${id}`);
     } else {
       const r = await el('POST', '/v1/convai/tools', { tool_config: toElevenLabsToolConfig(tool, BASE, SECRET) });
       id = r.json?.id;
