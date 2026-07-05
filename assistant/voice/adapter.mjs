@@ -37,6 +37,17 @@ export const VOICE_SYSTEM =
 export const VOICE_FIRST_MESSAGE =
   'Hi, this is Marco, your freight assistant. Which port or vessel can I help you with?';
 
+// TTS seed — used ONLY when provision.mjs CREATES the agent. Ownership split (2026-07-05): the
+// repo owns the BRAIN (prompt/first message/tools — provision overwrites, drift-check enforces);
+// the ElevenLabs DASHBOARD owns the SOUND (voice, tts model, expressive mode, LLM) — provision
+// never touches tts on updates, so UI tuning sticks.
+export const VOICE_TTS = {
+  voiceId: process.env.VOICE_ID || 'JBFqnCBsd6RMkjVDRZzb', // George — create-time default only
+  modelId: process.env.VOICE_MODEL || 'eleven_turbo_v2',
+};
+// The live agent (created once by provision.mjs; stable across re-provisions).
+export const VOICE_AGENT_ID = process.env.VOICE_AGENT_ID || 'agent_3401kwem9s5se1f888kfw6key927';
+
 // The URL path each server tool is exposed at — single-sourced: emitted by the
 // tool-config generator, parsed by the webhook, matched by the server mount.
 const TOOLS_PREFIX = '/voice/tools/';
