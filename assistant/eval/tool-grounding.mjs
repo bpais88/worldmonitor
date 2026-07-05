@@ -41,6 +41,8 @@ const CASES = [
   { q: 'Look up trip 4821 for me.', expect: ['get_trip'] },
   { q: 'How reliable is the vessel with MMSI 563279500 — how many trips has it made and is it usually on time?', expect: ['get_vessel_profile'] },
   { q: "What's Rotterdam's track record — median dwell time and which operators call there?", expect: ['get_port_profile'] },
+  // M3: future-disruption questions must route to the disruptions tool, not the live-state ones.
+  { q: 'Any strikes coming up next week that could hit my shipments in Italy?', expect: ['get_upcoming_disruptions'] },
 ];
 
 // An API-level rejection (billing/auth/quota) means the eval COULD NOT RUN — that must never be

@@ -25,6 +25,9 @@ test('every covered country has a COMPLETE source entry (news, vocabulary, alert
     assert.ok(Array.isArray(src.strikeTerms) && src.strikeTerms.length >= 2, `${code}: needs strike terms (English + local language)`);
     assert.ok(Array.isArray(src.disruptionTerms) && src.disruptionTerms.length >= 5, `${code}: needs disruption terms (English + local language)`);
     assert.match(String(src.meteoalarmFeed || ''), /^https:\/\//, `${code}: needs an official weather-alert feed URL (meteoalarm or national CAP equivalent)`);
+    // M3: every country needs the curated union layer (the official calendar is IT-only bonus).
+    assert.ok(src.strikeSources && Array.isArray(src.strikeSources.unions) && src.strikeSources.unions.length >= 1,
+      `${code}: needs strikeSources.unions (≥1 curated union/entity for the strike-news layer)`);
   }
 });
 

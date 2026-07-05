@@ -226,4 +226,30 @@ export const freightTools = [
       return { totalTrips: j.totalTrips, days: j.days, daily: j.daily };
     },
   },
+  {
+    name: 'get_upcoming_disruptions',
+    description:
+      'Upcoming and reported freight disruptions: SCHEDULED strikes from official registries (advance '
+      + 'notice, with start dates — e.g. Italy\'s transport-ministry strike calendar) plus recent '
+      + 'strike/disruption reports from union news and global news monitoring. Filter by country code '
+      + '(IT/GB/ES/NL) and/or port id. kind "strike_scheduled" (confidence ~0.9, has startsAt) is an '
+      + 'official calendar entry — state its date plainly; kind "strike_report" is a news match — '
+      + 'present it hedged ("reportedly", "according to news"). Use for "any strikes coming up", '
+      + '"will anything disrupt my shipments next week", "is there a strike at X".',
+    input_schema: {
+      type: 'object',
+      properties: {
+        country: { type: 'string', enum: ['IT', 'GB', 'ES', 'NL'], description: 'optional country filter' },
+        port: { type: 'string', description: 'optional port id (lowercase, e.g. "genoa", "rotterdam")' },
+      },
+      additionalProperties: false,
+    },
+    handler: async ({ country, port } = {}) => {
+      const qs = new URLSearchParams();
+      if (country) qs.set('country', country);
+      if (port) qs.set('port', String(port).toLowerCase());
+      const j = await relayGet(`/ais/disruptions${qs.size ? `?${qs}` : ''}`);
+      return { count: j.count, refreshedAt: j.refreshedAt, events: j.events };
+    },
+  },
 ];

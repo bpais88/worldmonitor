@@ -41,15 +41,25 @@ p90-for-this-dow×hour; dwell spike = "busy but stuck" vs "busy but flowing"). R
 `/ais/port-profile`. Marco prompt rule: hedged causality — "possibly related", never asserted;
 no match → "no known disruption reported". Voice re-provision after the tool-description update.
 
-## M3 — Strike + disruption sources, all countries (full curated set)
+## M3 — Strike + disruption sources, all countries (SHIPPED 2026-07-05)
 
-- **CGSSE** (IT) — the official national strike calendar: structured, ANNOUNCED IN ADVANCE
-  (future `startsAt` — fuel for M4 and later the forecast).
-- **GDELT** — one fetcher, all countries, STRIKE/PORT/MARITIME themes.
-- **Curated union feeds** — RMT/Unite (GB), FNV Havens (NL), CCOO/UGT (ES); scraping surface,
-  keep each behind the registry so parity is enforced.
-- Optional: port-authority operational notices (Rotterdam/Valencia/Genoa) if stable feeds exist.
-Each source = one more registry-driven explainer; the parity test grows a field per source class.
+- **MIT scioperi** (IT) — the Transport Ministry's official strike registry RSS
+  (scioperi.mit.gov.it — CGSSE itself proved unreachable from our infra, the MIT registry is the
+  better structured source anyway): ADVANCE notice with exact dates, sector, region, unions.
+  Filtered to port-relevant sectors (marittimo/portuale/merci/logistica/generale/multisettoriale).
+  Live check on ship day: national freight-haulage strike Jul 10, Sicilia maritime Jul 17,
+  NATIONAL MARITIME Jul 22 — real advance signal from day one.
+- **Union-curated news** — per-country union names in the registry (RMT/Unite, FNV Havens/FNV,
+  CCOO/UGT/Coordinadora Estibadores, Filt/Fit/Uilt/USB) queried through the locale-aware news
+  fetch, strike-term matched. The parity workhorse; parity test enforces ≥1 union per country.
+- **GDELT** — strictly best-effort (1-req/5s rate limit, flaky): non-JSON degrades to [].
+- Events normalize to {id, country, kind scheduled|report, summary, confidence, startsAt?} —
+  startsAt ONLY from the official calendar (headline date-guessing breeds false alarms).
+- Relay: refreshDisruptions every 3h → merged cache → `/ais/disruptions?country=&port=` (private;
+  Vercel proxy api/ais-disruptions.js behind requireApiKey) + strikeReasonForPort folded into the
+  M2 port context. Marco tool `get_upcoming_disruptions` (+ grounding-eval case).
+- Deferred from M3: port-authority operational notices (Rotterdam/Valencia/Genoa) — revisit if
+  the news layer proves too thin.
 
 ## M4 — Proactive disruption notifications
 
