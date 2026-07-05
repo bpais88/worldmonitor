@@ -1775,6 +1775,9 @@ const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS }
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
 const portStatusHistory = new Map();
 const ITALY_PORTS_BY_ID = require('../src/config/italy-ferries.data.json').ports;
+// Despite the legacy name, that export is an ARRAY (computeAllPortStatus/syncPorts handle both
+// shapes) — anything needing an id-keyed lookup must use this map, NOT index the array by id.
+const PORT_META_BY_ID = new Map(ITALY_PORTS_BY_ID.map((p) => [p.id, p]));
 
 // ── Geofence engine + port-history sampler ─────────────────────────────────
 // One circular geofence per commercial port (seeded from the ports dataset,
@@ -2258,7 +2261,7 @@ async function refreshPortContext(now = Date.now()) {
     .filter((p) => { const c = portContextCache.get(p.portId); return !c || now - c.ts > PORT_CONTEXT_TTL_MS; })
     .slice(0, PORT_CONTEXT_MAX_PER_PASS);
   for (const p of due) {
-    const meta = ITALY_PORTS_BY_ID[p.portId] || {};
+    const meta = PORT_META_BY_ID.get(p.portId) || {};
     const country = meta.country || 'IT';
     let newsReason = null;
     let weather = null;
@@ -4946,7 +4949,7 @@ const handleRequest = async (req, res) => {
     let events = disruptionEvents;
     if (wantCountry) events = events.filter((e) => e.country === wantCountry);
     if (wantPort) {
-      const meta = ITALY_PORTS_BY_ID[wantPort];
+      const meta = PORT_META_BY_ID.get(wantPort);
       events = meta
         ? events.filter((e) => strikeReasonForPort([e], { country: meta.country || 'IT', region: meta.region, portName: meta.name }) != null)
         : [];
