@@ -80,3 +80,29 @@ test('picks the most severe when multiple active warnings overlap', () => {
   assert.ok(r && r.confidence >= 0.85); // red wins over orange
   assert.match(r.summary, /red/i);
 });
+
+// --- M1 country-aware matching (registry keywords + country tagging) -------------------------
+
+test('matches a Spanish sub-province zone via registry keywords (exact region would never fire)', () => {
+  const warnings = [{ country: 'ES', region: 'Litoral de Barcelona', event: 'Orange Coastal Event Warning', color: 'orange', awarenessType: 'Coastal Event', onset: NOON - 3_600_000, expires: NOON + 3_600_000 }];
+  const r = matchMeteoalarm(warnings, { destPortId: 'barcelona', destCountry: 'ES', destRegion: 'Catalonia' }, NOON);
+  assert.ok(r, 'Barcelona port should match "Litoral de Barcelona" via its registry keywords');
+  assert.equal(r.kind, 'marine_warning');
+});
+
+test('accent folding: Cádiz zone matches the Algeciras keywords', () => {
+  const warnings = [{ country: 'ES', region: 'Litoral gaditano de Cádiz', event: 'Red Wind Warning', color: 'red', awarenessType: 'Wind', onset: NOON - 1, expires: NOON + 1_000 }];
+  const r = matchMeteoalarm(warnings, { destPortId: 'algeciras', destCountry: 'ES', destRegion: 'Andalusia' }, NOON);
+  assert.ok(r);
+});
+
+test('a warning tagged with another country never matches, even with an area-keyword hit', () => {
+  const warnings = [{ country: 'NL', region: 'Zuid-Holland', event: 'Orange Wind Warning', color: 'orange', awarenessType: 'Wind', onset: NOON - 1, expires: NOON + 1_000 }];
+  assert.equal(matchMeteoalarm(warnings, { destPortId: 'valencia', destCountry: 'ES', destRegion: 'Valencia' }, NOON), null);
+});
+
+test('Dutch province in local language matches the English-region port via keywords', () => {
+  const warnings = [{ country: 'NL', region: 'Zuid-Holland', event: 'Orange Wind Warning', color: 'orange', awarenessType: 'Wind', onset: NOON - 1, expires: NOON + 1_000 }];
+  const r = matchMeteoalarm(warnings, { destPortId: 'rotterdam', destCountry: 'NL', destRegion: 'South Holland' }, NOON);
+  assert.ok(r, 'Rotterdam (region "South Holland") should match areaDesc "Zuid-Holland"');
+});

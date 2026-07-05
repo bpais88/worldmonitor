@@ -9,16 +9,9 @@
 // the Google News RSS fetch is thin glue.
 
 const https = require('https');
+const { sourcesFor, disruptionVocabularyFor, foldText } = require('./country-sources.cjs');
 
 const RELEVANCE_WINDOW_MS = 48 * 3_600_000;
-
-// EN + IT terms (Italian local press is where ferry disruptions actually surface).
-const STRIKE_TERMS = ['strike', 'sciopero', 'walkout'];
-const DISRUPTION_TERMS = [
-  'cancel', 'cancell', 'delay', 'ritard', 'suspend', 'sospes', 'sospeso',
-  'maltempo', 'mareggiata', 'closed', 'chiuso', 'chiusura', 'blocked', 'bloccat',
-  'disrupt', 'halt', 'stop',
-];
 
 function pubMsOf(item) {
   if (Number.isFinite(item.pubMs)) return item.pubMs;
@@ -32,9 +25,12 @@ function pubMsOf(item) {
  */
 function matchNewsToDelay(items, ctx, now = Date.now()) {
   if (!Array.isArray(items) || !items.length) return null;
-  const operator = (ctx?.operatorName || '').trim().toLowerCase();
-  const port = (ctx?.portName || '').trim().toLowerCase();
+  const operator = foldText((ctx?.operatorName || '').trim());
+  const port = foldText((ctx?.portName || '').trim());
   if (!operator && !port) return null; // can't attribute -> stay silent
+  // Vocabulary comes from the country-source registry (local-language strike/disruption terms) —
+  // no country on the ctx defaults to Italy (Italian ports carry no country field).
+  const { strikeTerms, disruptionTerms } = disruptionVocabularyFor(ctx?.destCountry);
 
   const candidates = items
     .map((it) => ({ it, pub: pubMsOf(it) }))
@@ -42,11 +38,11 @@ function matchNewsToDelay(items, ctx, now = Date.now()) {
     .sort((a, b) => b.pub - a.pub);
 
   for (const { it } of candidates) {
-    const title = (it.title || '').toLowerCase();
+    const title = foldText(it.title || '');
     const mentionsEntity = (operator && title.includes(operator)) || (port && title.includes(port));
     if (!mentionsEntity) continue;
-    const isStrike = STRIKE_TERMS.some((t) => title.includes(t));
-    const isDisruption = isStrike || DISRUPTION_TERMS.some((t) => title.includes(t));
+    const isStrike = strikeTerms.some((t) => title.includes(foldText(t)));
+    const isDisruption = isStrike || disruptionTerms.some((t) => title.includes(foldText(t)));
     if (!isDisruption) continue;
     // Slightly higher (still low) when both operator AND port are named.
     const both = operator && port && title.includes(operator) && title.includes(port);
@@ -94,12 +90,14 @@ function parseRssItems(xml) {
   return items;
 }
 
-/** Fetch recent Google News results for a query (keyless RSS, Italian locale). */
-async function fetchNews(query, timeoutMs = 8000) {
-  // Italian locale — ferry disruptions surface in Italian local press. The
-  // disruption/recency filtering happens in matchNewsToDelay, so the query stays
-  // broad (entity + "traghetti") and the matcher keeps only relevant hits.
-  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query + ' when:2d')}&hl=it&gl=IT&ceid=IT:it`;
+/**
+ * Fetch recent Google News results for a query (keyless RSS), in the COUNTRY'S locale — a
+ * Rotterdam strike surfaces in Dutch press, a Valencia closure in Spanish press. Locale comes
+ * from the country-source registry; no country defaults to Italy (pre-registry behavior).
+ */
+async function fetchNews(query, timeoutMs = 8000, country = undefined) {
+  const loc = (sourcesFor(country) || sourcesFor('IT')).news;
+  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(query + ' when:2d')}&hl=${loc.hl}&gl=${loc.gl}&ceid=${encodeURIComponent(loc.ceid)}`;
   const xml = await getText(url, timeoutMs);
   return parseRssItems(xml);
 }
@@ -111,10 +109,12 @@ const newsExplainer = {
     const operator = (ctx?.operatorName || '').trim();
     const port = (ctx?.destName || ctx?.portName || '').trim();
     if (!operator && !port) return [];
-    // Query targets the most likely disruption vocabulary for this entity.
+    // Query targets the entity + the country's freight noun, in the country's press locale.
     const subject = operator || port;
-    const items = await fetchNews(`${subject} traghetti`);
-    const reason = matchNewsToDelay(items, { operatorName: operator, portName: port });
+    const country = ctx?.destCountry;
+    const noun = (sourcesFor(country) || sourcesFor('IT')).news.freightNoun;
+    const items = await fetchNews(`${subject} ${noun}`, 8000, country);
+    const reason = matchNewsToDelay(items, { operatorName: operator, portName: port, destCountry: country });
     return reason ? [reason] : [];
   },
 };
