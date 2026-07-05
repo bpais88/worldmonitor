@@ -10,8 +10,9 @@
 // Pure parse + match are unit-tested; the HTTP fetch is thin glue.
 
 const https = require('https');
+const { COUNTRY_SOURCES, alertAreaKeywordsFor, foldText } = require('./country-sources.cjs');
 
-const FEED_URL = 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-italy';
+const FEED_URL = 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-italy'; // legacy single-country export
 
 // Awareness types that affect ferry crossings (vs heat/snow/etc.).
 const MARINE_TYPE_RE = /coastal|wind|thunderstorm|gale|storm|sea|marine|rain|flood/i;
@@ -52,15 +53,29 @@ function parseMeteoalarmFeed(xml) {
 }
 
 /**
- * Match an active marine-relevant warning for the ferry's destination region.
- * Picks the most severe (red > orange > yellow). Pure.
+ * Match an active marine-relevant warning for the ferry's destination area.
+ * Area matching is COUNTRY-AWARE via the country-source registry: Italy's feed publishes admin
+ * regions (exact-ish), Spain's publishes sub-province zones ("Litoral de Barcelona"), NL provinces
+ * in Dutch — so we substring-match the port's registry keywords against the folded areaDesc.
+ * Falls back to exact region equality when the ctx has no keywords (pre-registry callers/tests).
+ * Warnings tagged with a country only match a ctx in the same country. Pure.
  */
 function matchMeteoalarm(warnings, ctx, now = Date.now()) {
-  const region = (ctx?.destRegion || '').trim().toLowerCase();
-  if (!region || !Array.isArray(warnings)) return null;
+  const region = foldText((ctx?.destRegion || '').trim());
+  const keywords = (Array.isArray(ctx?.areaKeywords) && ctx.areaKeywords.length)
+    ? ctx.areaKeywords
+    : (ctx?.destCountry || ctx?.destPortId
+        ? alertAreaKeywordsFor({ id: ctx.destPortId, country: ctx.destCountry, region: ctx?.destRegion })
+        : []);
+  if (!region && !keywords.length) return null;
+  if (!Array.isArray(warnings)) return null;
+  const ctxCountry = ctx?.destCountry || 'IT';
 
   const active = warnings.filter((w) => {
-    if ((w.region || '').trim().toLowerCase() !== region) return false;
+    if (w.country && w.country !== ctxCountry) return false;
+    const area = foldText(w.region || '');
+    const areaHit = keywords.length ? keywords.some((k) => area.includes(k)) : area === region;
+    if (!areaHit) return false;
     if (!MARINE_TYPE_RE.test(w.awarenessType || w.event || '')) return false;
     if (w.onset != null && now < w.onset) return false;
     if (w.expires != null && now > w.expires) return false;
@@ -106,6 +121,26 @@ async function fetchMeteoalarmItaly(timeoutMs = 8000) {
   return parseMeteoalarmFeed(xml);
 }
 
+/**
+ * Fetch + parse the feeds for EVERY covered country (from the country-source registry), tagging
+ * each warning with its country. A failing country feed degrades to [] for that country only —
+ * never poisons the others. Source parity: a new country's feed is picked up automatically once
+ * its registry entry exists (which the parity test forces).
+ */
+async function fetchMeteoalarmAll(timeoutMs = 8000) {
+  const out = [];
+  await Promise.all(Object.entries(COUNTRY_SOURCES).map(async ([country, src]) => {
+    if (!src.meteoalarmFeed) return;
+    try {
+      const xml = await getText(src.meteoalarmFeed, timeoutMs);
+      for (const w of parseMeteoalarmFeed(xml)) out.push({ ...w, country });
+    } catch (e) {
+      console.warn(`[meteoalarm] ${country} feed failed: ${e.message}`);
+    }
+  }));
+  return out;
+}
+
 /** Explainer interface: getWarnings() returns the cached parsed feed. */
 function makeMeteoalarmExplainer(getWarnings) {
   return {
@@ -118,4 +153,4 @@ function makeMeteoalarmExplainer(getWarnings) {
   };
 }
 
-module.exports = { parseMeteoalarmFeed, matchMeteoalarm, fetchMeteoalarmItaly, makeMeteoalarmExplainer, FEED_URL };
+module.exports = { parseMeteoalarmFeed, matchMeteoalarm, fetchMeteoalarmItaly, fetchMeteoalarmAll, makeMeteoalarmExplainer, FEED_URL };

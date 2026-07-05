@@ -1765,7 +1765,7 @@ const { weatherExplainer } = require('./explainer-weather.cjs');
 const { newsExplainer } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
-const { fetchMeteoalarmItaly, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
+const { fetchMeteoalarmAll, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { ITALY_TILES, ITALY_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
@@ -2146,7 +2146,7 @@ const crossVesselExplainer = makeCrossVesselExplainer(getFerryVessels);
 let meteoalarmWarnings = [];
 const METEOALARM_REFRESH_MS = 30 * 60_000;
 async function refreshMeteoalarm() {
-  try { meteoalarmWarnings = await fetchMeteoalarmItaly(); }
+  try { meteoalarmWarnings = await fetchMeteoalarmAll(); } // every covered country (registry-driven)
   catch (e) { console.warn('[Relay] meteoalarm fetch failed:', e.message); }
 }
 function startMeteoalarmLoop() {
@@ -2184,6 +2184,7 @@ async function enrichFerryDelays(now = Date.now()) {
       destLat: port ? port.lat : undefined,
       destLon: port ? port.lon : undefined,
       destRegion: port ? port.region : undefined,
+      destCountry: port ? (port.country || 'IT') : undefined, // drives news locale/vocab + alert-area keywords
       operatorName: resolveOperatorName(v.name || (stat && stat.name)),
       etaGrowthMin: drift.etaGrowthMin,
       stalled: drift.stalled,
