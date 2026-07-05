@@ -1762,6 +1762,7 @@ function portFeed(lat, lon, aisFresh, marinesiaOk, now = Date.now()) {
 }
 const { runExplainers } = require('./delay-explainers.cjs');
 const { craneWindReason, baselineAnomalyReason, assemblePortContext } = require('./port-context.cjs');
+const { fetchMitStrikes, fetchGdeltStrikes, fetchUnionStrikes, mergeDisruptionEvents, strikeReasonForPort } = require('./strike-sources.cjs');
 const { sourcesFor } = require('./country-sources.cjs');
 const { weatherExplainer, fetchMarineWeather } = require('./explainer-weather.cjs');
 const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news.cjs');
@@ -2208,6 +2209,32 @@ function startFerryEnrichLoop() {
   setInterval(() => { void enrichFerryDelays(); }, ENRICH_INTERVAL_MS).unref?.();
 }
 
+// --- Disruption events (M3, spec assistant/DISRUPTION_SOURCES_SCOPE.md) ----------------------
+// Strike/disruption events from the layered sources (MIT official registry, union-curated news,
+// GDELT best-effort), merged + cached. Slow-moving data → 3h refresh; GDELT calls spaced to
+// respect its 1-req/5s limit. Served at /ais/disruptions and folded into port context below.
+let disruptionEvents = [];
+let disruptionRefreshedAt = null;
+const DISRUPTION_REFRESH_MS = 3 * 60 * 60_000;
+const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
+
+async function refreshDisruptions() {
+  const lists = [];
+  try { lists.push(await fetchMitStrikes()); } catch (e) { console.warn('[Relay] MIT strikes fetch failed:', e.message); }
+  for (const country of ['IT', 'GB', 'ES', 'NL']) {
+    try { lists.push(await fetchUnionStrikes(country)); } catch { /* best-effort */ }
+    try { lists.push(await fetchGdeltStrikes(country)); } catch { /* best-effort */ }
+    await sleepMs(6_000); // GDELT rate limit (1/5s) — also spaces the news queries politely
+  }
+  disruptionEvents = mergeDisruptionEvents(lists);
+  disruptionRefreshedAt = Date.now();
+  console.log(`[Relay] disruptions refreshed: ${disruptionEvents.length} events (${disruptionEvents.filter((e) => e.kind === 'strike_scheduled').length} scheduled)`);
+}
+
+function startDisruptionLoop() {
+  scheduleWithBootRun(refreshDisruptions, DISRUPTION_REFRESH_MS);
+}
+
 // --- Port context (M2, spec assistant/DISRUPTION_SOURCES_SCOPE.md) --------------------------
 // The "why is this port busy?" layer: for each currently busy/congested port, gather hedged
 // candidate reasons — local-press news match, official weather alerts, crane-wind inference,
@@ -2247,6 +2274,7 @@ async function refreshPortContext(now = Date.now()) {
     const context = assemblePortContext([
       newsReason,
       alertReason,
+      strikeReasonForPort(disruptionEvents, { country, region: meta.region, portName: p.name }, now), // M3
       craneWindReason(weather || {}),
       baselineAnomalyReason({ atBerth: p.atBerth, bucket: baselineBucketFor(p.portId, now) }),
     ]);
@@ -4908,6 +4936,23 @@ const handleRequest = async (req, res) => {
       if (!ppPayload.context.length && ppPayload.notes) ppPayload.notes.context = 'no disruption context gathered (port not flagged busy, or sources quiet)';
     }
     return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=120' }, JSON.stringify(ppPayload));
+  } else if (pathname === '/ais/disruptions') {
+    // M3: upcoming/reported strike + disruption events (MIT official registry, union news, GDELT).
+    // PRIVATE (x-relay-key). ?country=IT filters; ?port=<id> narrows via the same matcher the
+    // port context uses (a scheduled national strike reaches every port in its country).
+    const dq = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+    const wantCountry = (dq.get('country') || '').toUpperCase() || null;
+    const wantPort = (dq.get('port') || '').trim().toLowerCase() || null;
+    let events = disruptionEvents;
+    if (wantCountry) events = events.filter((e) => e.country === wantCountry);
+    if (wantPort) {
+      const meta = ITALY_PORTS_BY_ID[wantPort];
+      events = meta
+        ? events.filter((e) => strikeReasonForPort([e], { country: meta.country || 'IT', region: meta.region, portName: meta.name }) != null)
+        : [];
+    }
+    return sendCompressed(req, res, 200, { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=300, s-maxage=600' },
+      JSON.stringify({ events, count: events.length, refreshedAt: disruptionRefreshedAt, generatedAt: Date.now() }));
   } else if (pathname === '/opensky-reset') {
     openskyToken = null;
     openskyTokenExpiry = 0;
@@ -5472,6 +5517,7 @@ server.listen(PORT, () => {
   startFerryDelayLoop();
   startFerryEnrichLoop();
   startMeteoalarmLoop();
+  startDisruptionLoop();
   startPortContextLoop();
   startPortHistoryLoop();
   startMarinesiaLoop();

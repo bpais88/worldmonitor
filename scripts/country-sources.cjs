@@ -23,6 +23,9 @@ const COUNTRY_SOURCES = {
     strikeTerms: [...EN_STRIKE, 'sciopero'],
     disruptionTerms: [...EN_DISRUPTION, 'cancell', 'ritard', 'sospes', 'sospeso', 'maltempo', 'mareggiata', 'chiuso', 'chiusura', 'bloccat', 'incidente'],
     meteoalarmFeed: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-italy',
+    // Strike sources (M3): IT additionally has the official MIT registry (strike-sources.cjs);
+    // unions here feed the curated union-news layer every country gets.
+    strikeSources: { officialFeed: 'mit-scioperi', unions: ['Filt Cgil', 'Fit Cisl', 'Uiltrasporti', 'USB Lavoro Privato'] },
     // Meteoalarm Italy publishes areaDesc at ADMIN-REGION level, matching our ports' `region`
     // (keywords are substring-matched, lowercased + accent-folded, against areaDesc).
     alertAreaKeywordsByRegion: {
@@ -38,6 +41,7 @@ const COUNTRY_SOURCES = {
     strikeTerms: [...EN_STRIKE, 'picket'],
     disruptionTerms: [...EN_DISRUPTION, 'shut', 'closure', 'stoppage', 'backlog', 'queue'],
     meteoalarmFeed: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-united-kingdom',
+    strikeSources: { unions: ['RMT', 'Unite the Union'] },
     // UK areaDesc granularity is county/Met-region; our port rows all say region "England",
     // so GB maps PER PORT (county + waterway keywords).
     alertAreaKeywordsByRegion: { 'England': [] }, // per-port overrides below carry GB
@@ -58,6 +62,7 @@ const COUNTRY_SOURCES = {
     strikeTerms: [...EN_STRIKE, 'huelga', 'paro'],
     disruptionTerms: [...EN_DISRUPTION, 'cancelad', 'retras', 'suspend', 'cerrad', 'bloquead', 'temporal', 'accidente', 'colapso'],
     meteoalarmFeed: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-spain',
+    strikeSources: { unions: ['CCOO', 'UGT', 'Coordinadora Estibadores'] },
     // Meteoalarm Spain publishes SUB-PROVINCE zones ("Litoral de Barcelona", "Campiña gaditana"),
     // NOT admin regions — exact region matching would never fire. Keywords are the province/coast
     // names those zone labels actually contain for OUR ports.
@@ -76,6 +81,7 @@ const COUNTRY_SOURCES = {
     strikeTerms: [...EN_STRIKE, 'staking', 'werkonderbreking'],
     disruptionTerms: [...EN_DISRUPTION, 'vertraging', 'gesloten', 'geblokkeerd', 'stremming', 'storing', 'ongeval', 'afgelast'],
     meteoalarmFeed: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-netherlands',
+    strikeSources: { unions: ['FNV Havens', 'FNV'] },
     // Meteoalarm NL areaDesc = provinces in Dutch; our ports carry English exonyms.
     alertAreaKeywordsByRegion: {
       'Groningen': ['groningen'],
