@@ -168,7 +168,7 @@ export const freightTools = [
   {
     name: 'get_port',
     description:
-      'Deep dive on one commercial freight port: congestion level, the freight vessels physically AT the port (within ~8 km), and the vessels INBOUND (under way with this port as their resolved destination), each with names/speed. Use for "what is happening at Genoa", "which ships are at / heading to Ravenna".',
+      'Deep dive on one commercial freight port: congestion level, the freight vessels physically AT the port (within ~8 km), and the vessels INBOUND (under way with this port as their resolved destination), each with names/speed. Busy ports may carry `context`: candidate WHY-reasons (news, official weather alerts, crane-wind, above-baseline anomaly) with confidence — present these hedged ("possibly related"), never as the established cause. Use for "what is happening at Genoa", "which ships are at / heading to Ravenna", "why is Rotterdam busy".',
     input_schema: {
       type: 'object',
       properties: { port: { type: 'string', description: 'port name or id, e.g. "Genoa"' } },
