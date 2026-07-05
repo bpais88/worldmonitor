@@ -15,7 +15,7 @@ import { handleVoiceRequest } from './voice/adapter.mjs';
 import { handleWhatsAppRequest } from './whatsapp/router.mjs';
 import { handleTelegramRequest } from './telegram/router.mjs';
 import { relayGet } from './relay.mjs';
-import { listWatches, evaluateWatches } from './watches.mjs';
+import { listWatches, evaluateWatches, evaluateDisruptionWatches } from './watches.mjs';
 import { getInstallation, legacyInstall, deliverFor } from './slack/installations.mjs';
 import { send } from './send.mjs';
 
@@ -74,6 +74,12 @@ async function tickWatches() {
       relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000'),
     ]);
     const alerts = await evaluateWatches({ ports: portsRes.ports || [], vessels: vesselsRes.vessels || [] });
+    // M4: one-shot scheduled-strike alerts for watched ports (official calendar only; relay's
+    // /ais/disruptions?port= applies the 7-day lookahead + area matching).
+    alerts.push(...await evaluateDisruptionWatches({
+      ports: portsRes.ports || [],
+      fetchPortDisruptions: (portId) => relayGet(`/ais/disruptions?port=${encodeURIComponent(portId)}`).then((j) => j.events || []),
+    }));
     for (const a of alerts) {
       let install, threadId;
       if (a.watch.platform === 'teams') {

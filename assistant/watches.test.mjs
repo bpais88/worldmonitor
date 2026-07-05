@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesByConversation, cancelWatchesForTeam, evaluateWatches, WATCH_DWELL_MS } from './watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, cancelWatchesByConversation, cancelWatchesForTeam, evaluateWatches, evaluateDisruptionWatches, WATCH_DWELL_MS } from './watches.mjs';
 
 const genoa = (congestion) => [{ name: 'Genoa', portId: 'genoa', congestion, atPort: 9, inbound: 3 }];
 
@@ -165,4 +165,49 @@ test('cancelWatchesByConversation cancels a removed Teams conversation’s watch
   assert.ok(!remaining.includes(dm.id) && !remaining.includes(ch.id), 'removed-conversation watches gone');
   assert.ok(remaining.includes(other.id), 'a different conversation’s watch survives');
   await cancelWatch(other.id);
+});
+
+// --- M4: proactive disruption alerts ---------------------------------------------------------
+
+const GENOA = { portId: 'genoa', name: 'Genoa', congestion: 'clear', atPort: 3, inbound: 2 };
+const STRIKE = { id: 'mit/9001', kind: 'strike_scheduled', summary: 'Scheduled Marittimo strike (national)', startsAt: Date.now() + 3 * 86_400_000 };
+
+test('disruption alerts: fire once per event per watch, then stay silent (dedupe survives re-ticks)', async () => {
+  const w = await createWatch({ type: 'port_congestion', target: 'Genoa', channel: 'C1', team: 'T1' });
+  const fetcher = async () => [STRIKE];
+  const first = await evaluateDisruptionWatches({ ports: [GENOA], fetchPortDisruptions: fetcher });
+  assert.equal(first.length, 1);
+  assert.match(first[0].message, /Scheduled strike affecting Genoa/);
+  assert.match(first[0].message, /in 3 days/);
+  const second = await evaluateDisruptionWatches({ ports: [GENOA], fetchPortDisruptions: fetcher });
+  assert.equal(second.length, 0, 'same event must never alert twice');
+  await cancelWatch(w.id);
+});
+
+test('disruption alerts: official calendar only — news reports never page', async () => {
+  const w = await createWatch({ type: 'port_disruption', target: 'Genoa', channel: 'C1', team: 'T1' });
+  const out = await evaluateDisruptionWatches({ ports: [GENOA], fetchPortDisruptions: async () => [
+    { id: 'gdelt:x', kind: 'strike_report', summary: 'reportedly a strike', confidence: 0.4 },
+  ] });
+  assert.equal(out.length, 0);
+  await cancelWatch(w.id);
+});
+
+test('disruption alerts: one relay fetch per distinct port, all its watches alerted', async () => {
+  const w1 = await createWatch({ type: 'port_congestion', target: 'Genoa', channel: 'C1', team: 'T1' });
+  const w2 = await createWatch({ type: 'port_disruption', target: 'genoa', channel: 'C2', team: 'T2' });
+  let calls = 0;
+  const out = await evaluateDisruptionWatches({ ports: [GENOA], fetchPortDisruptions: async () => { calls++; return [STRIKE]; } });
+  assert.equal(calls, 1, 'grouped by port — one fetch');
+  assert.equal(out.length, 2, 'both watches on the port alert');
+  await cancelWatch(w1.id); await cancelWatch(w2.id);
+});
+
+test('disruption alerts: vessel watches and unknown ports stay silent; fetch failure degrades', async () => {
+  const wv = await createWatch({ type: 'vessel_delay', target: 'MOBY X', channel: 'C1', team: 'T1' });
+  const wu = await createWatch({ type: 'port_disruption', target: 'Atlantis', channel: 'C1', team: 'T1' });
+  const wf = await createWatch({ type: 'port_disruption', target: 'Genoa', channel: 'C1', team: 'T1' });
+  const out = await evaluateDisruptionWatches({ ports: [GENOA], fetchPortDisruptions: async () => { throw new Error('boom'); } });
+  assert.equal(out.length, 0);
+  await cancelWatch(wv.id); await cancelWatch(wu.id); await cancelWatch(wf.id);
 });
