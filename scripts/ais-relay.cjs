@@ -4614,6 +4614,26 @@ const handleRequest = async (req, res) => {
         eventRows: db.stats.eventRows,
         baselineBuckets: db.stats.baselineBuckets,
         baselineRefreshedAt: db.stats.baselineRefreshedAt,
+        // Baseline MATURITY (the forecast's runway): buckets are per port×dow×hour and a dow×hour
+        // recurs WEEKLY, so trust (days ≥ BASELINE_MIN_DAYS=3) needs ~3 weeks of history. Derived
+        // from the in-memory portBaselines map (loadBaselines on boot + nightly refresh) — sync, no PG.
+        baselineMaturity: (() => {
+          let trusted = 0;
+          let maxDays = 0;
+          const trustedPorts = new Set();
+          for (const [key, b] of portBaselines) {
+            if (b.days > maxDays) maxDays = b.days;
+            if (b.days >= db.BASELINE_MIN_DAYS) { trusted++; trustedPorts.add(key.slice(0, key.indexOf(':'))); }
+          }
+          return {
+            buckets: portBaselines.size,
+            trusted,
+            trustedFrac: portBaselines.size ? Math.round((trusted / portBaselines.size) * 1000) / 1000 : 0,
+            portsWithTrusted: trustedPorts.size,
+            maxDays,
+            minDaysToTrust: db.BASELINE_MIN_DAYS,
+          };
+        })(),
         vesselsSynced: db.stats.vesselsSynced,
         vesselsSyncedAt: db.stats.vesselsSyncedAt,
         lastError: db.stats.lastError,
