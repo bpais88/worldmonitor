@@ -1,0 +1,26 @@
+name: Voice drift (nightly)
+
+# Is the live ElevenLabs phone agent still what the repo says it should be? The phone is an
+# Option A snapshot (assistant/voice/provision.mjs pushes the brain INTO ElevenLabs), so drift
+# happens in both directions: repo changed without re-provisioning (the 2026-07-05 "Italy-only"
+# incident) or dashboard-edited brain fields that the next provision would clobber. The repo owns
+# the BRAIN (prompt/first message/tools); the dashboard owns the SOUND (voice/tts/LLM — reported,
+# never flagged). Needs the ELEVENLABS_API_KEY repo secret; without it the check skips cleanly.
+on:
+  schedule:
+    - cron: '30 6 * * *' # 06:30 UTC daily (after the 06:00 assistant eval)
+  workflow_dispatch: {}
+
+jobs:
+  drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run drift:voice
+        env:
+          ELEVENLABS_API_KEY: ${{ secrets.ELEVENLABS_API_KEY }}

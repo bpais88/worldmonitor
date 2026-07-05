@@ -14,7 +14,7 @@
 //   VOICE_ID        JBFqnCBsd6RMkjVDRZzb   (George — warm, professional)
 //   VOICE_MODEL     eleven_turbo_v2        (English agents require turbo/flash v2)
 
-import { VOICE_TOOLS, VOICE_SYSTEM, VOICE_FIRST_MESSAGE, toElevenLabsToolConfig } from './adapter.mjs';
+import { VOICE_TOOLS, VOICE_SYSTEM, VOICE_FIRST_MESSAGE, VOICE_TTS, toElevenLabsToolConfig } from './adapter.mjs';
 
 const API = 'https://api.elevenlabs.io';
 // Idempotency key — renaming this orphans the existing agent (and its phone binding).
@@ -29,8 +29,8 @@ function reqEnv(name) {
 const KEY = reqEnv('ELEVENLABS_API_KEY');
 const SECRET = reqEnv('VOICE_TOOL_SECRET');
 const BASE = process.env.VOICE_BASE_URL || 'https://italy-freight-assistant-production.up.railway.app';
-const VOICE_ID = process.env.VOICE_ID || 'JBFqnCBsd6RMkjVDRZzb';
-const MODEL = process.env.VOICE_MODEL || 'eleven_turbo_v2';
+const VOICE_ID = VOICE_TTS.voiceId; // single-sourced in adapter.mjs (drift-check verifies the same value)
+const MODEL = VOICE_TTS.modelId;
 const PHONE_ID = process.env.PHONE_NUMBER_ID || '';
 
 function die(label, r) {
@@ -77,17 +77,21 @@ async function main() {
   }
 
   // 2. Agent — update if it exists, else create.
-  const conversation_config = {
+  // OWNERSHIP SPLIT (2026-07-05): the REPO owns the brain (prompt, first message, tools) — updates
+  // overwrite them, drift-check enforces them. The DASHBOARD owns the sound (voice_id, tts model,
+  // expressive mode, LLM choice) — updates DON'T send tts, so UI tuning sticks. tts is only seeded
+  // on first create. (Before this split, every provision reverted the owner's voice to George.)
+  const brain = {
     agent: { first_message: VOICE_FIRST_MESSAGE, prompt: { prompt: VOICE_SYSTEM, tool_ids: toolIds } },
-    tts: { voice_id: VOICE_ID, model_id: MODEL },
   };
   const agents = await el('GET', '/v1/convai/agents');
   let agentId = (agents.json?.agents || []).find((a) => a.name === AGENT_NAME)?.agent_id;
   if (agentId) {
-    const u = await el('PATCH', `/v1/convai/agents/${agentId}`, { conversation_config });
+    const u = await el('PATCH', `/v1/convai/agents/${agentId}`, { conversation_config: brain });
     if (u.status !== 200) die('agent update', u);
-    console.log(`agent: updated ${agentId}`);
+    console.log(`agent: updated ${agentId} (brain only — dashboard owns voice/tts)`);
   } else {
+    const conversation_config = { ...brain, tts: { voice_id: VOICE_ID, model_id: MODEL } };
     const c = await el('POST', '/v1/convai/agents/create', { name: AGENT_NAME, conversation_config });
     agentId = c.json?.agent_id;
     if (!agentId) die('agent create', c);
