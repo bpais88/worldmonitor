@@ -26,7 +26,10 @@ export async function runChannelTurn({ platform, user, text, deliver, tools, sys
       tools,
       system,
       policy: DEFAULT_POLICY, // read-only
-      context: { channel: user, user, team: platform, platform, deliver },
+      // team = per-USER tenant (`whatsapp:+31…`, `telegram:12345`), not the bare platform: the
+      // watch tools scope list/cancel by ctx.team, and a shared 'whatsapp' tenant would let any
+      // user list — and cancel — every other user's watches.
+      context: { channel: user, user, team: `${platform}:${user}`, platform, deliver },
     });
     const out = (reply || '(no answer)').slice(0, maxReply);
     const day = await recordUsage(platform, usage);

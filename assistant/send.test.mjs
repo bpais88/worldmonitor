@@ -110,3 +110,56 @@ test('update → Teams: PUTs the card activity in place to resolve it', async ()
 test('dm still throws for Teams (onboarding uses send() to the conversation; create-conversation later)', async () => {
   await assert.rejects(() => dm({ platform: 'teams' }, { userId: 'u', text: 't' }), /teams delivery not wired/);
 });
+
+// WhatsApp: the connector reads Twilio env per call, so tests set/clear it around each send.
+function withWhatsAppEnv(extra, fn) {
+  return async () => {
+    const calls = [];
+    const real = globalThis.fetch;
+    const env = { TWILIO_ACCOUNT_SID: 'AC1', TWILIO_AUTH_TOKEN: 'tok', TWILIO_WHATSAPP_FROM: 'whatsapp:+15550001', ...extra };
+    const prev = Object.fromEntries(Object.keys(env).map((k) => [k, process.env[k]]));
+    Object.assign(process.env, env);
+    globalThis.fetch = async (url, opts) => {
+      calls.push({ url, params: new URLSearchParams(String(opts.body)), auth: opts.headers.Authorization });
+      return { ok: true, json: async () => ({ sid: 'SM1' }) };
+    };
+    try { await fn(calls); } finally {
+      globalThis.fetch = real;
+      for (const [k, v] of Object.entries(prev)) v === undefined ? delete process.env[k] : (process.env[k] = v);
+    }
+  };
+}
+
+test('send → WhatsApp reactive: freeform Body, no ContentSid', withWhatsAppEnv({}, async (calls) => {
+  await send({ platform: 'whatsapp', deliver: { to: '+31612345678' } }, { text: 'ciao' });
+  const p = calls[0].params;
+  assert.match(calls[0].url, /Accounts\/AC1\/Messages\.json$/);
+  assert.equal(p.get('To'), 'whatsapp:+31612345678');
+  assert.equal(p.get('Body'), 'ciao');
+  assert.equal(p.get('ContentSid'), null);
+}));
+
+test('send → WhatsApp proactive: content template with sanitized (newline-free) variables', withWhatsAppEnv({ TWILIO_WA_CONTENT_SID: 'HX9' }, async (calls) => {
+  const message = '⚠️ *Scheduled strike affecting Genoa* — starts TOMORROW\nNational maritime strike\n_Source: official strike registry_';
+  await send(
+    { platform: 'whatsapp', deliver: { to: '+31612345678' } },
+    { text: message, template: { variables: { 1: 'Genoa', 2: message } } },
+  );
+  const p = calls[0].params;
+  assert.equal(p.get('ContentSid'), 'HX9');
+  assert.equal(p.get('Body'), null); // template sends carry no freeform body
+  const vars = JSON.parse(p.get('ContentVariables'));
+  assert.equal(vars['1'], 'Genoa');
+  assert.ok(!/[\r\n\t]/.test(vars['2']), 'template variables must not contain newlines/tabs');
+  assert.match(vars['2'], /strike affecting Genoa.*starts TOMORROW — National maritime strike/);
+}));
+
+test('send → WhatsApp proactive without TWILIO_WA_CONTENT_SID falls back to freeform (degraded, not dropped)', withWhatsAppEnv({}, async (calls) => {
+  await send(
+    { platform: 'whatsapp', deliver: { to: '+316' } },
+    { text: 'alert text', template: { variables: { 1: 'Genoa', 2: 'alert text' } } },
+  );
+  const p = calls[0].params;
+  assert.equal(p.get('ContentSid'), null);
+  assert.equal(p.get('Body'), 'alert text');
+}));

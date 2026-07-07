@@ -3,26 +3,29 @@
 // (see verify.mjs for why a URL secret, not X-Twilio-Signature/Basic-auth), ack fast, run the
 // SAME agent as Slack/Teams over the read-only tools, and reply via the Twilio API through send().
 //
-// Scope: reactive Q&A only — we always reply inside WhatsApp's 24h free-form window, so no
-// message templates are needed. Watches + action tools are excluded: actions have no approval
-// affordance in plain text, and watches need BOTH proactive delivery (approved templates) AND
-// a per-user scope (today's single team:'whatsapp' tenant would cross-leak list/cancel across
-// users) — both land together in the proactive phase.
+// Scope: reactive Q&A + watches (proactive phase, 2026-07-07). Reactive replies always ride
+// WhatsApp's 24h free-form window; the watch ticker's PROACTIVE alerts go out as an approved
+// content template (see connector.mjs + provision-template.mjs), since WhatsApp drops
+// business-initiated freeform outside the window. Watches are per-user tenants
+// (channel-turn passes team `whatsapp:+31…`) so list/cancel can't cross-leak between numbers.
+// Action tools stay excluded: actions have no approval affordance in plain text.
 import { verifyWebhookSecret } from './verify.mjs';
 import { DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { profileTools } from '../tools/profiles.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { watchTools } from '../tools/watches.mjs';
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
 import { runChannelTurn } from '../channel-turn.mjs';
 
-// Read-only tool set — the exact same handlers as Slack/Teams.
-const WHATSAPP_TOOLS = [...freightTools, ...profileTools, ...weatherTools];
+// Same read-only handlers as Slack/Teams, + the watch tools (read-class, no approval gate).
+const WHATSAPP_TOOLS = [...freightTools, ...profileTools, ...weatherTools, ...watchTools];
 const WHATSAPP_SYSTEM =
   `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
   'You are replying on WhatsApp. Keep it short and mobile-friendly — a few sentences, lead ' +
   'with the answer. WhatsApp supports only *bold* and _italic_ (no headings/tables). You only ' +
-  'answer freight/port/weather questions; you cannot take actions.';
+  'answer freight/port/weather questions; you cannot take actions, but you CAN set proactive ' +
+  'watches ("watch Genoa", "alert me when Rotterdam clears") — alerts arrive right here.';
 const MAX_REPLY = 1500; // WhatsApp per-message limit is 1600 — keep a margin.
 const EMPTY_TWIML = '<?xml version="1.0" encoding="UTF-8"?><Response></Response>';
 // The shared secret Twilio carries in the webhook URL's `?k=` param (see verify.mjs). Read once at

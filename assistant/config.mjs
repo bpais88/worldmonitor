@@ -1,4 +1,4 @@
-// Shared config for the Italy Freight assistant (interactive agent).
+// Shared config for the European freight assistant (interactive agent).
 export const RELAY_URL = (process.env.RELAY_URL || 'http://localhost:3004').replace(/\/$/, '');
 export const RELAY_SHARED_SECRET = process.env.RELAY_SHARED_SECRET || '';
 export const RELAY_AUTH_HEADER = (process.env.RELAY_AUTH_HEADER || 'x-relay-key').toLowerCase();

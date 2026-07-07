@@ -3,25 +3,28 @@
 // ack fast, run the SAME agent as the other channels over the read-only tools, and reply via the Bot
 // API through the neutral send() seam.
 //
-// Scope: reactive Q&A only (like WhatsApp). Watches + action tools are excluded: actions have no
-// approval affordance in plain chat, and watches need a per-user scope the single team:'telegram'
-// tenant doesn't yet give — both land in the proactive phase. (Telegram has no 24h reply window, so
-// proactive alerts are actually easier here later than on WhatsApp.)
+// Scope: reactive Q&A + watches (proactive phase, 2026-07-07). Telegram has no 24h reply window,
+// so proactive watch alerts send as plain Bot API messages — no template machinery needed (the
+// WhatsApp twin carries that). Watches are per-user tenants (channel-turn passes team
+// `telegram:<chatId>`) so list/cancel can't cross-leak between chats. Action tools stay excluded:
+// actions have no approval affordance in plain chat.
 import { verifyTelegramSecret } from './verify.mjs';
 import { DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { profileTools } from '../tools/profiles.mjs';
 import { weatherTools } from '../tools/weather.mjs';
+import { watchTools } from '../tools/watches.mjs';
 import { MARCO_PERSONA } from '../slack/onboarding.mjs';
 import { runChannelTurn } from '../channel-turn.mjs';
 
-// Read-only tool set — the exact same handlers as Slack/Teams/WhatsApp.
-const TELEGRAM_TOOLS = [...freightTools, ...profileTools, ...weatherTools];
+// Same read-only handlers as Slack/Teams/WhatsApp, + the watch tools (read-class, no approval gate).
+const TELEGRAM_TOOLS = [...freightTools, ...profileTools, ...weatherTools, ...watchTools];
 const TELEGRAM_SYSTEM =
   `${MARCO_PERSONA}\n\n${DEFAULT_SYSTEM}\n\n` +
   'You are replying on Telegram. Keep it short and mobile-friendly — a few sentences, lead with ' +
   'the answer, in plain text (no markdown or asterisks). You only answer freight/port/weather ' +
-  'questions; you cannot take actions.';
+  'questions; you cannot take actions, but you CAN set proactive watches ("watch Genoa", "alert ' +
+  'me when Rotterdam clears") — alerts arrive right here.';
 const MAX_REPLY = 3500; // Telegram's hard limit is 4096 chars — keep a margin.
 // The secret_token we set on the webhook, echoed back in the header (see verify.mjs). Read once at
 // load, matching connector.mjs — a Railway env change redeploys anyway, so nothing is lost hoisting.

@@ -28,11 +28,13 @@ async function slackApi(method, payload, botToken) {
   return j;
 }
 
-/** Post a message (optionally a thread reply; `blocks` = Slack Block Kit, `card` = Teams Adaptive Card). */
-export async function send(install, { channelId, threadId, text, blocks, card }) {
+/** Post a message (optionally a thread reply; `blocks` = Slack Block Kit, `card` = Teams Adaptive
+ * Card, `template` = WhatsApp content-template variables for proactive sends). */
+export async function send(install, { channelId, threadId, text, blocks, card, template }) {
   if (install?.platform === 'whatsapp') {
-    // WhatsApp (Twilio): the recipient number is on install.deliver.to; plain text only.
-    return sendWhatsApp({ to: install.deliver?.to, text });
+    // WhatsApp (Twilio): the recipient number is on install.deliver.to. Reactive replies go as
+    // plain text; proactive watch alerts pass `template` so they deliver outside the 24h window.
+    return sendWhatsApp({ to: install.deliver?.to, text, template });
   }
   if (install?.platform === 'telegram') {
     // Telegram (Bot API): the chat is on install.deliver.chatId; plain text only.
