@@ -105,12 +105,22 @@ async function tickWatches() {
         if (!a.watch.deliver?.serviceUrl) continue;
         install = { platform: 'teams', deliver: a.watch.deliver };
         threadId = undefined;
+      } else if (a.watch.platform === 'whatsapp' || a.watch.platform === 'telegram') {
+        // Plain-chat channels also carry their routing on the watch ({to} / {chatId}, captured at
+        // creation). Telegram sends plain; WhatsApp proactive must ride the approved content
+        // template — outside the 24h session window Twilio delivers nothing else.
+        if (!a.watch.deliver) continue;
+        install = { platform: a.watch.platform, deliver: a.watch.deliver };
+        threadId = undefined;
       } else {
         install = (await getInstallation(a.watch.team)) || legacyInstall();
         if (!deliverFor(install)) continue;
         threadId = a.watch.thread;
       }
-      await send(install, { channelId: a.watch.channel, threadId, text: a.message });
+      const template = a.watch.platform === 'whatsapp'
+        ? { variables: { 1: a.watch.target, 2: a.message } } // connector sanitizes multi-line prose
+        : undefined;
+      await send(install, { channelId: a.watch.channel, threadId, text: a.message, template });
     }
     if (alerts.length) console.log(`[host] watch tick: ${alerts.length} alert(s) posted`);
   } catch (e) {

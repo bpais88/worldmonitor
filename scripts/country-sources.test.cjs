@@ -9,6 +9,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 const { COUNTRY_SOURCES, sourcesFor, alertAreaKeywordsFor, disruptionVocabularyFor, foldText } = require('./country-sources.cjs');
+const { COUNTRY_TZ } = require('./db.cjs');
 
 const { ports } = require('../src/config/italy-ferries.data.json');
 const commercial = ports.filter((p) => p.commercial);
@@ -28,6 +29,10 @@ test('every covered country has a COMPLETE source entry (news, vocabulary, alert
     // M3: every country needs the curated union layer (the official calendar is IT-only bonus).
     assert.ok(src.strikeSources && Array.isArray(src.strikeSources.unions) && src.strikeSources.unions.length >= 1,
       `${code}: needs strikeSources.unions (≥1 curated union/entity for the strike-news layer)`);
+    // Baselines bucket in the port's LOCAL tz — without an entry here tzForCountry silently
+    // falls back to Europe/Rome and the country's congestion baselines are bucketed wrong.
+    assert.ok(COUNTRY_TZ[code],
+      `${code}: missing db.cjs COUNTRY_TZ entry — congestion baselines would silently bucket in Europe/Rome`);
   }
 });
 
