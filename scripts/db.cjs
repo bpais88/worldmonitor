@@ -260,12 +260,13 @@ async function loadOpenTrips() {
   return { trips: m, capped: rows.length >= 5000 };
 }
 
-/** Abandon specific open trips (anchor lost / superseded by a re-route). Status-guarded. */
-async function abandonTrips(ids) {
+/** Abandon specific open trips. Status-guarded. `reason` ('anchor_lost' | 'reroute') is stamped on
+ * the row (migration 008) so abandonment is auditable by cause, not archaeology. */
+async function abandonTrips(ids, reason = null) {
   if (!enabled || !ids || !ids.length) return 0;
   try {
     const rows = await withTimeout(sql`
-      UPDATE trips SET status = 'abandoned', updated_at = now()
+      UPDATE trips SET status = 'abandoned', abandon_reason = ${reason}, updated_at = now()
       WHERE id = ANY(${ids.map(Number)}::bigint[]) AND status = 'open' RETURNING id`);
     const n = Array.isArray(rows) ? rows.length : 0;
     if (n) tripOk('tripsAbandoned', n);
@@ -283,7 +284,7 @@ async function abandonStaleTrips(maxAgeH = 120) {
   if (!enabled) return [];
   try {
     const rows = await withTimeout(sql`
-      UPDATE trips SET status = 'abandoned', updated_at = now()
+      UPDATE trips SET status = 'abandoned', abandon_reason = 'max_open_age', updated_at = now()
       WHERE status = 'open' AND opened_at < now() - make_interval(hours => ${maxAgeH}) RETURNING id`);
     const ids = Array.isArray(rows) ? rows.map((r) => Number(r.id)) : [];
     if (ids.length) tripOk('tripsAbandoned', ids.length);

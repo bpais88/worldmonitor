@@ -12,6 +12,13 @@ const DEFAULTS = {
   minPointGapMs: 5 * 60_000, // trip_points downsample: at most one point per 5 min per trip
   destStableTicks: 2,        // a re-routed destination must hold this many ticks before we act (AIS
                              // destination strings flicker; without this, a flicker churns trips)
+  anchorGraceMs: 90 * 60_000, // hold an open trip this long after its anchor vanishes before
+                              // abandoning. Prod evidence (2026-07-12): 93.7% of abandonments
+                              // re-anchored the SAME dest (p50 gap 17min, p90 74min) — the anchor
+                              // blinks (crew clears/garbles the dest string, a static frame goes
+                              // missing) while the vessel sails on. 90min covers ~p90 and keeps the
+                              // trip open for the geofence CLOSE (~2.6k arrivals/day were being
+                              // abandoned minutes before their dest-enter fired).
 };
 
 // tripState (per mmsi, owned by the relay), the shape decideTrip reads + returns as nextState:
@@ -21,7 +28,8 @@ const DEFAULTS = {
 //     status: 'open'|'arrived',   // 'arrived' set by the geofence CLOSE (relay), stops point capture
 //     lastPointTs: number,        // last trip_point capture ms (0 = none yet)
 //     stalledMarked: boolean, etaPatched: boolean,
-//     pendingDest: string|null, pendingTicks: number }  // re-route flicker-stability guard
+//     pendingDest: string|null, pendingTicks: number,  // re-route flicker-stability guard
+//     anchorLostSince: number|null }                   // anchor-loss grace clock (null = anchored)
 
 /**
  * Decide the lifecycle actions for one vessel this tick. Pure: no I/O, no mutation of inputs.
@@ -30,7 +38,9 @@ const DEFAULTS = {
  * @param voyage updateVoyage() result this tick: { destPortId, startTs, departureEtaTs } (or null)
  * @param ctx    { now, fresh, speedStalled, etaSlipMin, opts } — plain values from the tick
  * @returns { actions, nextState } — actions the relay dispatches; nextState to store (null = delete)
- *   action types: { type:'abandon', tripId } | { type:'open', destPortId, openedAt, departureEta }
+ *   action types: { type:'abandon', tripId, reason:'anchor_lost'|'reroute' }
+ *     | { type:'open', destPortId, openedAt, departureEta }
+ *     | { type:'resume', tripId }  (stats-only: anchor recovered within grace, same trip continues)
  *     | { type:'capturePoint', tripId } | { type:'markStalled', tripId }
  *     | { type:'patchEta', tripId, etaTs } | { type:'bumpSlip', tripId, slipMin }
  */
@@ -41,12 +51,21 @@ function decideTrip(prev, voyage, ctx) {
   const opts = ctx.opts || {};
   const minPointGapMs = opts.minPointGapMs ?? DEFAULTS.minPointGapMs;
   const destStableTicks = opts.destStableTicks ?? DEFAULTS.destStableTicks;
+  const anchorGraceMs = opts.anchorGraceMs ?? DEFAULTS.anchorGraceMs;
   const actions = [];
 
-  // No destination this tick → the anchor is gone. Abandon any open trip; forget the vessel.
+  // No destination this tick → the anchor is gone. NOT proof the voyage ended: dest strings blink
+  // for a tick while the vessel sails on (see DEFAULTS.anchorGraceMs). Start/continue the grace
+  // clock on an open trip and only abandon once the loss has held for the full window — so the
+  // same trip survives the blink (resume below) and stays closable by the geofence dest-enter.
   if (!voyage) {
-    if (prev && prev.tripId != null && prev.status === 'open') actions.push({ type: 'abandon', tripId: prev.tripId });
-    return { actions, nextState: null };
+    if (!prev || prev.status !== 'open') return { actions, nextState: null }; // arrived/abandoned → geofence/sweep owns the row; just forget
+    const lostSince = prev.anchorLostSince ?? now;
+    if (now - lostSince >= anchorGraceMs) {
+      if (prev.tripId != null) actions.push({ type: 'abandon', tripId: prev.tripId, reason: 'anchor_lost' });
+      return { actions, nextState: null };
+    }
+    return { actions, nextState: prev.anchorLostSince != null ? prev : { ...prev, anchorLostSince: lostSince } };
   }
 
   // Re-route detection with a flicker-stability guard: the destination differs from the tracked
@@ -57,10 +76,17 @@ function decideTrip(prev, voyage, ctx) {
       return { actions, nextState: { ...prev, pendingDest: voyage.destPortId, pendingTicks } };
     }
     // Stable re-route: abandon the old open trip (never fabricate an arrival), then open the new leg.
-    if (prev.tripId != null && prev.status === 'open') actions.push({ type: 'abandon', tripId: prev.tripId });
+    if (prev.tripId != null && prev.status === 'open') actions.push({ type: 'abandon', tripId: prev.tripId, reason: 'reroute' });
     prev = null; // fall through to open-new
   } else if (prev && prev.pendingDest) {
     prev = { ...prev, pendingDest: null, pendingTicks: 0 }; // dest settled back — clear the counter
+  }
+
+  // Anchor recovered on the SAME destination within grace: resume the same trip — the stitch that
+  // prevents voyage fragmentation. 'resume' is stats-only (the DB row never changed; nothing to write).
+  if (prev && prev.anchorLostSince != null) {
+    if (prev.tripId != null && prev.status === 'open') actions.push({ type: 'resume', tripId: prev.tripId });
+    prev = { ...prev, anchorLostSince: null };
   }
 
   // OPEN a new trip when nothing is tracked for this (mmsi, dest). tripId is null until the relay's
@@ -72,7 +98,7 @@ function decideTrip(prev, voyage, ctx) {
       nextState: {
         tripId: null, destPortId: voyage.destPortId, openedAt: voyage.startTs, status: 'open',
         lastPointTs: 0, stalledMarked: false, etaPatched: Number.isFinite(voyage.departureEtaTs),
-        pendingDest: null, pendingTicks: 0,
+        pendingDest: null, pendingTicks: 0, anchorLostSince: null,
       },
     };
   }
@@ -154,13 +180,15 @@ function originFromRecentExit(recentExit, destPortId, openedAt, opts = {}) {
  */
 function summarizeTrips(tripByMmsi, now) {
   let openCount = 0;
+  let graceCount = 0; // open trips currently riding the anchor-loss grace window
   let oldestOpenedAt = null;
   for (const t of tripByMmsi.values()) {
     if (t.status !== 'open') continue;
     openCount++;
+    if (t.anchorLostSince != null) graceCount++;
     if (oldestOpenedAt == null || t.openedAt < oldestOpenedAt) oldestOpenedAt = t.openedAt;
   }
-  return { openCount, oldestOpenAgeMin: oldestOpenedAt == null ? null : Math.round((now - oldestOpenedAt) / 60_000) };
+  return { openCount, graceCount, oldestOpenAgeMin: oldestOpenedAt == null ? null : Math.round((now - oldestOpenedAt) / 60_000) };
 }
 
 module.exports = { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, DEFAULTS };
