@@ -74,6 +74,18 @@ test('grace expiry abandons with reason anchor_lost and clears state', () => {
   assert.strictEqual(r.nextState, null);
 });
 
+test('anchor loss discards a pending re-route candidate: A→B→null→B must re-earn BOTH stability ticks', () => {
+  let r = decideTrip(openState(), voyage('genova', T0 + MIN), { now: T0 + MIN, fresh: true }); // B tick 1: pending
+  assert.strictEqual(r.nextState.pendingDest, 'genova');
+  r = decideTrip(r.nextState, null, { now: T0 + 2 * MIN });                                    // null breaks the window
+  assert.strictEqual(r.nextState.pendingDest, null);
+  assert.strictEqual(r.nextState.pendingTicks, 0);
+  r = decideTrip(r.nextState, voyage('genova', T0 + 3 * MIN), { now: T0 + 3 * MIN, fresh: true }); // B again: tick 1, NOT 2
+  assert.deepStrictEqual(r.actions.filter((a) => a.type === 'abandon' || a.type === 'open'), []); // no supersede yet
+  assert.strictEqual(r.nextState.tripId, 5);      // original trip still tracked
+  assert.strictEqual(r.nextState.pendingTicks, 1);
+});
+
 test('diff-dest re-anchor during grace supersedes via the flicker guard (real re-route)', () => {
   let r = decideTrip(openState(), null, { now: T0 + 10 * MIN });
   r = decideTrip(r.nextState, voyage('genova', T0 + 30 * MIN), { now: T0 + 30 * MIN, fresh: true }); // tick 1: pending

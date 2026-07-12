@@ -65,7 +65,13 @@ function decideTrip(prev, voyage, ctx) {
       if (prev.tripId != null) actions.push({ type: 'abandon', tripId: prev.tripId, reason: 'anchor_lost' });
       return { actions, nextState: null };
     }
-    return { actions, nextState: prev.anchorLostSince != null ? prev : { ...prev, anchorLostSince: lostSince } };
+    // A null anchor also breaks the re-route stability window: destStableTicks means CONSECUTIVE
+    // voyage ticks, so a pending flicker candidate is discarded on loss — A→B→null→B must re-earn
+    // both ticks after the anchor returns, else B-null-B garble would supersede a healthy trip.
+    const graced = prev.anchorLostSince != null && prev.pendingDest == null
+      ? prev
+      : { ...prev, anchorLostSince: lostSince, pendingDest: null, pendingTicks: 0 };
+    return { actions, nextState: graced };
   }
 
   // Re-route detection with a flicker-stability guard: the destination differs from the tracked
