@@ -2330,8 +2330,12 @@ const TRIP_POINTS_HIGH_WATER = Math.floor(TRIP_POINTS_BUFFER_MAX * 0.8);        
 // (abandon then re-open when it reports). Skip that reconciliation for the first few ticks so the fleet
 // repopulates first. Re-route/anchor abandonment for vessels that DO report is unaffected.
 const TRIP_BOOT_GRACE_TICKS = safeInt(process.env.TRIP_BOOT_GRACE_TICKS, 3, 1);
-const TRIP_OPTS = { minPointGapMs: TRIP_POINT_GAP_MS, destStableTicks: TRIP_DEST_STABLE_TICKS };
+// Anchor-loss grace: hold an open trip this long after its voyage anchor vanishes before abandoning
+// (see trip-lifecycle DEFAULTS.anchorGraceMs for the prod evidence behind the 90min default).
+const TRIP_ANCHOR_GRACE_MIN = safeInt(process.env.TRIP_ANCHOR_GRACE_MIN, 90, 0);
+const TRIP_OPTS = { minPointGapMs: TRIP_POINT_GAP_MS, destStableTicks: TRIP_DEST_STABLE_TICKS, anchorGraceMs: TRIP_ANCHOR_GRACE_MIN * 60_000 };
 const tripByMmsi = new Map();      // mmsi -> tripState (see trip-lifecycle.cjs); DB is authoritative, seeded on boot
+let _tripsResumed = 0;             // anchor recovered within grace → same trip continued (fragmentation prevented)
 const pendingTripPoints = [];      // buffered trip_points, flushed in batches off the hot loop
 let tripsReady = false;            // gate: no lifecycle mutations until loadOpenTrips() has seeded tripByMmsi
 let _flushingTripPoints = false;   // in-flight guard for the flush
@@ -2433,16 +2437,20 @@ function updateFerryDelays(now = Date.now()) {
       }
     }
     // Phase B: anchor-loss reconciliation. Any tracked trip whose vessel no longer has a voyage
-    // (not-freight now, destination unresolved, or history pruned) has lost its anchor → abandon +
-    // forget. One place, so the abandon path isn't scattered across the delete sites above.
+    // (not-freight now, destination unresolved, or history pruned) has lost its anchor — but that's
+    // routed through decideTrip(prev, null) so the GRACE window applies: the trip stays open (and
+    // geofence-closable) until the loss has held TRIP_ANCHOR_GRACE_MIN; a same-dest re-anchor in the
+    // per-vessel loop above resumes it instead of churning abandon→re-open. One place, so the abandon
+    // path isn't scattered across the delete sites above.
     // Skipped during the boot-grace window (see TRIP_BOOT_GRACE_TICKS): right after a restart the fleet
     // maps are still refilling, so a seeded trip's vessel may just not have reported yet — abandoning it
     // now would churn (abandon → re-open on the next tick when it reports).
     if (TRIPS_ENABLED && tripsReady && _ferryTickCount > TRIP_BOOT_GRACE_TICKS) {
       for (const [mmsi, t] of tripByMmsi) {
         if (!voyageByMmsi.has(mmsi)) {
-          if (t.tripId != null && t.status === 'open') void db.abandonTrips([t.tripId]);
-          tripByMmsi.delete(mmsi);
+          const { actions, nextState } = decideTrip(t, null, { now, opts: TRIP_OPTS });
+          if (actions.length) applyTripActions(mmsi, actions, { now });
+          if (nextState === null) tripByMmsi.delete(mmsi); else tripByMmsi.set(mmsi, nextState);
         }
       }
     }
@@ -2465,7 +2473,10 @@ function applyTripActions(mmsi, actions, ctx) {
   for (const a of actions) {
     switch (a.type) {
       case 'abandon':
-        void db.abandonTrips([a.tripId]);
+        void db.abandonTrips([a.tripId], a.reason);
+        break;
+      case 'resume': // anchor recovered within grace — same trip continues; stats only, no DB write
+        _tripsResumed++;
         break;
       case 'open': {
         const { destPortId } = a;
@@ -2553,6 +2564,8 @@ function buildTripsHealth() {
   return {
     enabled,
     openTripsTracked: g.openCount,
+    openTripsInGrace: g.graceCount, // riding the anchor-loss grace window right now
+    tripsResumed: _tripsResumed,    // anchor recovered within grace → fragmentation prevented
     oldestOpenTripAgeMin: g.oldestOpenAgeMin, // leak indicator (should stay < TRIP_MAX_OPEN_AGE_H*60)
     tripPointsBuffered: pendingTripPoints.length,
     recentExitsTracked: recentExitByMmsi.size,
@@ -2630,7 +2643,7 @@ function startFerryDelayLoop() {
           tripByMmsi.set(mmsi, {
             tripId: t.tripId, destPortId: t.destPortId, openedAt: t.openedAt, status: t.status,
             lastPointTs: 0, stalledMarked: !!t.stalled, etaPatched: t.departureEta != null,
-            pendingDest: null, pendingTicks: 0,
+            pendingDest: null, pendingTicks: 0, anchorLostSince: null,
           });
         }
         if (capped) console.warn('[Relay] trips: loadOpenTrips hit the 5000 cap — possible open-trip leak');

@@ -25,11 +25,12 @@ test('open trip has etaPatched=false when no departure ETA yet', () => {
   assert.strictEqual(nextState.etaPatched, false);
 });
 
-test('no voyage abandons an open tracked trip and clears state', () => {
-  const prev = { tripId: 5, destPortId: 'ancona', openedAt: T0, status: 'open', lastPointTs: 0, stalledMarked: false, etaPatched: true, pendingDest: null, pendingTicks: 0 };
-  const { actions, nextState } = decideTrip(prev, null, { now: T0 + MIN });
+test('no voyage with anchorGraceMs=0 abandons immediately (legacy behavior), with reason', () => {
+  const prev = { tripId: 5, destPortId: 'ancona', openedAt: T0, status: 'open', lastPointTs: 0, stalledMarked: false, etaPatched: true, pendingDest: null, pendingTicks: 0, anchorLostSince: null };
+  const { actions, nextState } = decideTrip(prev, null, { now: T0 + MIN, opts: { anchorGraceMs: 0 } });
   assert.deepStrictEqual(types(actions), ['abandon']);
   assert.strictEqual(actions[0].tripId, 5);
+  assert.strictEqual(actions[0].reason, 'anchor_lost');
   assert.strictEqual(nextState, null);
 });
 
@@ -37,6 +38,77 @@ test('no voyage with no tracked trip is a clean no-op', () => {
   const { actions, nextState } = decideTrip(undefined, null, { now: T0 });
   assert.deepStrictEqual(actions, []);
   assert.strictEqual(nextState, null);
+});
+
+// --- anchor-loss grace: the anti-fragmentation window ---------------------------------------------
+// Prod evidence (2026-07-12): 93.7% of abandonments re-anchored the SAME dest within 6h (p50 17min)
+// — the anchor blinks while the vessel sails on, and ~2.6k arrivals/day died minutes before their
+// geofence dest-enter. These lock the grace contract: hold → resume same-dest → abandon on expiry.
+
+const openState = () => ({ tripId: 5, destPortId: 'ancona', openedAt: T0, status: 'open', lastPointTs: 0, stalledMarked: false, etaPatched: true, pendingDest: null, pendingTicks: 0, anchorLostSince: null });
+
+test('anchor loss within grace holds the trip open (no abandon), stamping anchorLostSince once', () => {
+  let r = decideTrip(openState(), null, { now: T0 + 10 * MIN }); // default 90min grace
+  assert.deepStrictEqual(r.actions, []);
+  assert.strictEqual(r.nextState.anchorLostSince, T0 + 10 * MIN);
+  r = decideTrip(r.nextState, null, { now: T0 + 20 * MIN }); // still lost — clock does NOT restart
+  assert.deepStrictEqual(r.actions, []);
+  assert.strictEqual(r.nextState.anchorLostSince, T0 + 10 * MIN);
+});
+
+test('same-dest re-anchor within grace RESUMES the same trip (stitch, stats-only action)', () => {
+  let r = decideTrip(openState(), null, { now: T0 + 10 * MIN });
+  r = decideTrip(r.nextState, voyage('ancona', T0), { now: T0 + 30 * MIN, fresh: true });
+  assert.ok(types(r.actions).includes('resume'));
+  assert.ok(!types(r.actions).includes('abandon'));
+  assert.ok(!types(r.actions).includes('open'));    // NOT a new trip — that's the whole point
+  assert.strictEqual(r.nextState.tripId, 5);        // same row
+  assert.strictEqual(r.nextState.anchorLostSince, null);
+});
+
+test('grace expiry abandons with reason anchor_lost and clears state', () => {
+  let r = decideTrip(openState(), null, { now: T0 + 10 * MIN });
+  r = decideTrip(r.nextState, null, { now: T0 + 10 * MIN + DEFAULTS.anchorGraceMs });
+  assert.deepStrictEqual(types(r.actions), ['abandon']);
+  assert.strictEqual(r.actions[0].reason, 'anchor_lost');
+  assert.strictEqual(r.nextState, null);
+});
+
+test('diff-dest re-anchor during grace supersedes via the flicker guard (real re-route)', () => {
+  let r = decideTrip(openState(), null, { now: T0 + 10 * MIN });
+  r = decideTrip(r.nextState, voyage('genova', T0 + 30 * MIN), { now: T0 + 30 * MIN, fresh: true }); // tick 1: pending
+  assert.deepStrictEqual(r.actions, []);
+  r = decideTrip(r.nextState, voyage('genova', T0 + 30 * MIN), { now: T0 + 31 * MIN, fresh: true }); // tick 2: act
+  assert.deepStrictEqual(types(r.actions), ['abandon', 'open']);
+  assert.strictEqual(r.actions[0].reason, 'reroute');
+  assert.strictEqual(r.nextState.destPortId, 'genova');
+  assert.strictEqual(r.nextState.anchorLostSince, null); // fresh leg starts anchored
+});
+
+test('anchor loss on an arrived entry just forgets it (geofence side owns the row)', () => {
+  const prev = { ...openState(), status: 'arrived' };
+  const r = decideTrip(prev, null, { now: T0 + 10 * MIN });
+  assert.deepStrictEqual(r.actions, []);
+  assert.strictEqual(r.nextState, null);
+});
+
+test('a trip in grace whose id never resolved expires silently (nothing in the DB to abandon)', () => {
+  const prev = { ...openState(), tripId: null };
+  let r = decideTrip(prev, null, { now: T0 });
+  r = decideTrip(r.nextState, null, { now: T0 + DEFAULTS.anchorGraceMs });
+  assert.deepStrictEqual(r.actions, []);
+  assert.strictEqual(r.nextState, null);
+});
+
+test('summarizeTrips counts open trips riding the grace window', () => {
+  const m = new Map([
+    ['1', { status: 'open', openedAt: T0, anchorLostSince: T0 + MIN }],
+    ['2', { status: 'open', openedAt: T0, anchorLostSince: null }],
+    ['3', { status: 'arrived', openedAt: T0, anchorLostSince: T0 }], // not open → not counted
+  ]);
+  const g = summarizeTrips(m, T0 + 10 * MIN);
+  assert.strictEqual(g.openCount, 2);
+  assert.strictEqual(g.graceCount, 1);
 });
 
 test('captures a point once the gap has elapsed, not before', () => {
@@ -113,6 +185,7 @@ test('re-route: once the new dest holds destStableTicks, abandon old + open new'
   r = decideTrip(r.nextState, voyage('genova', T0 + MIN), { now: T0 + 2 * MIN, fresh: true }); // tick 2: act
   assert.deepStrictEqual(types(r.actions), ['abandon', 'open']);
   assert.strictEqual(r.actions[0].tripId, 9);
+  assert.strictEqual(r.actions[0].reason, 'reroute');
   assert.strictEqual(r.actions[1].destPortId, 'genova');
   assert.strictEqual(r.nextState.destPortId, 'genova');
   assert.strictEqual(r.nextState.tripId, null);
@@ -137,6 +210,7 @@ test('custom destStableTicks=1 acts on the first re-route tick', () => {
 test('DEFAULTS are exposed and sane', () => {
   assert.strictEqual(DEFAULTS.minPointGapMs, 5 * 60_000);
   assert.strictEqual(DEFAULTS.destStableTicks, 2);
+  assert.strictEqual(DEFAULTS.anchorGraceMs, 90 * 60_000);
 });
 
 // --- in-memory 'abandoned' entries (the stale-sweep reconciliation, tripMaintenance) --------------
@@ -249,9 +323,9 @@ test('summarizeTrips counts open trips and the oldest open age, ignoring arrived
 
 test('summarizeTrips with no open trips reports null oldest age', () => {
   const m = new Map([['3', { status: 'arrived', openedAt: T0 - 500 * MIN }]]);
-  assert.deepStrictEqual(summarizeTrips(m, T0), { openCount: 0, oldestOpenAgeMin: null });
+  assert.deepStrictEqual(summarizeTrips(m, T0), { openCount: 0, graceCount: 0, oldestOpenAgeMin: null });
 });
 
 test('summarizeTrips on an empty map is zero/null', () => {
-  assert.deepStrictEqual(summarizeTrips(new Map(), T0), { openCount: 0, oldestOpenAgeMin: null });
+  assert.deepStrictEqual(summarizeTrips(new Map(), T0), { openCount: 0, graceCount: 0, oldestOpenAgeMin: null });
 });
