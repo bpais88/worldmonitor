@@ -74,19 +74,21 @@ test('renderText produces a paste-ready digest with the headline finding', () =>
   assert.match(txt, /Genoa 15:00/);
 });
 
-test('upcomingStrikes windows to [now, now+14d]: past and far-future events are dropped', () => {
-  const NOW = Date.parse('2026-07-12T12:00:00Z');
+test('upcomingStrikes windows to [UTC day start, now+14d]: past and far-future dropped, TODAY kept', () => {
+  const NOW = Date.parse('2026-07-12T12:00:00Z'); // noon — after a date-only strike's 00:00 startsAt
   const DAY = 86_400_000;
   const ev = (startsAt, id) => ({ id, kind: 'strike_scheduled', startsAt, summary: id });
   const events = [
     ev(NOW - 2 * DAY, 'expired'),          // relay cache can carry these — must not show
+    ev(Date.parse('2026-07-12T00:00:00Z'), 'today-in-effect'), // MIT date-only entry, strike is TODAY
+    ev(Date.parse('2026-07-11T00:00:00Z'), 'yesterday'),       // over — must not show
     ev(NOW + 5 * DAY, 'in-window-late'),
     ev(NOW + 1 * DAY, 'in-window-early'),
     ev(NOW + 20 * DAY, 'beyond-window'),
     { id: 'news', kind: 'strike_report', startsAt: NOW + 3 * DAY },   // news, not calendar
     { id: 'undated', kind: 'strike_scheduled' },                       // no startsAt
   ];
-  assert.deepStrictEqual(upcomingStrikes(events, NOW).map((e) => e.id), ['in-window-early', 'in-window-late']);
+  assert.deepStrictEqual(upcomingStrikes(events, NOW).map((e) => e.id), ['today-in-effect', 'in-window-early', 'in-window-late']);
   assert.deepStrictEqual(upcomingStrikes(null, NOW), []);
 });
 

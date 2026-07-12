@@ -98,13 +98,17 @@ async function collect(sql) {
   return { head: head[0], dow, peaks, dwell, operators, corridors, berth };
 }
 
-// Window scheduled strikes to [now, now + lookahead] — the relay endpoint ignores query params
-// beyond country/port and its cache can carry EXPIRED calendar entries, so the "next 14 days"
-// promise is enforced HERE, not upstream. Pure — unit-tested.
+// Window scheduled strikes to [start of TODAY (UTC), now + lookahead] — the relay endpoint ignores
+// query params beyond country/port and its cache can carry EXPIRED calendar entries, so the
+// "next 14 days" promise is enforced HERE, not upstream. The lower bound is the UTC day start,
+// not `now`: MIT date-only entries normalize to 00:00 UTC, so a strike IN EFFECT today would
+// otherwise vanish from the report the moment it begins. Pure — unit-tested.
 function upcomingStrikes(events, now, lookaheadDays = STRIKE_LOOKAHEAD_DAYS) {
-  const max = now + lookaheadDays * 86_400_000;
+  const DAY = 86_400_000;
+  const dayStart = now - (now % DAY); // epoch days align with UTC midnight
+  const max = now + lookaheadDays * DAY;
   return (events || [])
-    .filter((e) => e.kind === 'strike_scheduled' && Number.isFinite(e.startsAt) && e.startsAt >= now && e.startsAt <= max)
+    .filter((e) => e.kind === 'strike_scheduled' && Number.isFinite(e.startsAt) && e.startsAt >= dayStart && e.startsAt <= max)
     .sort((a, b) => a.startsAt - b.startsAt)
     .slice(0, 6);
 }
