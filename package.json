@@ -57,7 +57,7 @@
     "desktop:package:windows:full:sign": "node scripts/desktop-package.mjs --os windows --variant full --sign",
     "desktop:package:windows:tech:sign": "node scripts/desktop-package.mjs --os windows --variant tech --sign",
     "desktop:package": "node scripts/desktop-package.mjs",
-    "report:corridor": "node --env-file=.env scripts/corridor-report.cjs"
+    "report:corridor": "node --env-file-if-exists=.env scripts/corridor-report.cjs"
   },
   "devDependencies": {
     "@playwright/test": "^1.52.0",
