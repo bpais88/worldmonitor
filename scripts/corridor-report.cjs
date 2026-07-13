@@ -8,7 +8,7 @@
 //
 // Usage: DATABASE_URL=... node scripts/corridor-report.cjs
 //        (optional: PROD_RELAY_URL + RELAY_SHARED_SECRET for the strike-calendar section)
-// Or:    npm run report:corridor  (loads .env via node --env-file)
+// Or:    npm run report:corridor  (loads .env when present via node --env-file-if-exists)
 //
 // Design decisions:
 //   - No week-over-week deltas yet: the collection clock started 2026-07-02 and the #103 grace
@@ -25,6 +25,14 @@ const MIN = {
   corridorLegs: 10,       // measured legs before a corridor is quotable
   operatorTrips: 25,      // eligible trips before an operator appears at all
 };
+
+// Two time horizons, both explicit in the section notes so a reader never mistakes one for the
+// other: "this week" sections (headline, day shape, berths) use 7 days; the STRUCTURAL sections
+// (peaks, dwell, operators, corridors) need volume, so they use a trailing window — without it,
+// months of history would eventually dominate a report labelled as this week's.
+const WEEK_DAYS = 7;
+const TREND_DAYS = 28;
+const STRIKE_LOOKAHEAD_DAYS = 14;
 const OPERATOR_SOLID_N = 100; // below this, the on-time table carries the early-signal caveat
 
 // operator_id → display name (fallback: title-cased id)
@@ -48,20 +56,22 @@ const esc = (s) => String(s).replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&l
 async function collect(sql) {
   const [head, dow, peaks, dwell, operators, corridors, berth] = await Promise.all([
     sql`SELECT
-          (SELECT count(DISTINCT mmsi) FROM trips WHERE opened_at > now() - interval '7 days') AS fleet,
-          (SELECT count(*) FROM trips WHERE status='arrived' AND arrived_at > now() - interval '7 days') AS arrivals_7d,
+          (SELECT count(DISTINCT mmsi) FROM trips WHERE opened_at > now() - make_interval(days => ${WEEK_DAYS})) AS fleet,
+          (SELECT count(*) FROM trips WHERE status='arrived' AND arrived_at > now() - make_interval(days => ${WEEK_DAYS})) AS arrivals_7d,
           (SELECT count(*) FROM trip_points) AS points,
           (SELECT count(*) FROM port_snapshots WHERE coverage_ok) AS snapshots`,
     sql`SELECT to_char(arrived_at,'Dy') AS dy, EXTRACT(dow FROM arrived_at)::int AS d, count(*)::int AS n
-        FROM trips WHERE status='arrived' AND arrived_at > now() - interval '7 days' GROUP BY 1,2 ORDER BY 2`,
+        FROM trips WHERE status='arrived' AND arrived_at > now() - make_interval(days => ${WEEK_DAYS}) GROUP BY 1,2 ORDER BY 2`,
     sql`WITH a AS (
           SELECT t.dest_port_id, p.name, EXTRACT(hour FROM t.arrived_at AT TIME ZONE p.tz)::int AS h
-          FROM trips t JOIN ports p ON p.port_id=t.dest_port_id WHERE t.status='arrived')
+          FROM trips t JOIN ports p ON p.port_id=t.dest_port_id
+          WHERE t.status='arrived' AND t.arrived_at > now() - make_interval(days => ${TREND_DAYS}))
         SELECT dest_port_id, name, mode() WITHIN GROUP (ORDER BY h)::int AS peak, count(*)::int AS n
         FROM a GROUP BY 1,2 HAVING count(*) >= ${MIN.peakHourArrivals} ORDER BY n DESC LIMIT 8`,
     sql`SELECT t.dest_port_id, p.name, round(percentile_cont(0.5) WITHIN GROUP (ORDER BY t.dest_dwell_min))::int AS med, count(*)::int AS n
         FROM trips t JOIN ports p ON p.port_id=t.dest_port_id
         WHERE t.status='arrived' AND t.dest_dwell_min IS NOT NULL
+          AND t.arrived_at > now() - make_interval(days => ${TREND_DAYS})
         GROUP BY 1,2
         HAVING count(*) >= ${MIN.dwellArrivals}
            AND percentile_cont(0.5) WITHIN GROUP (ORDER BY t.dest_dwell_min) >= ${MIN.dwellPlausibleMin}
@@ -71,33 +81,47 @@ async function collect(sql) {
           count(*)::int AS n
         FROM trips t JOIN vessels v ON v.mmsi=t.mmsi
         WHERE t.status='arrived' AND t.eta_at_open AND t.departure_eta IS NOT NULL AND v.operator_id IS NOT NULL
+          AND t.arrived_at > now() - make_interval(days => ${TREND_DAYS})
         GROUP BY 1 HAVING count(*) >= ${MIN.operatorTrips} ORDER BY pct DESC`,
     sql`SELECT t.origin_port_id AS o, t.dest_port_id AS d, po.name AS oname, pd.name AS dname,
           round(percentile_cont(0.5) WITHIN GROUP (ORDER BY t.duration_min))::int AS med, count(*)::int AS n
         FROM trips t JOIN ports po ON po.port_id=t.origin_port_id JOIN ports pd ON pd.port_id=t.dest_port_id
         WHERE t.status='arrived' AND t.origin_port_id IS NOT NULL AND t.duration_min IS NOT NULL
+          AND t.arrived_at > now() - make_interval(days => ${TREND_DAYS})
         GROUP BY 1,2,3,4 HAVING count(*) >= ${MIN.corridorLegs} ORDER BY n DESC LIMIT 10`,
     sql`SELECT s.port_id, p.name, round(avg(s.at_berth))::int AS mean,
           round(percentile_cont(0.9) WITHIN GROUP (ORDER BY s.at_berth))::int AS p90
         FROM port_snapshots s JOIN ports p ON p.port_id=s.port_id
-        WHERE s.coverage_ok AND s.ts > now() - interval '7 days'
+        WHERE s.coverage_ok AND s.ts > now() - make_interval(days => ${WEEK_DAYS})
         GROUP BY 1,2 HAVING round(avg(s.at_berth))::int >= 5 ORDER BY mean DESC LIMIT 6`,
   ]);
   return { head: head[0], dow, peaks, dwell, operators, corridors, berth };
 }
 
+// Window scheduled strikes to [start of TODAY (UTC), now + lookahead] — the relay endpoint ignores
+// query params beyond country/port and its cache can carry EXPIRED calendar entries, so the
+// "next 14 days" promise is enforced HERE, not upstream. The lower bound is the UTC day start,
+// not `now`: MIT date-only entries normalize to 00:00 UTC, so a strike IN EFFECT today would
+// otherwise vanish from the report the moment it begins. Pure — unit-tested.
+function upcomingStrikes(events, now, lookaheadDays = STRIKE_LOOKAHEAD_DAYS) {
+  const DAY = 86_400_000;
+  const dayStart = now - (now % DAY); // epoch days align with UTC midnight
+  const max = now + lookaheadDays * DAY;
+  return (events || [])
+    .filter((e) => e.kind === 'strike_scheduled' && Number.isFinite(e.startsAt) && e.startsAt >= dayStart && e.startsAt <= max)
+    .sort((a, b) => a.startsAt - b.startsAt)
+    .slice(0, 6);
+}
+
 // Upcoming scheduled strikes from the relay (best-effort: section is suppressed without env).
-async function collectStrikes() {
+async function collectStrikes(now = Date.now()) {
   const base = process.env.PROD_RELAY_URL, secret = process.env.RELAY_SHARED_SECRET;
   if (!base || !secret) return null;
   try {
-    const res = await fetch(`${base}/ais/disruptions?days=14`, { headers: { Authorization: `Bearer ${secret}` } });
+    const res = await fetch(`${base}/ais/disruptions`, { headers: { Authorization: `Bearer ${secret}` } });
     if (!res.ok) return null;
     const { events = [] } = await res.json();
-    return events
-      .filter((e) => e.kind === 'strike_scheduled' && e.startsAt)
-      .sort((a, b) => a.startsAt - b.startsAt)
-      .slice(0, 6);
+    return upcomingStrikes(events, now);
   } catch { return null; }
 }
 
@@ -195,13 +219,13 @@ footer{margin-top:3rem;border-top:1px dashed var(--line);padding-top:1rem;font-f
   <div><b>${(m.head.snapshots / 1e3).toFixed(0)}k</b><span>PORT OBSERVATIONS</span></div>
 </div>
 ${section('The week has a shape', null, dowBody)}
-${section('When ports actually peak', 'modal arrival hour, local time, all observed arrivals',
+${section('When ports actually peak', `modal arrival hour, local time · trailing ${TREND_DAYS} days`,
     m.peaks.length ? table(['Port', 'Peak hour', 'Arrivals observed'], m.peaks.map((p) => [esc(p.name), fmtH(p.peak), p.n])) : null)}
-${section('Turnaround league', `median dwell after arrival · ports with ≥${MIN.dwellArrivals} measured calls`,
+${section('Turnaround league', `median dwell after arrival · trailing ${TREND_DAYS} days · ports with ≥${MIN.dwellArrivals} measured calls`,
     m.dwell.length ? table(['Port', 'Median turnaround', 'Calls measured'], m.dwell.map((d) => [esc(d.name), fmtDur(d.med), d.n])) : null)}
-${section('Operator punctuality — early signal', m.operatorsEarly ? `on-time = arrived within 15min of the ETA declared AT DEPARTURE. Samples are still small; treat as directional until each operator passes ${OPERATOR_SOLID_N} measured voyages.` : 'on-time = arrived within 15min of the ETA declared at departure',
+${section('Operator punctuality — early signal', (m.operatorsEarly ? `on-time = arrived within 15min of the ETA declared AT DEPARTURE. Samples are still small; treat as directional until each operator passes ${OPERATOR_SOLID_N} measured voyages.` : 'on-time = arrived within 15min of the ETA declared at departure') + ` Trailing ${TREND_DAYS} days.`,
     m.operators.length ? table(['Operator', 'On-time', 'Voyages measured'], m.operators.map((o) => [esc(o.name), `${o.pct}%`, o.n])) : null)}
-${section('Corridor benchmarks', `median port-to-port duration · corridors with ≥${MIN.corridorLegs} measured legs`,
+${section('Corridor benchmarks', `median port-to-port duration · trailing ${TREND_DAYS} days · corridors with ≥${MIN.corridorLegs} measured legs`,
     m.corridors.length ? table(['Corridor', 'Median leg', 'Legs'], m.corridors.map((c) => [`${esc(c.oname)} → ${esc(c.dname)}`, fmtDur(c.med), c.n])) : null)}
 ${section('Busiest berths this week', 'freight vessels at berth · mean and p90 spike, coverage-verified samples only',
     m.berth.length ? table(['Port', 'Typical at berth', 'p90 spike'], m.berth.map((b) => [esc(b.name), b.mean, b.p90])) : null)}
@@ -239,4 +263,4 @@ async function main() {
 
 if (require.main === module) main().catch((e) => { console.error(e); process.exit(1); });
 
-module.exports = { isoWeek, buildModel, renderHtml, renderText, opName, fmtDur, MIN, OPERATOR_SOLID_N };
+module.exports = { isoWeek, buildModel, renderHtml, renderText, opName, fmtDur, upcomingStrikes, MIN, OPERATOR_SOLID_N, TREND_DAYS };
