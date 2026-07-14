@@ -84,3 +84,21 @@ That's it — Claude sees the new capability automatically. Tomorrow's tools
 - `RELAY_URL` + `RELAY_SHARED_SECRET` — to reach the freight data.
 - `UPSTASH_REDIS_REST_URL` + `UPSTASH_REDIS_REST_TOKEN` — *(optional)* persist memory + watches across restarts; without them the store falls back to in-memory (lost on redeploy).
 - `WATCH_TICK_MS` — *(optional)* proactive watch evaluation interval (default 5 min).
+
+## Daily ops self-report
+
+`ops-report.mjs` posts the relay's health + launch-gate verdict to the owner once a day. It replaces
+the claude.ai scheduled routines that used to `curl` the relay's `/health`: those run in a cloud
+sandbox whose egress policy now 403s the relay host, so they failed before reading anything. Marco
+already runs beside the relay and can reach it, so the check moved here. Read-only — a public GET
+plus a chat message; it touches no data path.
+
+Unset `OPS_REPORT_CHAT` and the ticker is inert. No new secret: delivery reuses the Telegram bot
+token (or the Slack install) the adapters already run on.
+
+- `OPS_REPORT_CHAT` — Telegram chat id, or Slack channel id. **Arms the report.**
+- `OPS_REPORT_PLATFORM` — *(optional)* `telegram` (default) or `slack`.
+- `OPS_REPORT_TEAM` — *(optional, Slack only)* workspace id, to resolve the install's bot token.
+- `OPS_REPORT_HOUR_UTC` — *(optional)* daily send hour UTC (default 6). Missed slots still send
+  within 6h; past that the day is skipped rather than delivered at a useless hour.
+- `OPS_REPORT_TICK_MS` — *(optional)* how often the scheduler checks the clock (default 5 min).

@@ -18,6 +18,7 @@ import { relayGet } from './relay.mjs';
 import { listWatches, evaluateWatches, evaluateDisruptionWatches } from './watches.mjs';
 import { getInstallation, legacyInstall, deliverFor } from './slack/installations.mjs';
 import { send } from './send.mjs';
+import { tickOpsReport, OPS_REPORT_CHAT, OPS_REPORT_TICK_MS } from './ops-report.mjs';
 
 const PORT = process.env.PORT || 3010;
 const TEAMS_MESSAGING_PATH = process.env.TEAMS_MESSAGING_PATH || '/api/messages';
@@ -133,5 +134,12 @@ server.listen(PORT, () => {
   slackBoot();
   setInterval(() => { void tickWatches(); }, WATCH_TICK_MS).unref?.();
   console.log(`[host] watch ticker every ${WATCH_TICK_MS / 1000}s`);
+  // Daily relay health / launch-gate self-report. Lives here (not in a claude.ai scheduled routine)
+  // because the cloud sandbox those ran in egress-blocks the relay host; Marco can reach it. The
+  // ticker only checks the clock — tickOpsReport is a no-op until OPS_REPORT_CHAT is set.
+  setInterval(() => { void tickOpsReport(); }, OPS_REPORT_TICK_MS).unref?.();
+  console.log(OPS_REPORT_CHAT
+    ? `[host] ops report armed — daily relay health to ${process.env.OPS_REPORT_PLATFORM || 'telegram'}`
+    : '[host] ops report idle (set OPS_REPORT_CHAT to arm)');
   if (process.env.MS_APP_ID) console.log(`[teams] Bot Framework endpoint on ${TEAMS_MESSAGING_PATH}`);
 });
