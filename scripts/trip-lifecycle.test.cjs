@@ -2,7 +2,7 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert');
-const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, DEFAULTS } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, tripsDegraded, DEFAULTS } = require('./trip-lifecycle.cjs');
 
 const T0 = 1_700_000_000_000;
 const MIN = 60_000;
@@ -340,4 +340,35 @@ test('summarizeTrips with no open trips reports null oldest age', () => {
 
 test('summarizeTrips on an empty map is zero/null', () => {
   assert.deepStrictEqual(summarizeTrips(new Map(), T0), { openCount: 0, graceCount: 0, oldestOpenAgeMin: null });
+});
+
+// ---- tripsDegraded: the /health verdict --------------------------------------------------
+// Prod defaults: 120h cap (7200 min), swept once a day (1440 min), buffer high water 4000.
+const HEALTH = { lastTripWriteOk: true, pointsBuffered: 0, pointsHighWater: 4000, oldestOpenAgeMin: 100, maxOpenAgeMin: 7200, sweepIntervalMin: 1440 };
+
+test('tripsDegraded: a healthy pipeline is not degraded', () => {
+  assert.equal(tripsDegraded(HEALTH), false);
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: null }), false); // nothing open
+});
+
+test('tripsDegraded: a failing write or a buffer at high water is degraded', () => {
+  assert.equal(tripsDegraded({ ...HEALTH, lastTripWriteOk: false }), true);
+  assert.equal(tripsDegraded({ ...HEALTH, pointsBuffered: 4000 }), true);
+  assert.equal(tripsDegraded({ ...HEALTH, pointsBuffered: 3999 }), false);
+});
+
+test('tripsDegraded: a trip merely WAITING for the daily sweep is not degraded', () => {
+  // The regression this slack exists for: prod's oldest open trip sat at 7115 min and climbed past
+  // the 7200 cap hours before the once-a-day sweep could reap it. Alarming at the cap made the flag
+  // fire on the relay's own sweep cadence and reset the paid-launch gate's clean-week clock.
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: 7115 }), false); // under the cap
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: 7201 }), false); // past it, sweep pending
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: 8640 }), false); // cap + a full sweep — still its last chance
+});
+
+test('tripsDegraded: a trip the sweep FAILED to reap is degraded', () => {
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: 8641 }), true); // cap + sweep + 1min: the sweep ran and missed it
+  // The slack tracks the configured cadence — an hourly sweep gets an hour of slack, not a day.
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: 7300, sweepIntervalMin: 60 }), true);
+  assert.equal(tripsDegraded({ ...HEALTH, oldestOpenAgeMin: 7250, sweepIntervalMin: 60 }), false);
 });
