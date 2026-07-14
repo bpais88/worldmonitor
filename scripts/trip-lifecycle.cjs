@@ -197,4 +197,27 @@ function summarizeTrips(tripByMmsi, now) {
   return { openCount, graceCount, oldestOpenAgeMin: oldestOpenedAt == null ? null : Math.round((now - oldestOpenedAt) / 60_000) };
 }
 
-module.exports = { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, DEFAULTS };
+/**
+ * Is the trips pipeline degraded? Pure, so the /health verdict is unit-tested rather than asserted
+ * inline in the relay. Three independent faults:
+ *   1. the last trip write FAILED — the durable store is rejecting us;
+ *   2. the point buffer is at high water — we're producing points faster than we can flush them;
+ *   3. the oldest open trip is so old that the abandon sweep must have failed to reap it.
+ *
+ * (3) needs SLACK, and not having it was a false-positive generator. The cap (maxOpenAgeMin) is
+ * enforced by a sweep that only runs every sweepIntervalMin, so an open trip can legitimately sit
+ * up to one full sweep interval past the cap while simply WAITING for the next sweep. Alarming at
+ * the cap itself made "degraded" fire on the relay's own sweep cadence: prod on 2026-07-14 had a
+ * standing queue of never-arriving trips (119h, 115h, 96h, 94h, 92h…) feeding into a 120h cap swept
+ * once a day, so the flag would flip, hold for up to 24h, then self-clear — repeatedly, while
+ * nothing was actually wrong. It also reset the paid-launch gate's clean-week clock each time.
+ * Alarm only once the sweep has demonstrably NOT cleared the trip: age > cap + one sweep interval.
+ */
+function tripsDegraded({ lastTripWriteOk, pointsBuffered, pointsHighWater, oldestOpenAgeMin, maxOpenAgeMin, sweepIntervalMin }) {
+  if (lastTripWriteOk === false) return true;
+  if ((pointsBuffered ?? 0) >= pointsHighWater) return true;
+  if (oldestOpenAgeMin != null && oldestOpenAgeMin > maxOpenAgeMin + sweepIntervalMin) return true;
+  return false;
+}
+
+module.exports = { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, tripsDegraded, DEFAULTS };

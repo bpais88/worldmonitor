@@ -1712,7 +1712,7 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 // Upstash so learning survives restarts; degrades to in-memory if Redis is off.
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
-const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, tripsDegraded } = require('./trip-lifecycle.cjs');
 const { relayFreshness, tileFreshness } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
@@ -2577,11 +2577,18 @@ function buildTripsHealth() {
     lastTripWriteAt: db.stats.lastTripWriteAt,
     lastTripWriteOk: db.stats.lastTripWriteOk,
     lastTripError: db.stats.lastTripError,
-    degraded: enabled && (
-      db.stats.lastTripWriteOk === false
-      || pendingTripPoints.length >= TRIP_POINTS_HIGH_WATER
-      || (g.oldestOpenAgeMin != null && g.oldestOpenAgeMin > TRIP_MAX_OPEN_AGE_H * 60)
-    ),
+    // The thresholds behind `degraded`, published so consumers (the ops report, dashboards) read
+    // them instead of hardcoding 7200/1440 and silently disagreeing with us when the env is tuned.
+    maxOpenAgeMin: TRIP_MAX_OPEN_AGE_H * 60,
+    sweepIntervalMin: Math.round(TRIP_SWEEP_MS / 60_000),
+    degraded: enabled && tripsDegraded({
+      lastTripWriteOk: db.stats.lastTripWriteOk,
+      pointsBuffered: pendingTripPoints.length,
+      pointsHighWater: TRIP_POINTS_HIGH_WATER,
+      oldestOpenAgeMin: g.oldestOpenAgeMin,
+      maxOpenAgeMin: TRIP_MAX_OPEN_AGE_H * 60,
+      sweepIntervalMin: Math.round(TRIP_SWEEP_MS / 60_000),
+    }),
   };
 }
 
