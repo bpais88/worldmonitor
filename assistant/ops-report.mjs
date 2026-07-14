@@ -37,9 +37,16 @@ const KEY_CLEAN_SINCE = 'ops-report:cleanSince'; // YYYY-MM-DD the current degra
 // possible pass was 2026-07-09. A degraded reading restarts the clock from that day.
 const TRIPS_LIVE_FROM = '2026-07-02';
 const GATE_CLEAN_DAYS = 7;
-// TRIP_MAX_OPEN_AGE_H (120h) * 60 in the relay — an open trip older than this means the abandon
-// sweep is broken, and it is exactly what flips trips.degraded. Report the headroom before it does.
+// TRIP_MAX_OPEN_AGE_H (120h) * 60 in the relay: the age at which the sweep abandons an open trip,
+// and — with no slack — also the age at which trips.degraded flips.
 const TRIP_MAX_OPEN_AGE_MIN = 7200;
+// …but the sweep that enforces that cap only runs every TRIP_SWEEP_MS (24h). So the invariant is
+// only enforceable to a 24h granularity while the alarm is armed at exactly the cap: a trip crossing
+// 120h flips degraded and holds it until the next sweep, then self-clears. That is sweep CADENCE,
+// not a broken pipeline, and it must not reset the launch-gate clock (prod on 2026-07-14: a steady
+// queue of never-arriving trips at 119h/115h/96h/94h… guarantees this fires regularly). Past
+// cap + one sweep interval, the sweep genuinely failed to clear it — that IS gate-breaking.
+const TRIP_SWEEP_MIN = 24 * 60;
 // Week-over-week corridor deltas need two clean weeks after the 2026-07-12 anchor-loss grace fix.
 const WOW_VALID_FROM = '2026-07-26';
 
@@ -61,13 +68,37 @@ export function isReportDue({ now, lastSent, hourUtc = OPS_REPORT_HOUR_UTC }) {
 }
 
 /**
- * The clean-week clock. The routines were stateless and could only ever count days since the
- * pipeline went live; persisting the streak lets us honor the real gate rule — a degraded reading
- * RESETS the window to today. Returns the day the current clean streak started.
+ * Why is trips.degraded set? The relay flips it for three reasons (ais-relay.cjs buildTripsHealth):
+ * a failing write, the point buffer at high water, or the oldest open trip past the 120h cap. Only
+ * the first two mean the pipeline is actually unhealthy. The third is usually just the daily sweep
+ * not having run yet — benign, self-clearing, and NOT a gate reset. Returns:
+ *   'clean'        — not degraded
+ *   'sweep-lag'    — degraded solely because a trip is waiting for the next daily sweep (benign)
+ *   'broken'       — a real fault: write failing, buffer backing up, or the sweep failing to clear
  */
-export function nextCleanSince({ degraded, writeOk, today, cleanSince }) {
-  if (degraded || writeOk === false) return today;      // gate reset — clock restarts today
-  return cleanSince || TRIPS_LIVE_FROM;                 // first run: credit the streak from go-live
+export function classifyDegradation(t = {}) {
+  if (!t.degraded) return 'clean';
+  if (t.lastTripWriteOk === false) return 'broken';
+  // Buffer at/near the relay's high-water mark (80% of TRIP_POINTS_BUFFER_MAX, default 5000) is a
+  // real backlog, not a sweep artifact — and it would flip degraded on its own.
+  if ((t.tripPointsBuffered || 0) >= 0.8 * 5000) return 'broken';
+  const age = t.oldestOpenTripAgeMin;
+  if (age == null || age <= TRIP_MAX_OPEN_AGE_MIN) return 'broken'; // degraded for a reason we can't attribute
+  // Past the cap. Inside one sweep interval = waiting for the sweep. Beyond it = the sweep is stuck.
+  return age <= TRIP_MAX_OPEN_AGE_MIN + TRIP_SWEEP_MIN ? 'sweep-lag' : 'broken';
+}
+
+/**
+ * The clean-week clock. The routines were stateless and could only count days since go-live, so a
+ * degraded day never actually reset the gate — this persists the streak and honors the real rule.
+ * The clock resets when the pipeline is genuinely broken, AND when health could not be READ at all:
+ * an unverified day cannot count toward "7 consecutive days of verified trips.degraded === false",
+ * and this report says out loud that a relay that's down is worse than one that's degraded.
+ * A benign sweep-lag day carries the streak — it is a threshold artifact, not a fault.
+ */
+export function nextCleanSince({ state, today, cleanSince }) {
+  if (state === 'broken' || state === 'unreachable') return today; // gate reset — clock restarts today
+  return cleanSince || TRIPS_LIVE_FROM;                            // first run: credit the streak from go-live
 }
 
 /**
@@ -81,13 +112,17 @@ export function buildOpsReport({ health, now, cleanSince }) {
   const bm = ph.baselineMaturity;
   const today = dayKey(now);
   const cleanDays = daysBetween(cleanSince || TRIPS_LIVE_FROM, today);
-  const gateReset = !!t.degraded || t.lastTripWriteOk === false;
+  const state = classifyDegradation(t);
   const lines = [];
 
   // 1. Verdict first — the one line worth reading on a phone.
-  if (gateReset) {
+  if (state === 'broken') {
     lines.push('🚨 GATE RESET — trips pipeline degraded');
-    lines.push(`The clean-week clock restarts today (${today}). degraded=${t.degraded} · lastTripWriteOk=${t.lastTripWriteOk}${t.lastTripError ? ` · ${t.lastTripError}` : ''}`);
+    lines.push(`The clean-week clock restarts today (${today}). degraded=${t.degraded} · lastTripWriteOk=${t.lastTripWriteOk} · buffered=${t.tripPointsBuffered} · oldest=${t.oldestOpenTripAgeMin}${t.lastTripError ? ` · ${t.lastTripError}` : ''}`);
+  } else if (state === 'sweep-lag') {
+    // Benign: an open trip crossed the 120h cap and is waiting for the daily sweep. The relay's
+    // degraded flag has no slack for its own sweep cadence, so this is expected — not a gate reset.
+    lines.push(`⏳ degraded=true, but benign — oldest open trip (${t.oldestOpenTripAgeMin} min) is past the ${TRIP_MAX_OPEN_AGE_MIN} cap and waiting for the daily sweep. Self-clears; gate clock NOT reset (day ${cleanDays} of ${GATE_CLEAN_DAYS}).`);
   } else if (cleanDays >= GATE_CLEAN_DAYS) {
     lines.push(`✅ LAUNCH GATE SATISFIED — trips clean ${cleanDays}d (need ${GATE_CLEAN_DAYS})`);
     lines.push('Owner sign-off (PHASE_C_SCOPE.md, open decision #7) is the only step left before profiles go paid.');
@@ -193,26 +228,33 @@ export async function tickOpsReport(now = Date.now()) {
     if (!isReportDue({ now, lastSent })) return null;
 
     const { health, error, attempts } = await fetchHealth();
-    let text;
-    if (error) {
-      text = buildUnreachableReport({ error, attempts });
-    } else {
-      const today = dayKey(now);
-      const cleanSince = nextCleanSince({
-        degraded: health?.trips?.degraded,
-        writeOk: health?.trips?.lastTripWriteOk,
-        today,
-        cleanSince: await kvGet(KEY_CLEAN_SINCE),
-      });
-      await kvSet(KEY_CLEAN_SINCE, cleanSince);
-      text = buildOpsReport({ health, now, cleanSince });
-    }
+    const today = dayKey(now);
+
+    // The streak advances only on a day we could actually VERIFY as clean. An unreachable relay is
+    // an unverified day, so it resets the clock just like a broken one — otherwise a later report
+    // could announce the 7-day gate satisfied across a day nobody ever read trips.degraded on.
+    const state = error ? 'unreachable' : classifyDegradation(health?.trips);
+    const cleanSince = nextCleanSince({ state, today, cleanSince: await kvGet(KEY_CLEAN_SINCE) });
+    await kvSet(KEY_CLEAN_SINCE, cleanSince);
+
+    const text = error
+      ? buildUnreachableReport({ error, attempts })
+      : buildOpsReport({ health, now, cleanSince });
 
     const install = await resolveInstall();
     if (!install) { console.warn('[ops-report] no delivery install resolved — report not sent'); return null; }
-    await send(install, { channelId: OPS_REPORT_CHAT, text });
-    await kvSet(KEY_LAST_SENT, dayKey(now));
-    console.log(`[ops-report] delivered ${dayKey(now)} report to ${OPS_REPORT_PLATFORM}`);
+
+    // send() does NOT throw on a delivery failure — Telegram returns { ok: false } on a bad chat or
+    // missing token, and the Slack path only logs a non-ok response. Persisting the sent-marker on a
+    // failed send would suppress the report until tomorrow with nothing delivered, so only mark it
+    // once delivery is confirmed; otherwise the next tick retries inside the catch-up window.
+    const res = await send(install, { channelId: OPS_REPORT_CHAT, text });
+    if (res?.ok === false) {
+      console.warn('[ops-report] delivery failed — not marking sent; will retry next tick');
+      return null;
+    }
+    await kvSet(KEY_LAST_SENT, today);
+    console.log(`[ops-report] delivered ${today} report to ${OPS_REPORT_PLATFORM}`);
     return text;
   } catch (e) {
     console.warn('[ops-report] tick error:', e.message);

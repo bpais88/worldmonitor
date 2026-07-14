@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { buildOpsReport, buildUnreachableReport, isReportDue, nextCleanSince } from './ops-report.mjs';
+import { buildOpsReport, buildUnreachableReport, isReportDue, nextCleanSince, classifyDegradation } from './ops-report.mjs';
 
 // A healthy /health body, shaped exactly like the live relay's (captured 2026-07-14).
 const healthy = () => ({
@@ -88,11 +88,39 @@ test('an unreachable relay is louder than a degraded one', () => {
   assert.match(r, /2 attempt\(s\)/);
 });
 
-test('degraded resets the clean-week clock to today; clean carries the streak', () => {
-  assert.equal(nextCleanSince({ degraded: true, writeOk: true, today: '2026-07-14', cleanSince: '2026-07-02' }), '2026-07-14');
-  assert.equal(nextCleanSince({ degraded: false, writeOk: false, today: '2026-07-14', cleanSince: '2026-07-02' }), '2026-07-14');
-  assert.equal(nextCleanSince({ degraded: false, writeOk: true, today: '2026-07-14', cleanSince: '2026-07-02' }), '2026-07-02');
-  assert.equal(nextCleanSince({ degraded: false, writeOk: true, today: '2026-07-14', cleanSince: null }), '2026-07-02'); // first run
+test('degradation is attributed: a real fault vs the relay waiting on its own daily sweep', () => {
+  const t = (over) => ({ degraded: true, lastTripWriteOk: true, tripPointsBuffered: 0, oldestOpenTripAgeMin: 7300, ...over });
+  assert.equal(classifyDegradation({ degraded: false }), 'clean');
+  // Past the 7200 cap but inside one 24h sweep interval — the sweep just hasn't run. Benign.
+  assert.equal(classifyDegradation(t()), 'sweep-lag');
+  assert.equal(classifyDegradation(t({ oldestOpenTripAgeMin: 7200 + 1440 })), 'sweep-lag'); // boundary
+  // Beyond cap + a full sweep interval: the sweep ran and did NOT clear it. Real.
+  assert.equal(classifyDegradation(t({ oldestOpenTripAgeMin: 7200 + 1441 })), 'broken');
+  // Real faults, regardless of trip age.
+  assert.equal(classifyDegradation(t({ lastTripWriteOk: false })), 'broken');
+  assert.equal(classifyDegradation(t({ tripPointsBuffered: 4000 })), 'broken'); // buffer at high water
+  assert.equal(classifyDegradation({ degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 100 }), 'broken'); // unattributable
+});
+
+test('the gate clock resets on a real fault or an unread day, but not on benign sweep lag', () => {
+  const at = { today: '2026-07-14', cleanSince: '2026-07-02' };
+  assert.equal(nextCleanSince({ state: 'broken', ...at }), '2026-07-14');
+  // A day we could not verify cannot count toward "7 consecutive VERIFIED clean days".
+  assert.equal(nextCleanSince({ state: 'unreachable', ...at }), '2026-07-14');
+  // Sweep lag is a threshold artifact, not a fault — the streak survives it.
+  assert.equal(nextCleanSince({ state: 'sweep-lag', ...at }), '2026-07-02');
+  assert.equal(nextCleanSince({ state: 'clean', ...at }), '2026-07-02');
+  assert.equal(nextCleanSince({ state: 'clean', today: '2026-07-14', cleanSince: null }), '2026-07-02'); // first run
+});
+
+test('a trip waiting on the daily sweep reports as benign, not as a gate reset', () => {
+  const h = healthy();
+  h.trips.degraded = true;
+  h.trips.oldestOpenTripAgeMin = 7300; // crossed the 120h cap, sweep hasn't run yet
+  const r = buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' });
+  assert.doesNotMatch(r, /GATE RESET/);
+  assert.match(r, /benign.*waiting for the daily sweep/s);
+  assert.match(r, /gate clock NOT reset \(day 12 of 7\)/);
 });
 
 test('due once per day, after the send hour, and never twice', () => {
