@@ -37,16 +37,20 @@ const KEY_CLEAN_SINCE = 'ops-report:cleanSince'; // YYYY-MM-DD the current degra
 // possible pass was 2026-07-09. A degraded reading restarts the clock from that day.
 const TRIPS_LIVE_FROM = '2026-07-02';
 const GATE_CLEAN_DAYS = 7;
-// TRIP_MAX_OPEN_AGE_H (120h) * 60 in the relay: the age at which the sweep abandons an open trip,
-// and — with no slack — also the age at which trips.degraded flips.
-const TRIP_MAX_OPEN_AGE_MIN = 7200;
-// …but the sweep that enforces that cap only runs every TRIP_SWEEP_MS (24h). So the invariant is
-// only enforceable to a 24h granularity while the alarm is armed at exactly the cap: a trip crossing
-// 120h flips degraded and holds it until the next sweep, then self-clears. That is sweep CADENCE,
-// not a broken pipeline, and it must not reset the launch-gate clock (prod on 2026-07-14: a steady
-// queue of never-arriving trips at 119h/115h/96h/94h… guarantees this fires regularly). Past
-// cap + one sweep interval, the sweep genuinely failed to clear it — that IS gate-breaking.
-const TRIP_SWEEP_MIN = 24 * 60;
+// The relay's own thresholds: the age at which the abandon sweep reaps an open trip (120h), and how
+// often that sweep actually runs (24h). It publishes both on /health (trips.maxOpenAgeMin /
+// .sweepIntervalMin — see #108); these defaults only cover a relay that predates those fields.
+//
+// The gap between them is why we can't read `degraded` at face value. The cap is enforced ONLY at
+// sweep time, so an open trip can legitimately sit up to a full sweep interval past the cap while
+// simply waiting to be reaped. A relay that alarms at the cap itself is therefore reporting its own
+// sweep cadence, not a fault — prod on 2026-07-14 had a standing queue of never-arriving trips
+// (119h, 115h, 96h, 94h…) feeding a 120h cap swept once a day. That must not reset the launch-gate
+// clock. Past cap + one sweep interval, the sweep ran and did NOT clear it — that IS a real fault.
+const DEFAULT_MAX_OPEN_AGE_MIN = 7200;
+const DEFAULT_SWEEP_MIN = 24 * 60;
+const capMin = (t) => t?.maxOpenAgeMin ?? DEFAULT_MAX_OPEN_AGE_MIN;
+const sweepMin = (t) => t?.sweepIntervalMin ?? DEFAULT_SWEEP_MIN;
 // Week-over-week corridor deltas need two clean weeks after the 2026-07-12 anchor-loss grace fix.
 const WOW_VALID_FROM = '2026-07-26';
 
@@ -83,9 +87,9 @@ export function classifyDegradation(t = {}) {
   // real backlog, not a sweep artifact — and it would flip degraded on its own.
   if ((t.tripPointsBuffered || 0) >= 0.8 * 5000) return 'broken';
   const age = t.oldestOpenTripAgeMin;
-  if (age == null || age <= TRIP_MAX_OPEN_AGE_MIN) return 'broken'; // degraded for a reason we can't attribute
+  if (age == null || age <= capMin(t)) return 'broken'; // degraded for a reason we can't attribute
   // Past the cap. Inside one sweep interval = waiting for the sweep. Beyond it = the sweep is stuck.
-  return age <= TRIP_MAX_OPEN_AGE_MIN + TRIP_SWEEP_MIN ? 'sweep-lag' : 'broken';
+  return age <= capMin(t) + sweepMin(t) ? 'sweep-lag' : 'broken';
 }
 
 /**
@@ -122,7 +126,7 @@ export function buildOpsReport({ health, now, cleanSince }) {
   } else if (state === 'sweep-lag') {
     // Benign: an open trip crossed the 120h cap and is waiting for the daily sweep. The relay's
     // degraded flag has no slack for its own sweep cadence, so this is expected — not a gate reset.
-    lines.push(`⏳ degraded=true, but benign — oldest open trip (${t.oldestOpenTripAgeMin} min) is past the ${TRIP_MAX_OPEN_AGE_MIN} cap and waiting for the daily sweep. Self-clears; gate clock NOT reset (day ${cleanDays} of ${GATE_CLEAN_DAYS}).`);
+    lines.push(`⏳ degraded=true, but benign — oldest open trip (${t.oldestOpenTripAgeMin} min) is past the ${capMin(t)} cap and waiting for the daily sweep. Self-clears; gate clock NOT reset (day ${cleanDays} of ${GATE_CLEAN_DAYS}).`);
   } else if (cleanDays >= GATE_CLEAN_DAYS) {
     lines.push(`✅ LAUNCH GATE SATISFIED — trips clean ${cleanDays}d (need ${GATE_CLEAN_DAYS})`);
     lines.push('Owner sign-off (PHASE_C_SCOPE.md, open decision #7) is the only step left before profiles go paid.');
@@ -134,7 +138,7 @@ export function buildOpsReport({ health, now, cleanSince }) {
   const closed = (t.tripsArrived || 0) + (t.tripsAbandoned || 0);
   lines.push('');
   lines.push(`Trips · opened ${t.tripsOpened} · arrived ${t.tripsArrived} · abandoned ${t.tripsAbandoned} (${pct(t.tripsArrived || 0, closed)} arrive) · resumed ${t.tripsResumed}`);
-  lines.push(`  open ${t.openTripsTracked} (${t.openTripsInGrace} in grace, ${pct(t.openTripsInGrace || 0, t.openTripsTracked || 0)}) · oldest ${t.oldestOpenTripAgeMin}/${TRIP_MAX_OPEN_AGE_MIN} min · points ${t.tripPointRows} · dropped ${t.tripPointsDropped}`);
+  lines.push(`  open ${t.openTripsTracked} (${t.openTripsInGrace} in grace, ${pct(t.openTripsInGrace || 0, t.openTripsTracked || 0)}) · oldest ${t.oldestOpenTripAgeMin}/${capMin(t)} min · points ${t.tripPointRows} · dropped ${t.tripPointsDropped}`);
 
   // 3. Baseline maturity — the port-congestion forecast's runway (buckets are port×dow×hour, and a
   //    dow×hour recurs weekly, so ≥3 observed days per bucket takes ~3 weeks from 2026-07-02).
@@ -159,8 +163,8 @@ export function buildOpsReport({ health, now, cleanSince }) {
   if (ph.lastError) anomalies.push(`portHistory.lastError: ${ph.lastError}`);
   if (ph.degraded) anomalies.push('portHistory degraded — durable store unavailable, running on fallback');
   // Not yet degraded, but the abandon sweep is running close to the 120h cap that would trip it.
-  if (t.oldestOpenTripAgeMin != null && t.oldestOpenTripAgeMin > TRIP_MAX_OPEN_AGE_MIN * 0.95 && !t.degraded) {
-    anomalies.push(`oldestOpenTripAgeMin ${t.oldestOpenTripAgeMin} is within 5% of the ${TRIP_MAX_OPEN_AGE_MIN} cap — the daily abandon sweep is close to the line`);
+  if (t.oldestOpenTripAgeMin != null && t.oldestOpenTripAgeMin > capMin(t) * 0.95 && !t.degraded) {
+    anomalies.push(`oldestOpenTripAgeMin ${t.oldestOpenTripAgeMin} is within 5% of the ${capMin(t)} cap — the daily abandon sweep is close to the line`);
   }
   if (t.openTripsTracked && (t.openTripsInGrace || 0) / t.openTripsTracked > 0.4) {
     anomalies.push(`${pct(t.openTripsInGrace, t.openTripsTracked)} of open trips are in the anchor-loss grace window (>40% — grace may be too wide)`);

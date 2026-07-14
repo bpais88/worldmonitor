@@ -102,6 +102,15 @@ test('degradation is attributed: a real fault vs the relay waiting on its own da
   assert.equal(classifyDegradation({ degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 100 }), 'broken'); // unattributable
 });
 
+test('the relay\'s published thresholds win over our defaults (#108)', () => {
+  // A relay swept hourly gets an hour of slack, not a day — so 7300 min is the sweep FAILING, not lag.
+  const hourly = { degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 7300, maxOpenAgeMin: 7200, sweepIntervalMin: 60 };
+  assert.equal(classifyDegradation(hourly), 'broken');
+  assert.equal(classifyDegradation({ ...hourly, oldestOpenTripAgeMin: 7250 }), 'sweep-lag');
+  // A relay with a tuned-down cap is honored too, rather than measured against a hardcoded 7200.
+  assert.equal(classifyDegradation({ degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 3000, maxOpenAgeMin: 2880, sweepIntervalMin: 1440 }), 'sweep-lag');
+});
+
 test('the gate clock resets on a real fault or an unread day, but not on benign sweep lag', () => {
   const at = { today: '2026-07-14', cleanSince: '2026-07-02' };
   assert.equal(nextCleanSince({ state: 'broken', ...at }), '2026-07-14');
