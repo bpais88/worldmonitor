@@ -2232,6 +2232,10 @@ async function refreshDisruptions() {
   disruptionEvents = mergeDisruptionEvents(lists);
   disruptionRefreshedAt = Date.now();
   console.log(`[Relay] disruptions refreshed: ${disruptionEvents.length} events (${disruptionEvents.filter((e) => e.kind === 'strike_scheduled').length} scheduled)`);
+  // Lead-time evidence (migration 010): persist each event id's FIRST sighting so "we knew N days
+  // ahead" becomes measurable instead of asserted. Fire-and-forget and self-contained — the logger
+  // warns and returns on failure, never throws, and stays outside the trips health accounting.
+  if (db.enabled) void db.logDisruptionsFirstSeen(disruptionEvents);
 }
 
 function startDisruptionLoop() {
