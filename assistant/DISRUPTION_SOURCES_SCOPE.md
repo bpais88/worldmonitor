@@ -72,6 +72,14 @@ port per tick (relay applies the 7-day lookahead + area matching). Marco offers 
 answering get_upcoming_disruptions. Delivery: whatever platform the watch was created on
 (Slack/Teams work today; WhatsApp templates + voice outbound stay deferred).
 
+**'all ports' wildcard (2026-07-16):** a `port_disruption` watch with target `all ports` covers
+every geofenced port via ONE unfiltered /ais/disruptions fetch per tick, with event-level dedupe —
+a national strike that touches 15 ports pages once, not 15 times. New ports are covered
+automatically (coverage resolves relay-side at fetch time; no per-port watch bookkeeping). The
+7-day push lookahead is applied in evaluateDisruptionWatches for this path (the relay only enforces
+it on ?port=); a far-out strike fires once when it enters the window. The ticker also now fetches
+/ais/ports and the 3,000-vessel payload only when a watch type actually needs them.
+
 **Lead-time evidence (2026-07-16, migration 010):** events themselves are in-memory only (3-hourly
 refresh), so `disruption_log` records each event id's FIRST sighting (`db.logDisruptionsFirstSeen`,
 called from the relay's refresh). Alert lead time = `starts_at - first_seen_at`; also enables the

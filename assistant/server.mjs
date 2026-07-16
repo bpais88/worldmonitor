@@ -15,7 +15,7 @@ import { handleVoiceRequest } from './voice/adapter.mjs';
 import { handleWhatsAppRequest } from './whatsapp/router.mjs';
 import { handleTelegramRequest } from './telegram/router.mjs';
 import { relayGet } from './relay.mjs';
-import { listWatches, evaluateWatches, evaluateDisruptionWatches } from './watches.mjs';
+import { listWatches, evaluateWatches, evaluateDisruptionWatches, isAllPortsTarget } from './watches.mjs';
 import { getInstallation, legacyInstall, deliverFor } from './slack/installations.mjs';
 import { send } from './send.mjs';
 import { tickOpsReport, OPS_REPORT_CHAT, OPS_REPORT_TICK_MS } from './ops-report.mjs';
@@ -70,13 +70,18 @@ async function tickWatches() {
   try {
     const watches = await listWatches();
     if (!watches.length) return;
-    // Fetch in parallel but fail INDEPENDENTLY: ports is required by every watch type (no ports →
-    // outer catch), but the heavier vessels endpoint only feeds the transition watches — a
-    // transient vessels 5xx must not starve the scheduled-strike alerts (which need only
-    // ports + /ais/disruptions), and vice versa.
+    // Fetch only what THIS tick's watch population needs: ports feed port-TARGETED watches (an
+    // 'all ports' disruption watch resolves coverage relay-side, no port list required), and the
+    // heavy 3,000-vessel payload feeds only vessel_delay watches. With just the owner-default
+    // 'all ports' watch, a tick is one listWatches + one /ais/disruptions call. The two fetches
+    // still fail INDEPENDENTLY: a transient vessels 5xx must not starve the strike alerts.
+    // port_congestion ALWAYS needs the port list (wildcard is a port_disruption-only concept —
+    // a congestion watch with an 'all ports' target still evaluates per-port, it just won't match).
+    const needPorts = watches.some((w) => w.type === 'port_congestion' || (w.type === 'port_disruption' && !isAllPortsTarget(w.target)));
+    const needVessels = watches.some((w) => w.type === 'vessel_delay');
     const [portsR, vesselsR] = await Promise.allSettled([
-      relayGet('/ais/ports'),
-      relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000'),
+      needPorts ? relayGet('/ais/ports') : Promise.resolve({ ports: [] }),
+      needVessels ? relayGet('/ais/vessels?types=cargo,passenger&freight=1&limit=3000') : Promise.resolve({ vessels: [] }),
     ]);
     if (portsR.status === 'rejected') throw portsR.reason;
     const ports = portsR.value.ports || [];
@@ -94,6 +99,10 @@ async function tickWatches() {
       alerts.push(...await evaluateDisruptionWatches({
         ports,
         fetchPortDisruptions: (portId) => relayGet(`/ais/disruptions?port=${encodeURIComponent(portId)}`).then((j) => j.events || []),
+        // Unfiltered feed for 'all ports' watches — one call per tick regardless of port count;
+        // the 7-day push lookahead is applied in evaluateDisruptionWatches (relay only enforces
+        // it on the ?port= variant).
+        fetchAllDisruptions: () => relayGet('/ais/disruptions').then((j) => j.events || []),
       }));
     } catch (e) {
       console.warn('[host] watch tick: disruption evaluation failed:', e.message);

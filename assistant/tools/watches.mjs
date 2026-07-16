@@ -1,13 +1,13 @@
 // Watch tools — let the agent set/list/cancel proactive alerts. Read-class (no
 // approval gate): creating a watch is benign (just a reminder). They need the
 // live channel context, which the agent loop now passes to every handler.
-import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget } from '../watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, isAllPortsTarget } from '../watches.mjs';
 
 export const watchTools = [
   {
     name: 'create_watch',
     description:
-      'Create a proactive watch that alerts THIS channel when a condition occurs. type "port_congestion" (target = port name) with condition: "clears" (alert only when it becomes clear), "busy" (only when it turns busy/congested), or "any" (any change) — port watches ALSO automatically alert on officially scheduled strikes affecting that port. type "port_disruption" (target = port name) alerts ONLY on scheduled strikes/disruptions for that port (no congestion noise). type "vessel_delay" (target = vessel name) alerts when that vessel becomes delayed. Map the user\'s wording: "when X clears" → condition "clears"; "when X is busy/congested" → "busy"; otherwise "any". After creating the watch, tell the user they can say "stop watching <target>" (or "stop alerting me about <target>") at any time to cancel it.',
+      'Create a proactive watch that alerts THIS channel when a condition occurs. type "port_congestion" (target = port name) with condition: "clears" (alert only when it becomes clear), "busy" (only when it turns busy/congested), or "any" (any change) — port watches ALSO automatically alert on officially scheduled strikes affecting that port. type "port_disruption" (target = port name) alerts ONLY on scheduled strikes/disruptions for that port (no congestion noise); target "all ports" watches EVERY covered port with one alert per strike (use when the user wants all strike/disruption alerts, e.g. "alert me about any strike") — new ports are covered automatically. type "vessel_delay" (target = vessel name) alerts when that vessel becomes delayed. Map the user\'s wording: "when X clears" → condition "clears"; "when X is busy/congested" → "busy"; otherwise "any". After creating the watch, tell the user they can say "stop watching <target>" (or "stop alerting me about <target>") at any time to cancel it.',
     input_schema: {
       type: 'object',
       properties: {
@@ -20,6 +20,12 @@ export const watchTools = [
     },
     handler: async ({ type, target, condition = 'any' }, ctx = {}) => {
       if (!ctx.channel) return { error: 'no channel context to attach the watch to' };
+      // Wildcard is disruptions-only: congestion is inherently per-port (there is no meaningful
+      // "all ports turned busy" transition), and a congestion watch stored with this target would
+      // just never match a port. Reject with guidance instead of creating a dead watch.
+      if (type !== 'port_disruption' && isAllPortsTarget(target)) {
+        return { error: `"all ports" is only supported for type port_disruption (strike/disruption alerts across every covered port). For ${type}, name a specific port or vessel — or create a port_disruption watch with target "all ports" instead.` };
+      }
       const w = await createWatch({ type, target, condition, channel: ctx.channel, thread: ctx.thread, createdBy: ctx.user, team: ctx.team, platform: ctx.platform, deliver: ctx.deliver });
       return {
         created: true, id: w.id, type: w.type, target: w.target, condition: w.condition,
