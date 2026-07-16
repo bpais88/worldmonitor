@@ -315,15 +315,21 @@ async function patchTripEta(tripId, etaTs) {
 const SLIP_FLAG_MIN = 30;
 
 /** Raise a trip's worst ETA slip (delay magnitude). Guarded to a monotonic max. Stamps
- * slip_flagged_at exactly once, on the first bump that reaches SLIP_FLAG_MIN — the moment the
- * "flagged slipping" signal fired, so lead time (arrived_at - slip_flagged_at) is computable. */
+ * slip_flagged_at exactly once, on the OBSERVED below→above crossing of SLIP_FLAG_MIN (the CASE
+ * reads max_eta_slip_min from the old row — Postgres evaluates SET against pre-update values).
+ * The old-value check matters: a trip already ≥ the threshold when 009 deployed crossed it before
+ * instrumentation at an unknown time, so it must stay NULL — stamping its NEXT bump instead would
+ * record a falsely late first-firing and quietly corrupt every lead-time stat built on this column. */
 async function bumpTripEtaSlip(tripId, slipMin) {
   if (!enabled || tripId == null || !Number.isFinite(slipMin)) return;
   const s = Math.round(slipMin);
   try {
     await withTimeout(sql`
       UPDATE trips SET max_eta_slip_min = ${s}, updated_at = now(),
-        slip_flagged_at = CASE WHEN slip_flagged_at IS NULL AND ${s} >= ${SLIP_FLAG_MIN} THEN now() ELSE slip_flagged_at END
+        slip_flagged_at = CASE WHEN slip_flagged_at IS NULL
+                                AND coalesce(max_eta_slip_min, 0) < ${SLIP_FLAG_MIN}
+                                AND ${s} >= ${SLIP_FLAG_MIN}
+                          THEN now() ELSE slip_flagged_at END
       WHERE id = ${Number(tripId)} AND (max_eta_slip_min IS NULL OR max_eta_slip_min < ${s})`);
   } catch (e) { tripFail(e); }
 }
