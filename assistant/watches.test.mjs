@@ -211,3 +211,64 @@ test('disruption alerts: vessel watches and unknown ports stay silent; fetch fai
   assert.equal(out.length, 0);
   await cancelWatch(wv.id); await cancelWatch(wu.id); await cancelWatch(wf.id);
 });
+
+// ---- 'all ports' wildcard disruption watch ------------------------------------------------------
+
+const DAY = 86_400_000;
+const wildcardEvents = (t) => [
+  // national strike 2 days out — would match many ports; must alert ONCE
+  { id: 's-near', kind: 'strike_scheduled', national: true, country: 'IT', startsAt: t + 2 * DAY, summary: 'National maritime strike' },
+  // 30 days out — beyond the 7-day push window; silent until it comes inside
+  { id: 's-far', kind: 'strike_scheduled', country: 'IT', region: 'Liguria', startsAt: t + 30 * DAY, summary: 'Regional strike far out' },
+  // news report — never pushes (official calendar only)
+  { id: 'r-news', kind: 'strike_report', country: 'IT', summary: 'Union threatens action' },
+];
+
+test('all-ports watch: one alert per scheduled strike, 7-day lookahead, no repeat, far strike fires when due', async () => {
+  const w = await createWatch({ type: 'port_disruption', target: 'all ports', channel: 'C', createdBy: 'U', team: 'T1' });
+  const t = 5_000_000;
+  let calls = 0;
+  const fetchAllDisruptions = async () => { calls++; return wildcardEvents(t); };
+  // First eval: only the near national strike (far is outside the window, report never pushes).
+  const first = await evaluateDisruptionWatches({ ports: [], fetchAllDisruptions }, t);
+  assert.equal(first.length, 1);
+  assert.match(first[0].message, /national · IT/);
+  assert.match(first[0].message, /in 2 days/);
+  assert.equal(calls, 1); // one unfiltered fetch, no per-port calls
+  // Second eval: already notified -> silent.
+  assert.equal((await evaluateDisruptionWatches({ ports: [], fetchAllDisruptions }, t + 1000)).length, 0);
+  // 24 days later the far strike enters the 7-day window -> fires once, near one stays deduped.
+  const later = await evaluateDisruptionWatches({ ports: [], fetchAllDisruptions }, t + 24 * DAY);
+  assert.equal(later.length, 1);
+  assert.match(later[0].message, /Liguria/);
+  await cancelWatch(w.id);
+});
+
+test('all-ports watch: fetch failure marks nothing seen — alert still fires on the next tick', async () => {
+  const w = await createWatch({ type: 'port_disruption', target: 'all ports', channel: 'C', createdBy: 'U', team: 'T2' });
+  const t = 6_000_000;
+  let fail = true;
+  const fetchAllDisruptions = async () => { if (fail) throw new Error('relay 502'); return wildcardEvents(t); };
+  assert.equal((await evaluateDisruptionWatches({ ports: [], fetchAllDisruptions }, t)).length, 0);
+  fail = false;
+  assert.equal((await evaluateDisruptionWatches({ ports: [], fetchAllDisruptions }, t + 1000)).length, 1);
+  await cancelWatch(w.id);
+});
+
+test('all-ports watch coexists with per-port watches; "stop watching all ports" cancels it', async () => {
+  const all = await createWatch({ type: 'port_disruption', target: 'all ports', channel: 'C', createdBy: 'U', team: 'T3' });
+  const one = await createWatch({ type: 'port_disruption', target: 'Genoa', channel: 'C', createdBy: 'U', team: 'T3' });
+  const t = 7_000_000;
+  const ev = [{ id: 's-x', kind: 'strike_scheduled', national: true, country: 'IT', startsAt: t + DAY, summary: 'Strike' }];
+  const alerts = await evaluateDisruptionWatches({
+    ports: [{ name: 'Genoa', portId: 'genoa', congestion: 'clear', atPort: 1, inbound: 0 }],
+    fetchAllDisruptions: async () => ev,
+    fetchPortDisruptions: async () => ev,
+  }, t);
+  // one alert per WATCH (different subscriptions), not per port-match within a watch
+  assert.equal(alerts.length, 2);
+  const cancelled = await cancelWatchesByTarget({ team: 'T3', target: 'all ports' });
+  assert.equal(cancelled.length, 1);
+  assert.equal(cancelled[0].id, all.id);
+  await cancelWatch(one.id);
+});

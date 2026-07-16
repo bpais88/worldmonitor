@@ -149,10 +149,55 @@ function transitionMessage(w, prev, state, p, v) {
  */
 const NOTIFIED_CAP = 50;
 
-export async function evaluateDisruptionWatches({ ports = [], fetchPortDisruptions }, now = Date.now()) {
-  if (typeof fetchPortDisruptions !== 'function') return [];
-  const watches = (await listWatches()).filter((w) => w.type === 'port_congestion' || w.type === 'port_disruption');
-  if (!watches.length) return [];
+// A watch on EVERYTHING we cover: target 'all ports'. One watch, one unfiltered disruption fetch
+// per tick, one alert per strike — NOT one per matching port (a national strike touches ~15 ports;
+// it is one fact and must page once). Newly geofenced ports are covered automatically: which ports
+// a strike affects is decided by the relay's registry at fetch time, never by watch bookkeeping
+// here. Disruptions only — congestion is inherently per-port, so wildcard congestion isn't a thing.
+export const ALL_PORTS_TARGET = 'all ports';
+export const isAllPortsTarget = (t) => ['*', 'all', 'all ports', 'every port', 'everything'].includes(String(t || '').toLowerCase().trim());
+
+// Push window for wildcard watches — mirrors the relay's ?port= rule (applied server-side for
+// per-port watches): 7-day lookahead, keep in-effect strikes up to 24h past their end. The
+// unfiltered /ais/disruptions is registry-horizon (months out), and a push about a strike 105 days
+// away is noise, not an alert; it fires when it comes inside the window, once, via notifiedEvents.
+const PUSH_LOOKAHEAD_MS = 7 * 24 * 3_600_000;
+const pushActive = (e, now) => e.startsAt != null && e.startsAt <= now + PUSH_LOOKAHEAD_MS && (e.endsAt == null || now <= e.endsAt + 24 * 3_600_000);
+
+export async function evaluateDisruptionWatches({ ports = [], fetchPortDisruptions, fetchAllDisruptions }, now = Date.now()) {
+  const relevant = (await listWatches()).filter((w) => w.type === 'port_congestion' || w.type === 'port_disruption');
+  if (!relevant.length) return [];
+  const wildcards = relevant.filter((w) => isAllPortsTarget(w.target));
+  const watches = relevant.filter((w) => !isAllPortsTarget(w.target));
+  const alerts = [];
+
+  // 'all ports' watches first: one unfiltered fetch shared by all of them.
+  if (wildcards.length && typeof fetchAllDisruptions === 'function') {
+    let events = null;
+    try { events = (await fetchAllDisruptions()) || []; } catch { /* fetch failed → skip; nothing marked seen, retried next tick */ }
+    if (events) {
+      const scheduled = events.filter((e) => e.kind === 'strike_scheduled' && e.id && pushActive(e, now));
+      for (const w of wildcards) {
+        const seen = new Set(w.notifiedEvents || []);
+        let dirty = false;
+        for (const e of scheduled) {
+          if (seen.has(e.id)) continue;
+          seen.add(e.id);
+          dirty = true;
+          const scope = e.national ? `national${e.country ? ` · ${e.country}` : ''}` : (e.region || e.country || 'regional');
+          const days = Math.ceil((e.startsAt - now) / 86_400_000);
+          const when = days > 1 ? ` — starts ${new Date(e.startsAt).toISOString().slice(0, 10)} (in ${days} days)` : days === 1 ? ' — starts TOMORROW' : ' — in effect';
+          alerts.push({ watch: w, message: `⚠️ *Scheduled strike (${scope})*${when}\n${e.summary}\n_Source: official strike registry · you're watching ${ALL_PORTS_TARGET} — say "stop watching ${ALL_PORTS_TARGET}" to mute._` });
+        }
+        if (dirty) {
+          w.notifiedEvents = [...seen].slice(-NOTIFIED_CAP);
+          await kvSet(key(w.id), w);
+        }
+      }
+    }
+  }
+
+  if (!watches.length || typeof fetchPortDisruptions !== 'function') return alerts;
 
   // One relay call per DISTINCT watched port, not per watch.
   const byPort = new Map(); // portId -> { port, watches: [] }
@@ -164,7 +209,6 @@ export async function evaluateDisruptionWatches({ ports = [], fetchPortDisruptio
     byPort.set(p.portId, e);
   }
 
-  const alerts = [];
   for (const [portId, { port, watches: ws }] of byPort) {
     let events = [];
     try { events = (await fetchPortDisruptions(portId)) || []; } catch { continue; } // best-effort per port
