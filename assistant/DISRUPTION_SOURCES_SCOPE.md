@@ -140,6 +140,7 @@ Hormuz flow counting is NOT buildable on our current feed — satellite AIS (Spi
 the only fix; see docs/AIS_PROVIDER_ALTERNATIVES.md before ever paying.
 
 V1 without AIS — both sources verified/known:
+
 - ✅ **Polymarket** (gamma-api.polymarket.com — ALREADY an integrated relay host): live Hormuz
   market cluster with real liquidity (verified 2026-07-16: "0–20 avg daily transits end of July"
   @ 73%, "week under 100 transits" @ 86%, "normal by Dec 31" @ 54%, ~$38k 24h volume). Market-
