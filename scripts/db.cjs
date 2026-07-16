@@ -292,10 +292,12 @@ async function abandonStaleTrips(maxAgeH = 120) {
   } catch (e) { tripFail(e); return []; }
 }
 
-/** Mark a trip stalled (eager, first tick drift.stalled fires). Guarded so it writes at most once. */
+/** Mark a trip stalled (eager, first tick drift.stalled fires). Guarded so it writes at most once —
+ * which also makes stalled_at the signal's FIRST firing, the anchor for lead-time stats
+ * (arrived_at - stalled_at = how much warning the flag gave; migration 009). */
 async function markStalled(tripId) {
   if (!enabled || tripId == null) return;
-  try { await withTimeout(sql`UPDATE trips SET stalled = true, updated_at = now() WHERE id = ${Number(tripId)} AND NOT stalled`); }
+  try { await withTimeout(sql`UPDATE trips SET stalled = true, stalled_at = now(), updated_at = now() WHERE id = ${Number(tripId)} AND NOT stalled`); }
   catch (e) { tripFail(e); }
 }
 
@@ -306,11 +308,24 @@ async function patchTripEta(tripId, etaTs) {
   catch (e) { tripFail(e); }
 }
 
-/** Raise a trip's worst ETA slip (delay magnitude). Guarded to a monotonic max. */
+// The slip level at which a voyage counts as "flagged slipping". 30 min is the threshold the lead-time
+// claim is built on (prod 2026-07-16: flagged voyages were >2h late 11x more often, 31.9% vs 2.9%);
+// slip_flagged_at stamps the FIRST bump that reaches it. Changing this only affects future stamps —
+// past stamps keep the threshold they were written under, so keep it stable once customer-facing.
+const SLIP_FLAG_MIN = 30;
+
+/** Raise a trip's worst ETA slip (delay magnitude). Guarded to a monotonic max. Stamps
+ * slip_flagged_at exactly once, on the first bump that reaches SLIP_FLAG_MIN — the moment the
+ * "flagged slipping" signal fired, so lead time (arrived_at - slip_flagged_at) is computable. */
 async function bumpTripEtaSlip(tripId, slipMin) {
   if (!enabled || tripId == null || !Number.isFinite(slipMin)) return;
-  try { await withTimeout(sql`UPDATE trips SET max_eta_slip_min = ${Math.round(slipMin)}, updated_at = now() WHERE id = ${Number(tripId)} AND (max_eta_slip_min IS NULL OR max_eta_slip_min < ${Math.round(slipMin)})`); }
-  catch (e) { tripFail(e); }
+  const s = Math.round(slipMin);
+  try {
+    await withTimeout(sql`
+      UPDATE trips SET max_eta_slip_min = ${s}, updated_at = now(),
+        slip_flagged_at = CASE WHEN slip_flagged_at IS NULL AND ${s} >= ${SLIP_FLAG_MIN} THEN now() ELSE slip_flagged_at END
+      WHERE id = ${Number(tripId)} AND (max_eta_slip_min IS NULL OR max_eta_slip_min < ${s})`);
+  } catch (e) { tripFail(e); }
 }
 
 /**

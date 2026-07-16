@@ -64,7 +64,9 @@ CREATE TABLE trips (
   distance_km real, avg_speed_kn real,
   departure_eta timestamptz,           -- the leg's ETA at open (for on-time scoring)
   max_eta_slip_min integer,            -- worst ETA growth over the trip (delay magnitude)
+  slip_flagged_at timestamptz,         -- first bump reaching 30min slip (lead-time anchor, 009)
   stalled boolean NOT NULL DEFAULT false,
+  stalled_at timestamptz,              -- first stall tick (lead-time anchor, 009)
   status text NOT NULL DEFAULT 'open', -- open | arrived | abandoned
   updated_at timestamptz NOT NULL
 );
