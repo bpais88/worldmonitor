@@ -72,6 +72,13 @@ port per tick (relay applies the 7-day lookahead + area matching). Marco offers 
 answering get_upcoming_disruptions. Delivery: whatever platform the watch was created on
 (Slack/Teams work today; WhatsApp templates + voice outbound stay deferred).
 
+**Lead-time evidence (2026-07-16, migration 010):** events themselves are in-memory only (3-hourly
+refresh), so `disruption_log` records each event id's FIRST sighting (`db.logDisruptionsFirstSeen`,
+called from the relay's refresh). Alert lead time = `starts_at - first_seen_at`; also enables the
+news-precedes-calendar comparison (a `strike_report`'s first sighting vs the matching
+`strike_scheduled`'s). Append-only, ON CONFLICT DO NOTHING; a logging failure never touches the
+data path or trips health.
+
 ## Open questions
 
 1. ~~Confidence floor for proactive pushes~~ RESOLVED in M4: pushes are OFFICIAL-CALENDAR ONLY

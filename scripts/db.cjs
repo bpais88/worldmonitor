@@ -954,6 +954,35 @@ function relativeCongestion(baselines, portId, atBerth, dow, hour, minDays = BAS
   return 'clear';
 }
 
+/**
+ * Disruption first-seen log (migration 010): record each event id's FIRST sighting so alert lead
+ * time (starts_at - first_seen_at) is measurable instead of asserted. Append-only, idempotent —
+ * ON CONFLICT DO NOTHING keyed on the id, which is already stable across refreshes (watch dedup
+ * relies on it). Deliberately OUTSIDE the trips health accounting: this is evidence logging on a
+ * 3-hourly refresh, and a failure here must not flip lastTripWriteOk/degraded — quiet warn only.
+ * Volume: ~20 events per refresh, almost all already-seen no-ops.
+ */
+async function logDisruptionsFirstSeen(events) {
+  if (!enabled || !Array.isArray(events) || !events.length) return 0;
+  let inserted = 0;
+  for (const e of events) {
+    if (!e || !e.id || !e.kind) continue;
+    try {
+      const rows = await withTimeout(sql`
+        INSERT INTO disruption_log (event_id, kind, country, starts_at, summary)
+        VALUES (${String(e.id).slice(0, 300)}, ${e.kind}, ${e.country ?? null},
+                ${e.startsAt != null ? new Date(e.startsAt) : null}, ${String(e.summary || '').slice(0, 500)})
+        ON CONFLICT (event_id) DO NOTHING RETURNING event_id`);
+      if (Array.isArray(rows) && rows.length) inserted++;
+    } catch (err) {
+      console.warn('[db] disruption_log insert failed:', err.message);
+      break; // one failure this refresh means they'll all fail (conn/timeout) — retry next refresh
+    }
+  }
+  if (inserted) console.log(`[db] disruption_log: ${inserted} new event(s) first seen`);
+  return inserted;
+}
+
 module.exports = {
   enabled, syncPorts, syncVessels, writeSnapshot, writeEvents, queryPortHistory,
   refreshBaselines, loadBaselines, relativeCongestion, BASELINE_MIN_DAYS,
@@ -963,5 +992,6 @@ module.exports = {
   finalizeArrivedGeo, pruneTripPoints,
   // Phase C serving
   queryTrip, queryVesselProfile, queryPortProfile,
+  logDisruptionsFirstSeen,
   stats, COUNTRY_TZ, tzForCountry,
 };
