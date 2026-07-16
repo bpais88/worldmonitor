@@ -272,3 +272,16 @@ test('all-ports watch coexists with per-port watches; "stop watching all ports" 
   assert.equal(cancelled[0].id, all.id);
   await cancelWatch(one.id);
 });
+
+test('wildcard is port_disruption-only: a congestion watch targeting "all ports" gets NO strike alerts and stays port-targeted', async () => {
+  const w = await createWatch({ type: 'port_congestion', target: 'all ports', channel: 'C', createdBy: 'U', team: 'T4' });
+  const t = 8_000_000;
+  const ev = [{ id: 's-y', kind: 'strike_scheduled', national: true, country: 'IT', startsAt: t + DAY, summary: 'Strike' }];
+  const alerts = await evaluateDisruptionWatches({
+    ports: [{ name: 'Genoa', portId: 'genoa', congestion: 'clear', atPort: 1, inbound: 0 }],
+    fetchAllDisruptions: async () => ev,
+    fetchPortDisruptions: async () => ev,
+  }, t);
+  assert.equal(alerts.length, 0); // not classified as wildcard; 'all ports' matches no real port -> silent
+  await cancelWatch(w.id);
+});

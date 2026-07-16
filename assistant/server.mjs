@@ -75,7 +75,9 @@ async function tickWatches() {
     // heavy 3,000-vessel payload feeds only vessel_delay watches. With just the owner-default
     // 'all ports' watch, a tick is one listWatches + one /ais/disruptions call. The two fetches
     // still fail INDEPENDENTLY: a transient vessels 5xx must not starve the strike alerts.
-    const needPorts = watches.some((w) => (w.type === 'port_congestion' || w.type === 'port_disruption') && !isAllPortsTarget(w.target));
+    // port_congestion ALWAYS needs the port list (wildcard is a port_disruption-only concept —
+    // a congestion watch with an 'all ports' target still evaluates per-port, it just won't match).
+    const needPorts = watches.some((w) => w.type === 'port_congestion' || (w.type === 'port_disruption' && !isAllPortsTarget(w.target)));
     const needVessels = watches.some((w) => w.type === 'vessel_delay');
     const [portsR, vesselsR] = await Promise.allSettled([
       needPorts ? relayGet('/ais/ports') : Promise.resolve({ ports: [] }),

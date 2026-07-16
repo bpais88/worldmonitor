@@ -167,8 +167,12 @@ const pushActive = (e, now) => e.startsAt != null && e.startsAt <= now + PUSH_LO
 export async function evaluateDisruptionWatches({ ports = [], fetchPortDisruptions, fetchAllDisruptions }, now = Date.now()) {
   const relevant = (await listWatches()).filter((w) => w.type === 'port_congestion' || w.type === 'port_disruption');
   if (!relevant.length) return [];
-  const wildcards = relevant.filter((w) => isAllPortsTarget(w.target));
-  const watches = relevant.filter((w) => !isAllPortsTarget(w.target));
+  // Wildcard is a port_disruption-only concept (create_watch rejects it for other types). A
+  // port_congestion watch that slipped in with an 'all ports' target must NOT be classified here:
+  // it would silently stop evaluating congestion and start receiving strike alerts it never asked
+  // for. Left in the port-targeted pool it just never matches a port — silent, like any unknown target.
+  const wildcards = relevant.filter((w) => w.type === 'port_disruption' && isAllPortsTarget(w.target));
+  const watches = relevant.filter((w) => !(w.type === 'port_disruption' && isAllPortsTarget(w.target)));
   const alerts = [];
 
   // 'all ports' watches first: one unfiltered fetch shared by all of them.

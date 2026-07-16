@@ -1,7 +1,7 @@
 // Watch tools — let the agent set/list/cancel proactive alerts. Read-class (no
 // approval gate): creating a watch is benign (just a reminder). They need the
 // live channel context, which the agent loop now passes to every handler.
-import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget } from '../watches.mjs';
+import { createWatch, listWatches, cancelWatch, cancelWatchesByTarget, isAllPortsTarget } from '../watches.mjs';
 
 export const watchTools = [
   {
@@ -20,6 +20,12 @@ export const watchTools = [
     },
     handler: async ({ type, target, condition = 'any' }, ctx = {}) => {
       if (!ctx.channel) return { error: 'no channel context to attach the watch to' };
+      // Wildcard is disruptions-only: congestion is inherently per-port (there is no meaningful
+      // "all ports turned busy" transition), and a congestion watch stored with this target would
+      // just never match a port. Reject with guidance instead of creating a dead watch.
+      if (type !== 'port_disruption' && isAllPortsTarget(target)) {
+        return { error: `"all ports" is only supported for type port_disruption (strike/disruption alerts across every covered port). For ${type}, name a specific port or vessel — or create a port_disruption watch with target "all ports" instead.` };
+      }
       const w = await createWatch({ type, target, condition, channel: ctx.channel, thread: ctx.thread, createdBy: ctx.user, team: ctx.team, platform: ctx.platform, deliver: ctx.deliver });
       return {
         created: true, id: w.id, type: w.type, target: w.target, condition: w.condition,
