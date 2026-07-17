@@ -136,8 +136,25 @@ the observable is TRANSIT FLOW + security posture. Coverage verdict from live pr
 global aisstream subscription (2026-07-16): map holds 20,811 vessels worldwide — Singapore box 82,
 Gibraltar 83, Gulf of Suez approach 27, but **Persian Gulf + Gulf of Oman incl. Jebel Ali: 0** and
 **Bab el-Mandeb: 0**. aisstream is terrestrial; there are simply no receivers there. AIS-based
-Hormuz flow counting is NOT buildable on our current feed — satellite AIS (Spire etc., paid) is
-the only fix; see docs/AIS_PROVIDER_ALTERNATIVES.md before ever paying.
+Hormuz flow counting is NOT buildable on our current feed — satellite AIS (paid) is the only fix;
+see docs/AIS_PROVIDER_ALTERNATIVES.md before ever paying.
+
+**Satellite deep-research verdict (2026-07-17, 10 findings, all adversarially verified 3-0):**
+S-AIS consolidated into a sales-gated duopoly in 2025 (Kpler bought Spire Maritime + owns
+MarineTraffic, which killed self-serve API credits Jan 2025; S&P Global bought ORBCOMM AIS,
+closed Nov 2025) — no public Gulf coverage/pricing survives, and "~5s latency" marketing is a
+blended figure (third-party tests: 10-60 min effective). NO verified <$1k/mo Hormuz transit path
+exists: cheapest self-serve AIS API (Datalastic €199/mo) is terrestrial-only at that tier
+(satellite add-on price unverified — one email resolves). Free tier that IS real: Copernicus Data
+Space APIs (server-side Sentinel-1 GRD processing, 12TB/mo + 10k requests/mo free) → DIY weekly
+SAR port-occupancy snapshots for Gulf ports; Global Fishing Watch's SAR-detection API proves the
+technique but is non-commercial-licensed + offline (Jul 2026) — validation benchmark only, never a
+production dependency. Step-change: tasked SAR (Capella-class, 3-6h delivery, price quote-only).
+Windward/Ursa confirm the pattern: nobody owns satellites; buy AIS + broker SAR + differentiate on
+fusion — which is the layer we already run. Consequences: M6 V1 (market-implied) is the cheapest
+credible transit proxy, not a stopgap; a Sentinel-1 occupancy spike earns a roadmap slot;
+paid S-AIS waits for a customer to fund it. Full cited report: claude.ai artifact
+"Satellite Maritime Monitoring — Verified Source & Cost Report".
 
 V1 without AIS — both sources verified/known:
 
