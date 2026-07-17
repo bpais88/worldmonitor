@@ -49,41 +49,49 @@ const num = (v) => { const n = Number(v); return Number.isFinite(n) ? n : null; 
  * Pure.
  */
 function extractMarkets(searchJson, chokepoint) {
-  const dailyBands = [];
-  const weeklyByEvent = new Map(); // event title -> bands; separate WEEKS must not pool into one distribution
+  // Bands are grouped PER EVENT for both families: each event's cluster is one probability
+  // distribution summing to ~1, so pooling bands across events (different weeks, different
+  // forecast horizons) double-counts mass and can synthesize an implied count that belongs to
+  // neither market. One cluster is picked per family below.
+  const dailyByEvent = new Map();
+  const weeklyByEvent = new Map();
   let normalBy = null;
   for (const ev of searchJson?.events || []) {
     if (ev?.closed === true) continue;
     const title = String(ev?.title || '');
     if (!title.toLowerCase().includes(chokepoint.query)) continue;
-    const wk = () => { if (!weeklyByEvent.has(title)) weeklyByEvent.set(title, []); return weeklyByEvent.get(title); };
+    const grp = (map) => { if (!map.has(title)) map.set(title, []); return map.get(title); };
     for (const m of ev?.markets || []) {
       if (m?.closed === true) continue;
       const q = String(m?.question || '');
       const price = num(m?.lastTradePrice);
       if (price == null) continue;
       let mt;
-      if ((mt = q.match(DAILY_BAND_RE))) { dailyBands.push({ lo: +mt[1], hi: +mt[2], price }); continue; }
-      if ((mt = q.match(WEEKLY_UNDER_RE))) { wk().push({ lo: 0, hi: +mt[1], price }); continue; }
-      if ((mt = q.match(WEEKLY_BAND_RE))) { wk().push({ lo: +mt[1], hi: +mt[2], price }); continue; }
-      if ((mt = q.match(WEEKLY_OVER_RE))) { wk().push({ lo: +mt[1], hi: Math.round(+mt[1] * 1.5), price }); continue; }
+      if ((mt = q.match(DAILY_BAND_RE))) { grp(dailyByEvent).push({ lo: +mt[1], hi: +mt[2], price }); continue; }
+      if ((mt = q.match(WEEKLY_UNDER_RE))) { grp(weeklyByEvent).push({ lo: 0, hi: +mt[1], price }); continue; }
+      if ((mt = q.match(WEEKLY_BAND_RE))) { grp(weeklyByEvent).push({ lo: +mt[1], hi: +mt[2], price }); continue; }
+      // Open-ended "N or more" outcomes are UNBOUNDED above — they include normal flow, so no
+      // ceiling may be fabricated for them (hi stays Infinity; deriveSignal treats an unbounded
+      // dominant band as 'normal' and excludes unbounded bands from the implied count).
+      if ((mt = q.match(WEEKLY_OVER_RE))) { grp(weeklyByEvent).push({ lo: +mt[1], hi: Infinity, price }); continue; }
       const nb = title.match(NORMAL_BY_RE) || q.match(NORMAL_BY_RE);
       // "returns to normal by X" is a Yes/No market: price = P(back to normal by that date).
       if (nb && normalBy == null) normalBy = { label: nb[1].trim(), price };
     }
   }
-  // Pooling bands across different weeks would double-count probability mass (each week's cluster
-  // sums to ~1 on its own), so pick ONE weekly event: the one with the most mass (most liquid/
-  // complete cluster — in practice the current week).
-  let weeklyBands = [];
-  let best = 0;
-  for (const bands of weeklyByEvent.values()) {
-    const mass = bands.reduce((s, b) => s + b.price, 0);
-    if (mass > best) { best = mass; weeklyBands = bands; }
-  }
-  dailyBands.sort((a, b) => a.lo - b.lo);
-  weeklyBands.sort((a, b) => a.lo - b.lo);
-  return { dailyBands, weeklyBands, normalBy };
+  // Pick ONE cluster per family: the one with the most mass (most liquid/complete — in practice
+  // the current horizon). TODO: prefer earliest event endDate once we thread it through — mass is
+  // a proxy for "current" that could in principle pick a later horizon.
+  const pickCluster = (map) => {
+    let bands = [];
+    let best = 0;
+    for (const b of map.values()) {
+      const mass = b.reduce((s, x) => s + x.price, 0);
+      if (mass > best) { best = mass; bands = b; }
+    }
+    return bands.sort((a, b) => a.lo - b.lo);
+  };
+  return { dailyBands: pickCluster(dailyByEvent), weeklyBands: pickCluster(weeklyByEvent), normalBy };
 }
 
 /**
@@ -111,21 +119,32 @@ function deriveSignal(extracted, chokepoint) {
     basis = 'weekly';
   }
   if (!bands) return null;
+  // Bounded bands carry the count information; open-ended "N or more" bands (hi=Infinity) include
+  // normal flow, so they can neither bound the implied count nor establish a disruption state.
+  const bounded = bands.filter((b) => Number.isFinite(b.hi));
+  if (!bounded.length) return null; // only open-ended outcomes -> no ceiling information -> no signal
   const mass = bands.reduce((s, b) => s + b.price, 0);
   if (mass <= 0.05) return null; // dead/illiquid cluster — not a signal
-  const implied = Math.round(bands.reduce((s, b) => s + ((b.lo + b.hi) / 2) * b.price, 0) / mass);
+  const boundedMass = bounded.reduce((s, b) => s + b.price, 0);
+  if (boundedMass <= 0.05) return null;
+  const implied = Math.round(bounded.reduce((s, b) => s + ((b.lo + b.hi) / 2) * b.price, 0) / boundedMass);
+  // Dominance is judged over ALL bands: if the market's highest-priced outcome is open-ended
+  // ("100 or more"), the market is asserting flow at-or-above that floor — which contains normal —
+  // so the state must be 'normal' regardless of what the bounded tail looks like.
   const dominant = bands.reduce((a, b) => (b.price > a.price ? b : a));
   const normal = chokepoint.normalDailyTransits;
   let state = 'normal';
-  if (dominant.hi <= 0.3 * normal) state = 'severe';
-  else if (dominant.hi <= 0.6 * normal) state = 'disrupted';
+  if (Number.isFinite(dominant.hi)) {
+    if (dominant.hi <= 0.3 * normal) state = 'severe';
+    else if (dominant.hi <= 0.6 * normal) state = 'disrupted';
+  }
   return {
     chokepointId: chokepoint.id,
     state,
     basis,
     confidence: Math.floor(dominant.price * 100) / 100, // floor: 0.995 shows as 0.99, never a claimed certainty of 1
     impliedDailyTransits: implied,
-    dominantBand: { lo: Math.round(dominant.lo), hi: Math.round(dominant.hi), price: dominant.price },
+    dominantBand: { lo: Math.round(dominant.lo), hi: Number.isFinite(dominant.hi) ? Math.round(dominant.hi) : null, price: dominant.price },
     normalBy: normalBy || null,
     bands,
   };

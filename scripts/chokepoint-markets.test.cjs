@@ -152,3 +152,53 @@ test('bands from different WEEKS are never pooled — the most liquid single wee
   assert.equal(s.state, 'severe');
   assert.equal(s.confidence, 0.99);                       // floored from 0.995, never 1
 });
+
+// --- Codex review P1: open-ended "N or more" outcomes must never fabricate a ceiling -------------
+
+test('an open-ended dominant outcome ("100 or more ships") reads as NORMAL — it contains normal flow', () => {
+  const ex = extractMarkets({ events: [{
+    title: 'How many ships transit the Strait of Hormuz week of July 20?',
+    markets: [
+      { question: 'Will 100 or more ships transit the Strait of Hormuz between July 20-July 26?', lastTradePrice: 0.9 },
+      { question: 'Will fewer than 100 ships transit the Strait of Hormuz between July 20-July 26?', lastTradePrice: 0.08 },
+    ],
+  }] }, HORMUZ);
+  const s = deriveSignal(ex, HORMUZ);
+  assert.equal(s.state, 'normal');                        // pre-fix: fabricated hi=150 -> 21/day -> severe
+  assert.equal(s.dominantBand.hi, null);                  // unbounded, honestly represented
+  assert.deepEqual(buildChokepointEvents(s, HORMUZ), []); // no event fabricated from an unbounded bucket
+});
+
+test('only open-ended outcomes -> no signal at all (no ceiling information)', () => {
+  const ex = extractMarkets({ events: [{
+    title: 'Hormuz transits week of July 20?',
+    markets: [{ question: 'Will 100 or more ships transit the Strait of Hormuz between July 20-July 26?', lastTradePrice: 0.9 }],
+  }] }, HORMUZ);
+  assert.equal(deriveSignal(ex, HORMUZ), null);
+});
+
+test('a small open-ended tail does not pollute the implied count', () => {
+  const s = deriveSignal({
+    dailyBands: [{ lo: 0, hi: 20, price: 0.9 }, { lo: 20, hi: Infinity, price: 0.05 }],
+    weeklyBands: [], normalBy: null,
+  }, HORMUZ);
+  assert.equal(s.impliedDailyTransits, 10);               // midpoint of the bounded band only
+  assert.equal(s.state, 'severe');                        // bounded dominant still classifies
+});
+
+// --- Codex review P2: daily bands from different forecast horizons must not pool -----------------
+
+test('daily bands from different events are never pooled — one horizon wins', () => {
+  const twoHorizons = { events: [
+    { title: 'Avg. # of ships transiting Strait of Hormuz end of July?',
+      markets: [{ question: 'Will there be between 80 and 120 average daily transits of the Strait of Hormuz', lastTradePrice: 0.95 }] },
+    { title: 'Avg. # of ships transiting Strait of Hormuz end of August?',
+      markets: [{ question: 'Will there be between 0 and 20 average daily transits of the Strait of Hormuz', lastTradePrice: 0.96 }] },
+  ] };
+  const ex = extractMarkets(twoHorizons, HORMUZ);
+  assert.equal(ex.dailyBands.length, 1);                  // one event's cluster, not both
+  const s = deriveSignal(ex, HORMUZ);
+  // pre-fix pooling produced implied ~55/day with state severe — a number belonging to NEITHER market
+  assert.ok(s.impliedDailyTransits === 10 || s.impliedDailyTransits === 100, `implied ${s.impliedDailyTransits}`);
+  assert.equal(s.bands.length, 1);
+});
