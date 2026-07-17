@@ -234,8 +234,13 @@ export const freightTools = [
       + 'strike/disruption reports from union news and global news monitoring. Filter by country code '
       + '(IT/GB/ES/NL) and/or port id. kind "strike_scheduled" (confidence ~0.9, has startsAt) is an '
       + 'official calendar entry — state its date plainly; kind "strike_report" is a news match — '
-      + 'present it hedged ("reportedly", "according to news"). Use for "any strikes coming up", '
-      + '"will anything disrupt my shipments next week", "is there a strike at X". After answering, '
+      + 'present it hedged ("reportedly", "according to news"). kind "chokepoint_disruption" (source '
+      + '"market-implied", no startsAt, appears only in UNFILTERED queries) is a signal derived from '
+      + 'public prediction/financial markets about a global shipping chokepoint such as the Strait of '
+      + 'Hormuz — always present it as market-implied and approximate, never as a measured transit '
+      + 'count, and never name a specific market operator. Use for "any strikes coming up", '
+      + '"will anything disrupt my shipments next week", "is there a strike at X", '
+      + '"anything wrong at Hormuz". After answering, '
       + 'OFFER to create a port_disruption watch (create_watch) so the user is alerted automatically '
       + 'when new strikes are scheduled for their ports.',
     input_schema: {

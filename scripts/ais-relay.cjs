@@ -1763,6 +1763,7 @@ function portFeed(lat, lon, aisFresh, marinesiaOk, now = Date.now()) {
 const { runExplainers } = require('./delay-explainers.cjs');
 const { craneWindReason, baselineAnomalyReason, assemblePortContext } = require('./port-context.cjs');
 const { fetchMitStrikes, fetchGdeltStrikes, fetchUnionStrikes, mergeDisruptionEvents, strikeReasonForPort } = require('./strike-sources.cjs');
+const { fetchChokepointEvents } = require('./chokepoint-markets.cjs');
 const { sourcesFor } = require('./country-sources.cjs');
 const { weatherExplainer, fetchMarineWeather } = require('./explainer-weather.cjs');
 const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news.cjs');
@@ -2224,6 +2225,10 @@ const sleepMs = (ms) => new Promise((r) => setTimeout(r, ms));
 async function refreshDisruptions() {
   const lists = [];
   try { lists.push(await fetchMitStrikes()); } catch (e) { console.warn('[Relay] MIT strikes fetch failed:', e.message); }
+  // M6: market-implied chokepoint signal (Hormuz). Self-contained best-effort — returns [] on any
+  // failure; events carry no country/startsAt so they surface ONLY in the unfiltered feed (pull:
+  // Marco + /ais/disruptions), never in per-port queries or watch pushes.
+  try { lists.push(await fetchChokepointEvents()); } catch (e) { console.warn('[Relay] chokepoint markets failed:', e.message); }
   for (const country of ['IT', 'GB', 'ES', 'NL']) {
     try { lists.push(await fetchUnionStrikes(country)); } catch { /* best-effort */ }
     try { lists.push(await fetchGdeltStrikes(country)); } catch { /* best-effort */ }
