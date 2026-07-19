@@ -238,9 +238,15 @@ export const freightTools = [
       + '"market-implied", no startsAt, appears only in UNFILTERED queries) is a signal derived from '
       + 'public prediction/financial markets about a global shipping chokepoint such as the Strait of '
       + 'Hormuz — always present it as market-implied and approximate, never as a measured transit '
-      + 'count, and never name a specific market operator. Use for "any strikes coming up", '
+      + 'count, and never name a specific market operator. Water-level kinds (official sources, '
+      + 'confidence ~0.9, no startsAt, UNFILTERED queries only): "waterway_low_water" is a live gauge '
+      + 'reading (e.g. Rhine at Kaub) breaching a commercial low-water mark — hits barge payloads to '
+      + 'the named hinterland ports; "water_closure" is a likely/announced closure or capacity cut '
+      + '(Venice MOSE barrier, Panama lock outages); "draft_restriction" is an official Panama Canal '
+      + 'draft-cut advisory. State gauge numbers and marks plainly — they are measurements, not '
+      + 'hedged signals. Use for "any strikes coming up", '
       + '"will anything disrupt my shipments next week", "is there a strike at X", '
-      + '"anything wrong at Hormuz". After answering, '
+      + '"anything wrong at Hormuz", "Rhine water levels", "Panama draft limits". After answering, '
       + 'OFFER to create a port_disruption watch (create_watch) so the user is alerted automatically '
       + 'when new strikes are scheduled for their ports.',
     input_schema: {
