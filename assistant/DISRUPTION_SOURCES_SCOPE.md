@@ -87,6 +87,88 @@ news-precedes-calendar comparison (a `strike_report`'s first sighting vs the mat
 `strike_scheduled`'s). Append-only, ON CONFLICT DO NOTHING; a logging failure never touches the
 data path or trips health.
 
+## M5 — Water-level disruptions (SCOPED 2026-07-16, owner decision: build V1)
+
+Water level is a first-class chokepoint observable the port-level AIS CANNOT see: during the July
+2026 Rhine episode (Kaub 45 cm vs the 77 cm GlW line, barges at ~20% load, Rotterdam–Karlsruhe
+freight +40%) our own Rotterdam/Moerdijk entries + dwell stayed FLAT for 14 days — payloads halve
+but hulls keep moving. The gauge is therefore a LEADING indicator of hinterland-driven port
+congestion, not a derivable one. Two mechanisms, two event kinds:
+
+- `waterway_low_water` — corridor economics degrade (Rhine → Rotterdam/Moerdijk/Amsterdam/
+  Vlissingen hinterland; Danube rides along free).
+- `water_closure` / `draft_restriction` — direct blockage or capacity cut (Venice MOSE closures →
+  venezia + porto_marghera, both geofenced; Panama Gatun draft cuts — announced WEEKS ahead, e.g.
+  the live El Niño series: 49.5 ft Jul 3 → 49.0 Jul 24 → 48.5 Aug 15, 2026 — a calendar signal,
+  exactly like the MIT strike registry).
+
+Sources — every ✅ verified with a live call on 2026-07-16:
+
+- ✅ **PEGELONLINE** (DE official WSV; free, keyless): Rhine 36 gauges (KAUB read 45 cm, state
+  "low") + 27 Danube gauges. THE number surcharges/load restrictions key off (cm at Kaub) — never
+  substitute a model proxy (Open-Meteo flood discharge rejected: m³/s is not the commercial ref).
+  Forecast layer: BfG/ELWIS Kaub forecast (verify feed shape at build).
+- ✅ **Venice open data** (dati.venezia.it; free): live tide (Punta Salute 0.47 m read live);
+  MOSE closure = the port-blocking event; tide FORECASTS published (lead time).
+- ⚠️ **ACP / Panama** (pancanal.com): official Gatun dashboards exist but NO clean API — 1990s
+  HTML + Tableau. V1 ingests the ADVISORIES (draft-restriction announcements, dated) via scrape;
+  the calendar is the signal, the lake level is nice-to-have.
+- ⚠️ **Rijkswaterstaat waterwebservices** (NL official): documented POST API, endpoint 301'd —
+  chase current host at build. Non-blocking for V1 (Rhine side covered by PEGELONLINE at Lobith).
+- ✅ **IOC sea-level network** (1,927 global tide gauges, Gibraltar verified): the generic
+  "tide level at any covered port" layer. DEFERRED past V1.
+- ✅ USGS (Mississippi, Baton Rouge 22.44 ft verified) + Hub'Eau (FR, Seine verified): parked
+  until a customer needs those corridors.
+
+V1 = Rhine (PEGELONLINE current + BfG forecast) + Venice tide/MOSE + Panama advisories, as a
+relay fetcher on the existing 3h disruption cadence, threshold state machines per gauge
+(normal/low/critical off the documented marks, dwell-debounced like congestion watches), events
+into the merged disruption cache → port context, get_upcoming_disruptions, watches (the 'all
+ports' wildcard carries them with zero new wiring — extend its kind filter beyond
+strike_scheduled). Also log to disruption_log (010) for lead-time evidence from day one.
+Own-data bonus: correlate Kaub history vs our Moerdijk/Rotterdam dwell series to MEASURE the
+hinterland lag — a real exogenous feature for the congestion forecast once the episode matures.
+
+## M6 — Chokepoint flow monitor (Hormuz/Suez) (SCOPED 2026-07-16)
+
+Straits are NOT water-level problems (Hormuz ~90 m deep; Suez is a sea-level canal — no locks):
+the observable is TRANSIT FLOW + security posture. Coverage verdict from live probes of our own
+global aisstream subscription (2026-07-16): map holds 20,811 vessels worldwide — Singapore box 82,
+Gibraltar 83, Gulf of Suez approach 27, but **Persian Gulf + Gulf of Oman incl. Jebel Ali: 0** and
+**Bab el-Mandeb: 0**. aisstream is terrestrial; there are simply no receivers there. AIS-based
+Hormuz flow counting is NOT buildable on our current feed — satellite AIS (paid) is the only fix;
+see docs/AIS_PROVIDER_ALTERNATIVES.md before ever paying.
+
+**Satellite deep-research verdict (2026-07-17, 10 findings, all adversarially verified 3-0):**
+S-AIS consolidated into a sales-gated duopoly in 2025 (Kpler bought Spire Maritime + owns
+MarineTraffic, which killed self-serve API credits Jan 2025; S&P Global bought ORBCOMM AIS,
+closed Nov 2025) — no public Gulf coverage/pricing survives, and "~5s latency" marketing is a
+blended figure (third-party tests: 10-60 min effective). NO verified <$1k/mo Hormuz transit path
+exists: cheapest self-serve AIS API (Datalastic €199/mo) is terrestrial-only at that tier
+(satellite add-on price unverified — one email resolves). Free tier that IS real: Copernicus Data
+Space APIs (server-side Sentinel-1 GRD processing, 12TB/mo + 10k requests/mo free) → DIY weekly
+SAR port-occupancy snapshots for Gulf ports; Global Fishing Watch's SAR-detection API proves the
+technique but is non-commercial-licensed + offline (Jul 2026) — validation benchmark only, never a
+production dependency. Step-change: tasked SAR (Capella-class, 3-6h delivery, price quote-only).
+Windward/Ursa confirm the pattern: nobody owns satellites; buy AIS + broker SAR + differentiate on
+fusion — which is the layer we already run. Consequences: M6 V1 (market-implied) is the cheapest
+credible transit proxy, not a stopgap; a Sentinel-1 occupancy spike earns a roadmap slot;
+paid S-AIS waits for a customer to fund it. Full cited report: claude.ai artifact
+"Satellite Maritime Monitoring — Verified Source & Cost Report".
+
+V1 without AIS — both sources verified/known:
+
+- ✅ **Polymarket** (gamma-api.polymarket.com — ALREADY an integrated relay host): live Hormuz
+  market cluster with real liquidity (verified 2026-07-16: "0–20 avg daily transits end of July"
+  @ 73%, "week under 100 transits" @ 86%, "normal by Dec 31" @ 54%, ~$38k 24h volume). Market-
+  implied transit bands → chokepoint state (normal/disrupted/severe), confidence = price.
+  Events kind `chokepoint_disruption`, hedged wording (market-implied, not measured).
+- **UKMTO advisories** (ukmto.org warnings): the official operational alert channel for the
+  region — ships get these before newspapers. Feed shape (scrape/RSS) to verify at build.
+- Suez partial: Gulf-of-Suez AIS box (27 vessels live) could give a rough northern-approach
+  queue proxy later; Bab el-Mandeb stays blind without satellite AIS. Say so honestly in any
+  customer-facing display.
+
 ## Open questions
 
 1. ~~Confidence floor for proactive pushes~~ RESOLVED in M4: pushes are OFFICIAL-CALENDAR ONLY
@@ -94,3 +176,7 @@ data path or trips health.
 2. Quiet hours / digest batching for multi-disruption days.
 3. Whether GB weather alerts need the Met Office CAP feed instead of Meteoalarm (UK feed exists
    but had 0 active entries when checked — verify it populates during a real warning).
+4. M5/M6 push policy: gauge/market STATE TRANSITIONS are the strike-calendar analog (official,
+   quantitative) — do they page like scheduled strikes, or start pull-only for a shakedown week?
+5. M6: does a market-implied signal meet the M4 bar ("a hedged headline must never page you")?
+   Proposed: UKMTO advisories page; Polymarket state changes are context/pull until proven.
