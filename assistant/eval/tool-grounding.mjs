@@ -4,9 +4,10 @@
 // and schemas (what drives routing), but canned returns — so we test the model's tool CHOICE in
 // isolation, with no relay/network dependency. Only needs ANTHROPIC_API_KEY.
 //
-// NOT a per-PR gate: it's paid and mildly non-deterministic. It runs nightly
-// (.github/workflows/assistant-eval.yml) so a regression that makes Marco stop grounding surfaces
-// within a day. Run locally with: npm run eval:assistant
+// NOT a per-PR gate: it's paid and mildly non-deterministic. It runs when assistant/ changes land
+// on main, plus a weekly heartbeat (.github/workflows/assistant-eval.yml), so a regression that
+// makes Marco stop grounding surfaces with the commit that caused it. Run locally with:
+// npm run eval:assistant
 import { runAgent, DEFAULT_SYSTEM } from '../agent.mjs';
 import { freightTools } from '../tools/freight.mjs';
 import { profileTools } from '../tools/profiles.mjs';
