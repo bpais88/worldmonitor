@@ -4,6 +4,7 @@ const { test } = require('node:test');
 const assert = require('node:assert');
 const {
   AOIS, parseNpy, intersectBbox, coverageFraction, cropSize, detectTargets, targetLonLat,
+  mergeLogLines,
 } = require('./sar-occupancy.cjs');
 
 // --- parseNpy ------------------------------------------------------------------------------
@@ -118,6 +119,49 @@ test('targetLonLat maps pixel centroid back into the bbox', () => {
   const { lon, lat } = targetLonLat({ x: 0, y: 0 }, [10, 20, 11, 21], 10, 10);
   assert.ok(Math.abs(lon - 10.05) < 1e-9, `lon=${lon}`);
   assert.ok(Math.abs(lat - 20.95) < 1e-9, `lat=${lat}`);
+});
+
+// --- log merge ----------------------------------------------------------------------------
+
+const row = (aoi, scene, datetime, targets = 3) =>
+  ({ aoi, scene, datetime, coverage: 1, targets, medianAmp: 80, positions: [] });
+
+test('mergeLogLines: dedupes on (aoi, scene), keeps new rows chronological', () => {
+  const existing = [JSON.stringify({ aoi: 'a', scene: 's1', datetime: '2026-07-01T00:00:00Z', coverage: 1, targets: 2, medianAmp: 60 })];
+  const out = mergeLogLines(existing, [
+    row('a', 's3', '2026-07-09T00:00:00Z'),
+    row('a', 's1', '2026-07-01T00:00:00Z'), // already logged
+    row('a', 's2', '2026-07-05T00:00:00Z'),
+  ]);
+  assert.strictEqual(out.length, 2);
+  assert.strictEqual(JSON.parse(out[0]).scene, 's2'); // oldest first
+  assert.strictEqual(JSON.parse(out[1]).scene, 's3');
+});
+
+test('mergeLogLines: same scene id under two AOIs is two log rows', () => {
+  const existing = [JSON.stringify({ aoi: 'a', scene: 's1', datetime: '2026-07-01T00:00:00Z' })];
+  const out = mergeLogLines(existing, [row('b', 's1', '2026-07-01T00:00:00Z')]);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(JSON.parse(out[0]).aoi, 'b');
+});
+
+test('mergeLogLines: error rows and position payloads never reach the log', () => {
+  const out = mergeLogLines([], [
+    { aoi: 'a', scene: 'bad', datetime: '2026-07-02T00:00:00Z', coverage: 0.9, error: 'crop fetch 500' },
+    row('a', 'ok', '2026-07-03T00:00:00Z'),
+  ]);
+  assert.strictEqual(out.length, 1);
+  const logged = JSON.parse(out[0]);
+  assert.strictEqual(logged.scene, 'ok');
+  assert.strictEqual('positions' in logged, false);
+  assert.strictEqual('error' in logged, false);
+});
+
+test('mergeLogLines: malformed and blank existing lines are tolerated', () => {
+  const existing = ['', '   ', 'not json at all', JSON.stringify({ aoi: 'a', scene: 's1' })];
+  const out = mergeLogLines(existing, [row('a', 's1', '2026-07-01T00:00:00Z'), row('a', 's2', '2026-07-02T00:00:00Z')]);
+  assert.strictEqual(out.length, 1);
+  assert.strictEqual(JSON.parse(out[0]).scene, 's2');
 });
 
 test('shipped AOIs stay water-only shaped: nonzero area, sane Gulf coordinates', () => {
