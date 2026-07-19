@@ -248,9 +248,12 @@ if (require.main === module) {
     if (asJson) console.log(JSON.stringify(all, null, 2));
     if (appendPath) {
       const fs = require('fs');
-      const existing = fs.existsSync(appendPath) ? fs.readFileSync(appendPath, 'utf8').split('\n') : [];
-      const fresh = mergeLogLines(existing, all);
-      if (fresh.length) fs.appendFileSync(appendPath, fresh.join('\n') + '\n');
+      const raw = fs.existsSync(appendPath) ? fs.readFileSync(appendPath, 'utf8') : '';
+      const fresh = mergeLogLines(raw.split('\n'), all);
+      // A last record without its trailing newline must not swallow the first fresh one — the
+      // glued line would parse as neither, drop out of `seen`, and re-append forever.
+      const sep = raw && !raw.endsWith('\n') ? '\n' : '';
+      if (fresh.length) fs.appendFileSync(appendPath, sep + fresh.join('\n') + '\n');
       console.log(`\nappended ${fresh.length} new scene(s) to ${appendPath}`);
     }
   })().catch((e) => { console.error(e); process.exit(1); });
