@@ -19,6 +19,19 @@ jobs:
           node-version: '22'
           cache: 'npm'
       - run: npm ci
-      - run: npm run eval:assistant
+      # Exit codes from tool-grounding.mjs: 0 = pass (or no key → clean skip),
+      # 1 = grounding regression (fail loudly), 2 = the API rejected the call
+      # (billing/auth/quota) — the eval never ran, so surface a warning instead of
+      # a red run; a lapsed billing account shouldn't send failure mail every night.
+      - name: Run eval
+        run: |
+          set +e
+          npm run eval:assistant
+          code=$?
+          if [ "$code" -eq 2 ]; then
+            echo "::warning title=Assistant eval did not run::Anthropic API rejected the call (billing/auth/quota). Fix the account behind the ANTHROPIC_API_KEY secret (console.anthropic.com → Plans & Billing). Grounding was NOT evaluated tonight."
+            exit 0
+          fi
+          exit "$code"
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
