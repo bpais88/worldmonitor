@@ -87,7 +87,17 @@ news-precedes-calendar comparison (a `strike_report`'s first sighting vs the mat
 `strike_scheduled`'s). Append-only, ON CONFLICT DO NOTHING; a logging failure never touches the
 data path or trips health.
 
-## M5 — Water-level disruptions (SCOPED 2026-07-16, owner decision: build V1)
+## M5 — Water-level disruptions (V1 SHIPPED 2026-07-19 — `scripts/water-levels.cjs`)
+
+V1 as-built: Kaub gauge state machine (low ≤150 cm surcharge mark / critical ≤78 cm GlW, +3-day
+trend), Venice tide + forecast maxima vs the 110 cm MOSE activation mark, ACP advisory scrape
+(draft adjustments + lock outages, current-year, ids from PDF filenames). All official sources,
+confidence 0.9, pull-only (no country/startsAt — pushes filter kind strike_scheduled). First live
+run caught the real episode: Kaub 80 cm rising, plus the live Neopanamax draft-cut advisories.
+Deviations from scope: BfG/ELWIS Kaub FORECAST layer deferred — verified at build, no
+machine-readable feed exists (HTML only); ACP effective DATES deferred — they live inside the
+advisory PDFs (advisory id + title is the v1 signal). Kaub-vs-Moerdijk dwell correlation still
+pending episode maturity.
 
 Water level is a first-class chokepoint observable the port-level AIS CANNOT see: during the July
 2026 Rhine episode (Kaub 45 cm vs the 77 cm GlW line, barges at ~20% load, Rotterdam–Karlsruhe

@@ -1764,6 +1764,7 @@ const { runExplainers } = require('./delay-explainers.cjs');
 const { craneWindReason, baselineAnomalyReason, assemblePortContext } = require('./port-context.cjs');
 const { fetchMitStrikes, fetchGdeltStrikes, fetchUnionStrikes, mergeDisruptionEvents, strikeReasonForPort } = require('./strike-sources.cjs');
 const { fetchChokepointEvents } = require('./chokepoint-markets.cjs');
+const { fetchWaterLevelEvents } = require('./water-levels.cjs');
 const { sourcesFor } = require('./country-sources.cjs');
 const { weatherExplainer, fetchMarineWeather } = require('./explainer-weather.cjs');
 const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news.cjs');
@@ -2229,6 +2230,10 @@ async function refreshDisruptions() {
   // failure; events carry no country/startsAt so they surface ONLY in the unfiltered feed (pull:
   // Marco + /ais/disruptions), never in per-port queries or watch pushes.
   try { lists.push(await fetchChokepointEvents()); } catch (e) { console.warn('[Relay] chokepoint markets failed:', e.message); }
+  // M5: official water-level sources (Rhine gauge, Venice tide/MOSE, Panama advisories). Internally
+  // best-effort per source; like M6 events these carry no country/startsAt — pull-only (Marco +
+  // /ais/disruptions), never watch pushes, until scope open question 4 is decided.
+  try { lists.push(await fetchWaterLevelEvents()); } catch (e) { console.warn('[Relay] water levels failed:', e.message); }
   for (const country of ['IT', 'GB', 'ES', 'NL']) {
     try { lists.push(await fetchUnionStrikes(country)); } catch { /* best-effort */ }
     try { lists.push(await fetchGdeltStrikes(country)); } catch { /* best-effort */ }
