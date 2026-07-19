@@ -191,9 +191,28 @@ async function sweepAoi(aoi, days, fetchImpl = fetch) {
   return rows;
 }
 
+/**
+ * Merge sweep rows into an existing JSONL log: rows whose (aoi, scene) pair is already logged
+ * are dropped, error rows never enter the log, and fresh rows come back oldest-first so the
+ * file stays chronological under append. Malformed existing lines are tolerated (the log is
+ * append-only forever; one bad line must not wedge the sweep). Returns JSONL strings. Pure.
+ */
+function mergeLogLines(existingLines, rows) {
+  const seen = new Set();
+  for (const line of existingLines) {
+    if (!line || !line.trim()) continue;
+    try { const r = JSON.parse(line); if (r.aoi && r.scene) seen.add(`${r.aoi}|${r.scene}`); } catch { /* tolerated */ }
+  }
+  return rows
+    .filter((r) => !r.error && !seen.has(`${r.aoi}|${r.scene}`))
+    .sort((a, b) => (a.datetime < b.datetime ? -1 : 1))
+    .map(({ aoi, scene, datetime, coverage, targets, medianAmp }) =>
+      JSON.stringify({ aoi, scene, datetime, coverage, targets, medianAmp }));
+}
+
 module.exports = {
   AOIS, parseNpy, intersectBbox, coverageFraction, cropSize, detectTargets, targetLonLat,
-  searchScenes, fetchCrop, sweepAoi,
+  searchScenes, fetchCrop, sweepAoi, mergeLogLines,
 };
 
 if (require.main === module) {
@@ -201,7 +220,8 @@ if (require.main === module) {
     const args = process.argv.slice(2);
     const days = Number(args[args.indexOf('--days') + 1]) || 45;
     const asJson = args.includes('--json');
-    const aoiArg = args.find((a) => !a.startsWith('--') && a !== String(days));
+    const appendPath = args.includes('--append') ? args[args.indexOf('--append') + 1] : null;
+    const aoiArg = args.find((a) => !a.startsWith('--') && a !== String(days) && a !== appendPath);
     const aois = aoiArg ? AOIS.filter((a) => a.id === aoiArg) : AOIS;
     if (aois.length === 0) {
       console.error(`unknown AOI "${aoiArg}" — known: ${AOIS.map((a) => a.id).join(', ')}`);
@@ -226,5 +246,12 @@ if (require.main === module) {
       }
     }
     if (asJson) console.log(JSON.stringify(all, null, 2));
+    if (appendPath) {
+      const fs = require('fs');
+      const existing = fs.existsSync(appendPath) ? fs.readFileSync(appendPath, 'utf8').split('\n') : [];
+      const fresh = mergeLogLines(existing, all);
+      if (fresh.length) fs.appendFileSync(appendPath, fresh.join('\n') + '\n');
+      console.log(`\nappended ${fresh.length} new scene(s) to ${appendPath}`);
+    }
   })().catch((e) => { console.error(e); process.exit(1); });
 }
