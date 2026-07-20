@@ -44,6 +44,24 @@ test('mergeDisruptionEvents: dedupes by id (higher confidence wins), scheduled-w
   assert.equal(merged[1].summary, 'x better');
 });
 
+test('mergeDisruptionEvents: collapses same-headline news reports from different union queries', () => {
+  const merged = mergeDisruptionEvents([[
+    // Same article, matched by two unions → distinct ids, identical (accent/case-insensitive) headline.
+    { id: 'union:fit-cisl:amag', kind: 'strike_report', confidence: 0.4, summary: 'Alessandria: Amag Ambiente, sciopero il 21 settembre', country: 'IT' },
+    { id: 'union:uil:amag', kind: 'strike_report', confidence: 0.45, summary: 'Alessandria: Amag Ambiente, sciopero il 21 settembre', country: 'IT', url: 'https://x' },
+    // A genuinely different report about the same event stays (different outlet, different headline).
+    { id: 'union:cgil:amag2', kind: 'strike_report', confidence: 0.4, summary: 'Amag, i lavoratori incrociano le braccia', country: 'IT' },
+    // Two distinct scheduled strikes on the same day must NOT collapse even if worded alike.
+    { id: 'mit:1', kind: 'strike_scheduled', confidence: 0.9, summary: 'Scheduled national strike', country: 'IT', startsAt: 10 },
+    { id: 'mit:2', kind: 'strike_scheduled', confidence: 0.9, summary: 'Scheduled national strike', country: 'IT', startsAt: 10 },
+  ]]);
+  const reports = merged.filter((e) => e.kind === 'strike_report');
+  assert.equal(reports.length, 2); // the two Amag duplicates folded to one; the distinct headline survived
+  const kept = reports.find((e) => e.summary.includes('21 settembre'));
+  assert.equal(kept.id, 'union:uil:amag'); // higher confidence (and the one with a url) won
+  assert.equal(merged.filter((e) => e.kind === 'strike_scheduled').length, 2); // scheduled never merge
+});
+
 const NOW = Date.UTC(2026, 6, 5, 12); // 2026-07-05T12:00Z
 
 test('strikeReasonForPort: scheduled regional strike hits its region within lookahead, not elsewhere', () => {

@@ -162,14 +162,36 @@ async function fetchUnionStrikes(country, timeoutMs = 8000) {
   return out;
 }
 
-/** Dedupe by id (highest confidence wins), sort: scheduled-with-date first (soonest), then reports. */
+/**
+ * Dedupe by id (highest confidence wins), THEN collapse duplicate NEWS reports: the same article is
+ * routinely matched by several union queries, yielding distinct ids with a byte-identical headline
+ * (e.g. one Amag Ambiente story arriving via both FIT-CISL and UILTRASPORTI). Only strike_report
+ * events collapse, keyed on the folded headline — scheduled/official events are distinct facts and
+ * never merge (two unions striking the same day are two strikes). Sort: scheduled-with-date first
+ * (soonest), then reports by confidence.
+ */
 function mergeDisruptionEvents(lists) {
   const byId = new Map();
   for (const e of (lists || []).flat().filter(Boolean)) {
     const prev = byId.get(e.id);
     if (!prev || (e.confidence ?? 0) > (prev.confidence ?? 0)) byId.set(e.id, e);
   }
-  return [...byId.values()].sort((a, b) => {
+  const byHeadline = new Map(); // folded report headline -> the event kept for it
+  const out = [];
+  for (const e of byId.values()) {
+    const key = e.kind === 'strike_report' ? foldText(e.summary || '') : '';
+    if (!key) { out.push(e); continue; } // non-reports (and summary-less reports) never collapse
+    const prev = byHeadline.get(key);
+    if (!prev) { byHeadline.set(key, e); out.push(e); continue; }
+    // Same story twice: keep the higher-confidence copy, preferring one that carries a url on a tie.
+    const better = (e.confidence ?? 0) > (prev.confidence ?? 0)
+      || ((e.confidence ?? 0) === (prev.confidence ?? 0) && !prev.url && e.url);
+    if (better) {
+      out[out.indexOf(prev)] = e;
+      byHeadline.set(key, e);
+    }
+  }
+  return out.sort((a, b) => {
     if (a.startsAt != null && b.startsAt != null) return a.startsAt - b.startsAt;
     if (a.startsAt != null) return -1;
     if (b.startsAt != null) return 1;
