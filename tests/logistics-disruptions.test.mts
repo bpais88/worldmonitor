@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { parseDisruptions, bucketOf, type DisruptionKind } from '../src/services/logistics/disruptions.ts';
+import { parseDisruptions, bucketOf, isExpiredDisruption, type DisruptionKind } from '../src/services/logistics/disruptions.ts';
 
 // A response shaped like the live /ais/disruptions feed (strikes + water + chokepoint).
 const feed = () => ({
@@ -36,19 +36,43 @@ describe('parseDisruptions', () => {
     assert.equal(out[0].id, 'ok');
   });
 
-  it('defaults startsAt/url/country to null and non-numeric startsAt to null', () => {
+  it('defaults startsAt/endsAt/url/country to null and non-numeric values to null', () => {
     const [e] = parseDisruptions({ events: [
-      { id: 'a', kind: 'chokepoint_disruption', summary: 's', source: 'market-implied', confidence: 0.6, startsAt: 'soon' },
+      { id: 'a', kind: 'chokepoint_disruption', summary: 's', source: 'market-implied', confidence: 0.6, startsAt: 'soon', endsAt: 'later' },
     ] });
     assert.equal(e.startsAt, null);
+    assert.equal(e.endsAt, null);
     assert.equal(e.url, null);
     assert.equal(e.country, null);
+  });
+
+  it('carries endsAt through for dated events', () => {
+    const [e] = parseDisruptions({ events: [
+      { id: 's', kind: 'strike_scheduled', summary: 'x', source: 'mit-scioperi', confidence: 0.9, startsAt: 1000, endsAt: 2000 },
+    ] });
+    assert.equal(e.endsAt, 2000);
   });
 
   it('returns [] for a malformed payload', () => {
     assert.deepEqual(parseDisruptions({}), []);
     assert.deepEqual(parseDisruptions(null), []);
     assert.deepEqual(parseDisruptions({ events: 'nope' }), []);
+  });
+});
+
+describe('isExpiredDisruption', () => {
+  const DAY = 24 * 60 * 60 * 1000;
+  const strike = (endsAt: number | null) =>
+    ({ id: 's', kind: 'strike_scheduled', summary: 'x', source: 'mit', confidence: 0.9, startsAt: 0, endsAt, country: 'IT', url: null } as const);
+
+  it('keeps events with no end time (signals, reports)', () => {
+    assert.equal(isExpiredDisruption(strike(null), 10 * DAY), false);
+  });
+
+  it('keeps a strike within the 24h grace, drops it beyond', () => {
+    const endsAt = 100 * DAY;
+    assert.equal(isExpiredDisruption(strike(endsAt), endsAt + DAY - 1), false); // inside grace
+    assert.equal(isExpiredDisruption(strike(endsAt), endsAt + DAY + 1), true);  // past grace
   });
 });
 

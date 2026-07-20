@@ -1,5 +1,5 @@
 import { Panel } from './Panel';
-import { escapeHtml } from '@/utils/sanitize';
+import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
 import { ItalyFerryMap } from './ItalyFerryMap';
 import {
   getTrackedFreightVessels,
@@ -8,7 +8,7 @@ import {
 } from '@/services/logistics/ferry-tracker';
 import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
 import { getPortStatus, type PortStatus } from '@/services/logistics/port-status';
-import { getDisruptions, bucketOf, type DisruptionEvent, type DisruptionKind, type DisruptionBucket } from '@/services/logistics/disruptions';
+import { getDisruptions, bucketOf, isExpiredDisruption, type DisruptionEvent, type DisruptionKind, type DisruptionBucket } from '@/services/logistics/disruptions';
 import {
   regionOf,
   bboxForRegion,
@@ -194,8 +194,9 @@ export class ItalyFerryPanel extends Panel {
 
     if (this.mode === 'ports') { board.innerHTML = this.portsTableHtml(); return; }
     if (this.mode === 'disruptions') {
-      board.innerHTML = this.disruptionsHtml();
-      this.setCount(this.disruptions.length);
+      const active = this.activeDisruptions();
+      board.innerHTML = this.disruptionsHtml(active);
+      this.setCount(active.length);
       return;
     }
 
@@ -339,8 +340,13 @@ export class ItalyFerryPanel extends Panel {
    * table: the summaries are variable-length prose the relay already hedges. Global by design —
    * water/chokepoint signals aren't country-scoped, so the region filter doesn't narrow this view.
    */
-  private disruptionsHtml(): string {
-    if (this.disruptions.length === 0) {
+  /** Events worth showing: expired scheduled strikes (still in the unfiltered feed) are dropped. */
+  private activeDisruptions(now: number = Date.now()): DisruptionEvent[] {
+    return this.disruptions.filter((e) => !isExpiredDisruption(e, now));
+  }
+
+  private disruptionsHtml(active: DisruptionEvent[]): string {
+    if (active.length === 0) {
       return `<div class="disr-empty">
         <div class="disr-empty-mark">✓</div>
         <div>No active disruptions across tracked corridors.</div>
@@ -349,7 +355,7 @@ export class ItalyFerryPanel extends Panel {
     }
     const now = Date.now();
     const byBucket = new Map<DisruptionBucket, DisruptionEvent[]>();
-    for (const e of this.disruptions) {
+    for (const e of active) {
       const b = bucketOf(e.kind);
       (byBucket.get(b) ?? byBucket.set(b, []).get(b)!).push(e);
     }
@@ -379,7 +385,9 @@ export class ItalyFerryPanel extends Panel {
     }
     const flag = e.country ? `<span class="disr-flag">${escapeHtml(e.country)}</span>` : '';
     const source = DISRUPTION_SOURCE[e.source] ?? e.source;
-    const link = e.url ? ` · <a class="disr-link" href="${escapeHtml(e.url)}" target="_blank" rel="noopener noreferrer">advisory ↗</a>` : '';
+    // sanitizeUrl allows only http/https (and escapes) — external feeds could carry a javascript: url.
+    const safeUrl = e.url ? sanitizeUrl(e.url) : '';
+    const link = safeUrl ? ` · <a class="disr-link" href="${safeUrl}" target="_blank" rel="noopener noreferrer">advisory ↗</a>` : '';
     const meta = [whenText, `Source: ${escapeHtml(source)}`].filter(Boolean).join(' · ');
     return `<div class="disr-card disr-sev-${sev}">
       <div class="disr-card-top">
