@@ -28,6 +28,8 @@ export interface DisruptionEvent {
   confidence: number;
   /** Epoch ms for officially-dated events (scheduled strikes); null for signals/reports. */
   startsAt: number | null;
+  /** Epoch ms a dated event stops — used to drop expired strikes the unfiltered feed still carries. */
+  endsAt: number | null;
   country: string | null;
   url: string | null;
 }
@@ -57,6 +59,7 @@ function toDisruption(row: unknown): DisruptionEvent | null {
   if (typeof r.id !== 'string' || typeof r.kind !== 'string' || !KNOWN_KINDS.has(r.kind)) return null;
   if (typeof r.summary !== 'string' || !r.summary) return null;
   const startsAt = typeof r.startsAt === 'number' && Number.isFinite(r.startsAt) ? r.startsAt : null;
+  const endsAt = typeof r.endsAt === 'number' && Number.isFinite(r.endsAt) ? r.endsAt : null;
   return {
     id: r.id,
     kind: r.kind as DisruptionKind,
@@ -64,9 +67,19 @@ function toDisruption(row: unknown): DisruptionEvent | null {
     source: typeof r.source === 'string' ? r.source : 'unknown',
     confidence: typeof r.confidence === 'number' ? r.confidence : 0,
     startsAt,
+    endsAt,
     country: typeof r.country === 'string' ? r.country : null,
     url: typeof r.url === 'string' ? r.url : null,
   };
+}
+
+// The unfiltered feed retains scheduled strikes with their endsAt, so an ended strike would
+// otherwise render as "in effect now" forever. Mirror the relay's strikeReasonForPort, which
+// suppresses events past their end with a 24 h grace (scripts/strike-sources.cjs).
+const EXPIRY_GRACE_MS = 24 * 60 * 60 * 1000;
+
+export function isExpiredDisruption(e: DisruptionEvent, now: number): boolean {
+  return e.endsAt != null && now > e.endsAt + EXPIRY_GRACE_MS;
 }
 
 export function parseDisruptions(json: unknown): DisruptionEvent[] {
