@@ -176,10 +176,13 @@ function mergeDisruptionEvents(lists) {
     const prev = byId.get(e.id);
     if (!prev || (e.confidence ?? 0) > (prev.confidence ?? 0)) byId.set(e.id, e);
   }
-  const byHeadline = new Map(); // folded report headline -> the event kept for it
+  const byHeadline = new Map(); // "country|folded headline" -> the event kept for it
   const out = [];
   for (const e of byId.values()) {
-    const key = e.kind === 'strike_report' ? foldText(e.summary || '') : '';
+    // Scope the key by country: refreshDisruptions merges IT/GB/ES/NL reports in one call, and two
+    // countries sharing a folded headline are separate country-scoped events — collapsing them
+    // would drop one from its ?country= feed (and its port context). Only same-country dupes fold.
+    const key = e.kind === 'strike_report' ? `${e.country ?? ''}|${foldText(e.summary || '')}` : '';
     if (!key) { out.push(e); continue; } // non-reports (and summary-less reports) never collapse
     const prev = byHeadline.get(key);
     if (!prev) { byHeadline.set(key, e); out.push(e); continue; }
