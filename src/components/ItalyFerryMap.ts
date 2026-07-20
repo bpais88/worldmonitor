@@ -424,6 +424,11 @@ export class ItalyFerryMap {
     this.map.fitBounds(toMapBounds(bbox), { padding: 24, duration: 600 });
   }
 
+  /** Re-measure after the host was hidden/shown (MapLibre needs this to repaint at full size). */
+  public resize(): void {
+    this.map.resize();
+  }
+
   public destroy(): void {
     this.map.remove();
   }

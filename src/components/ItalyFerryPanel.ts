@@ -8,6 +8,7 @@ import {
 } from '@/services/logistics/ferry-tracker';
 import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
 import { getPortStatus, type PortStatus } from '@/services/logistics/port-status';
+import { getDisruptions, bucketOf, type DisruptionEvent, type DisruptionKind, type DisruptionBucket } from '@/services/logistics/disruptions';
 import {
   regionOf,
   bboxForRegion,
@@ -21,7 +22,37 @@ import { describeFreshness } from '@/services/logistics/freshness';
 
 const REFRESH_INTERVAL_MS = 60_000;
 
-type BoardMode = 'vessels' | 'ports';
+type BoardMode = 'vessels' | 'ports' | 'disruptions';
+
+// Per-kind display: a short badge label + a severity class (reusing the congestion palette).
+// 'high' = red (closure/blockage/imminent), 'warn' = amber (degraded/announced), 'muted' = grey
+// (hedged news). Scheduled strikes escalate to 'high' inside 48 h — see disruptionsHtml.
+const DISRUPTION_KIND: Record<DisruptionKind, { label: string; sev: 'high' | 'warn' | 'muted' }> = {
+  strike_scheduled: { label: 'Strike', sev: 'warn' },
+  water_closure: { label: 'Closure', sev: 'high' },
+  draft_restriction: { label: 'Draft limit', sev: 'warn' },
+  waterway_low_water: { label: 'Low water', sev: 'warn' },
+  chokepoint_disruption: { label: 'Chokepoint', sev: 'high' },
+  strike_report: { label: 'Reported', sev: 'muted' },
+};
+
+// Friendly provenance labels — the raw source ids are internal. Order-independent lookup.
+const DISRUPTION_SOURCE: Record<string, string> = {
+  'mit-scioperi': 'Official strike registry',
+  pegelonline: 'Rhine gauge · WSV',
+  'dati-venezia': 'Venice tide · MOSE',
+  'acp-advisories': 'Panama Canal Authority',
+  'market-implied': 'Prediction markets',
+  'union-news': 'Union news',
+  gdelt: 'News monitoring',
+};
+
+const BUCKET_META: Record<DisruptionBucket, { title: string; note: string }> = {
+  official: { title: 'Official & scheduled', note: 'Dated facts to plan around' },
+  signals: { title: 'Live signals', note: 'Gauge & market intelligence — market/level-implied, not measured counts' },
+  reports: { title: 'Reported in the news', note: 'Unconfirmed — treat as leads' },
+};
+const BUCKET_ORDER: DisruptionBucket[] = ['official', 'signals', 'reports'];
 
 const STATUS_CLASS: Record<FerryStatus, string> = {
   under_way: 'ferry-status-underway',
@@ -52,6 +83,7 @@ const WAITING_HIGH = 4;
 export class ItalyFerryPanel extends Panel {
   private ferries: TrackedFerry[] = [];
   private ports: PortStatus[] = [];
+  private disruptions: DisruptionEvent[] = [];
   private mode: BoardMode = 'vessels';
   private region: FreightRegion = 'all'; // country filter, or 'all' = Europe-wide
   private operatorFilter: string | null = null; // operatorId, or null = all
@@ -83,6 +115,7 @@ export class ItalyFerryPanel extends Panel {
       const { state, detail } = describeFreshness(aisStreamProvider.lastMeta);
       this.setDataBadge(state, detail);
       if (this.mode === 'ports') await this.refreshPorts();
+      if (this.mode === 'disruptions') await this.refreshDisruptions();
       this.render();
     } catch {
       this.setDataBadge('unavailable');
@@ -99,6 +132,14 @@ export class ItalyFerryPanel extends Panel {
       this.ports = await getPortStatus();
     } catch {
       /* keep the last-known port list */
+    }
+  }
+
+  private async refreshDisruptions(): Promise<void> {
+    try {
+      this.disruptions = await getDisruptions();
+    } catch {
+      /* keep the last-known disruption list */
     }
   }
 
@@ -139,9 +180,24 @@ export class ItalyFerryPanel extends Panel {
     if (!board) return;
     // The operator filter bar belongs to the vessels view only.
     const filterBar = this.content.querySelector<HTMLElement>('.ferry-filter');
-    if (filterBar) filterBar.style.display = this.mode === 'ports' ? 'none' : '';
+    if (filterBar) filterBar.style.display = this.mode === 'vessels' ? '' : 'none';
+
+    // The map anchors the vessels/ports views; disruptions are a global list, so the (here empty)
+    // map would just push the cards below the fold. Hide it, and resize on the way back so MapLibre
+    // repaints at full width.
+    const showMap = this.mode !== 'disruptions';
+    const mapHost = this.content.querySelector<HTMLElement>('.ferry-map-host');
+    const legend = this.content.querySelector<HTMLElement>('.ferry-map-legend');
+    if (mapHost) mapHost.style.display = showMap ? '' : 'none';
+    if (legend) legend.style.display = showMap ? '' : 'none';
+    if (showMap) this.map?.resize();
 
     if (this.mode === 'ports') { board.innerHTML = this.portsTableHtml(); return; }
+    if (this.mode === 'disruptions') {
+      board.innerHTML = this.disruptionsHtml();
+      this.setCount(this.disruptions.length);
+      return;
+    }
 
     this.refreshChips(regional);
     const shown = this.filteredFerries(regional);
@@ -279,6 +335,63 @@ export class ItalyFerryPanel extends Panel {
   }
 
   /**
+   * Freight disruptions grouped by actionability (official → live signals → news). Cards, not a
+   * table: the summaries are variable-length prose the relay already hedges. Global by design —
+   * water/chokepoint signals aren't country-scoped, so the region filter doesn't narrow this view.
+   */
+  private disruptionsHtml(): string {
+    if (this.disruptions.length === 0) {
+      return `<div class="disr-empty">
+        <div class="disr-empty-mark">✓</div>
+        <div>No active disruptions across tracked corridors.</div>
+        <div class="disr-empty-sub">Scheduled strikes, Rhine &amp; Panama water levels, and the Hormuz chokepoint signal all show clear.</div>
+      </div>`;
+    }
+    const now = Date.now();
+    const byBucket = new Map<DisruptionBucket, DisruptionEvent[]>();
+    for (const e of this.disruptions) {
+      const b = bucketOf(e.kind);
+      (byBucket.get(b) ?? byBucket.set(b, []).get(b)!).push(e);
+    }
+    const sections = BUCKET_ORDER.filter((b) => byBucket.get(b)?.length).map((b) => {
+      const events = byBucket.get(b)!;
+      const meta = BUCKET_META[b];
+      const cards = events.map((e) => this.disruptionCard(e, now)).join('');
+      return `<div class="disr-group">
+        <div class="disr-group-head"><span class="disr-group-title">${escapeHtml(meta.title)}</span><span class="disr-group-note">${escapeHtml(meta.note)}</span></div>
+        ${cards}
+      </div>`;
+    }).join('');
+    return `<div class="disr-list">${sections}</div>`;
+  }
+
+  private disruptionCard(e: DisruptionEvent, now: number): string {
+    const kind = DISRUPTION_KIND[e.kind] ?? { label: e.kind, sev: 'muted' as const };
+    // A scheduled strike inside 48 h is imminent — escalate its badge from amber to red.
+    let sev = kind.sev;
+    let whenText = '';
+    if (e.startsAt != null) {
+      const days = Math.ceil((e.startsAt - now) / 86_400_000);
+      if (e.kind === 'strike_scheduled' && days <= 2) sev = 'high';
+      whenText = days <= 0 ? 'in effect now'
+        : days === 1 ? 'starts tomorrow'
+        : `starts in ${days} days · ${new Date(e.startsAt).toISOString().slice(0, 10)}`;
+    }
+    const flag = e.country ? `<span class="disr-flag">${escapeHtml(e.country)}</span>` : '';
+    const source = DISRUPTION_SOURCE[e.source] ?? e.source;
+    const link = e.url ? ` · <a class="disr-link" href="${escapeHtml(e.url)}" target="_blank" rel="noopener noreferrer">advisory ↗</a>` : '';
+    const meta = [whenText, `Source: ${escapeHtml(source)}`].filter(Boolean).join(' · ');
+    return `<div class="disr-card disr-sev-${sev}">
+      <div class="disr-card-top">
+        <span class="disr-badge disr-badge-${sev}">${escapeHtml(kind.label)}</span>
+        ${flag}
+        <span class="disr-summary">${escapeHtml(e.summary)}</span>
+      </div>
+      <div class="disr-meta">${meta}${link}</div>
+    </div>`;
+  }
+
+  /**
    * Build the persistent map host + toggle + table container once, synchronously
    * (bypassing the debounced setContent so the host exists immediately for the
    * MapLibre instance, which is then updated in place rather than re-created).
@@ -292,6 +405,7 @@ export class ItalyFerryPanel extends Panel {
       <div class="ferry-toggle" role="tablist">
         <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
         <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
+        <button type="button" class="ferry-toggle-btn" data-mode="disruptions">Disruptions</button>
       </div>
       <div class="ferry-filter">
         <input type="search" class="ferry-search" placeholder="Search vessel or operator…" aria-label="Search vessel or operator" />
@@ -343,6 +457,8 @@ export class ItalyFerryPanel extends Panel {
       this.updateToggleActive();
       if (mode === 'ports') {
         void this.refreshPorts().then(() => this.renderBoard());
+      } else if (mode === 'disruptions') {
+        void this.refreshDisruptions().then(() => this.renderBoard());
       } else {
         this.renderBoard();
       }
