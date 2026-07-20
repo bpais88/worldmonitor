@@ -62,6 +62,15 @@ test('mergeDisruptionEvents: collapses same-headline news reports from different
   assert.equal(merged.filter((e) => e.kind === 'strike_scheduled').length, 2); // scheduled never merge
 });
 
+test('mergeDisruptionEvents: same headline in different countries stays separate (country-scoped key)', () => {
+  const merged = mergeDisruptionEvents([[
+    { id: 'r-it', kind: 'strike_report', confidence: 0.4, summary: 'Port workers strike', country: 'IT' },
+    { id: 'r-nl', kind: 'strike_report', confidence: 0.4, summary: 'Port workers strike', country: 'NL' },
+  ]]);
+  assert.equal(merged.length, 2); // neither disappears from its own ?country= feed
+  assert.deepEqual(merged.map((e) => e.country).sort(), ['IT', 'NL']);
+});
+
 const NOW = Date.UTC(2026, 6, 5, 12); // 2026-07-05T12:00Z
 
 test('strikeReasonForPort: scheduled regional strike hits its region within lookahead, not elsewhere', () => {
