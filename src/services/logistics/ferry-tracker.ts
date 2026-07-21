@@ -140,7 +140,7 @@ export function buildFerryBoard(vessels: LiveVessel[], now: number = Date.now())
 
 /**
  * Fetch and build the live freight-vessel board from a provider. Queries the
- * Europe-wide union box (Italy + UK + Spain + Netherlands); the UI filters the
+ * Europe-wide union box (Italy + UK + Spain + Portugal + Netherlands); the UI filters the
  * result down to a selected region client-side via {@link regionOf}.
  */
 export async function getTrackedFreightVessels(

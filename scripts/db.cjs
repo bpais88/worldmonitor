@@ -13,9 +13,9 @@ const DATABASE_URL = process.env.DATABASE_URL || '';
 const enabled = !!(DATABASE_URL && neon);
 const sql = enabled ? neon(DATABASE_URL) : null;
 
-// country → IANA tz. All four covered countries are single-zone for our ports; the baseline is
+// country → IANA tz. All five covered countries are single-zone for our ports; the baseline is
 // bucketed in local port time (congestion follows local working hours), so tz must be accurate.
-const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid', NL: 'Europe/Amsterdam' };
+const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid', PT: 'Europe/Lisbon', NL: 'Europe/Amsterdam' };
 // Single source for the country→tz derivation (used by syncPorts on write AND the relay's PORT_TZ on
 // read — they must agree or the baseline's write/read bucket keys diverge). IT is the no-`country` default.
 const tzForCountry = (country) => COUNTRY_TZ[country || 'IT'] || 'Europe/Rome';

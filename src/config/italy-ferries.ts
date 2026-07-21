@@ -1,7 +1,7 @@
 // Curated dataset for the freight-vessel board.
 //
-// Covers the major container/cargo ports of Italy, the UK, Spain and the
-// Netherlands (plus, for Italy, the island destinations its ferries serve),
+// Covers the major container/cargo ports of Italy, the UK, Spain, Portugal and
+// the Netherlands (plus, for Italy, the island destinations its ferries serve),
 // the operators/carriers (for AIS name matching), and a representative set of
 // Italian scheduled routes. Coordinates are terminal/harbour approximations.
 //
@@ -28,7 +28,7 @@ export interface FerryPort {
   region?: string;
   /** ISO country of the port — descriptive metadata ('IT' when absent). The region
    *  filter itself buckets by coordinate (see regionOf), not by this field. */
-  country?: 'IT' | 'GB' | 'ES' | 'NL';
+  country?: 'IT' | 'GB' | 'ES' | 'NL' | 'PT';
   /** True for a commercial freight port (vs an island/tourist terminal). */
   commercial?: boolean;
   /** Common AIS destination-field spellings (UPPERCASE) for text matching. */
@@ -64,7 +64,7 @@ export interface FerryRoute {
 export type Bbox = [number, number, number, number];
 
 /** A covered country id, or 'all' for the Europe-wide union. */
-export type FreightRegion = 'all' | 'it' | 'gb' | 'es' | 'nl';
+export type FreightRegion = 'all' | 'it' | 'gb' | 'es' | 'pt' | 'nl';
 
 /** Bounding box covering Italy + surrounding seas. */
 export const ITALY_BBOX: Bbox = [35.0, 6.0, 46.5, 19.5];
@@ -82,6 +82,11 @@ export const FREIGHT_REGIONS: ReadonlyArray<{
 }> = [
   { id: 'it', label: 'Italy', bbox: ITALY_BBOX },
   { id: 'gb', label: 'UK', bbox: [49.0, -11.0, 61.0, 2.5] },
+  // Portugal MUST precede Spain: mainland Portugal sits inside the Spanish bbox,
+  // and regionOf() is first-match. The northern edge is held at 42.15 so Galician
+  // Vigo (lat 42.24) still buckets as Spain; the eastern edge at -7.0 keeps the
+  // Spanish Atlantic coast (Huelva, lon -6.9) out of the Portugal slice.
+  { id: 'pt', label: 'Portugal', bbox: [36.8, -10.5, 42.15, -7.0] },
   { id: 'es', label: 'Spain', bbox: [35.5, -10.0, 44.5, 4.5] },
   { id: 'nl', label: 'Netherlands', bbox: [50.5, 2.5, 54.0, 7.5] },
 ];

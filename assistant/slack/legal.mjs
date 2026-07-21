@@ -21,7 +21,7 @@ export function privacyHtml() {
     <h1>Privacy Policy — Marco</h1>
     <p><em>Last updated: ${UPDATED}</em></p>
     <p>Marco ("the app", "we") is a Slack app that answers questions about live commercial
-    freight traffic in European ports (Italy, the UK, Spain, the Netherlands) and sends proactive
+    freight traffic in European ports (Italy, the UK, Spain, Portugal, the Netherlands) and sends proactive
     alerts. This policy explains what
     data Marco processes, why, where it goes, and how to delete it.</p>
     <p><strong>Provider:</strong> ${ENTITY}<br><strong>Contact:</strong> <a href="mailto:${SUPPORT_EMAIL}">${SUPPORT_EMAIL}</a></p>

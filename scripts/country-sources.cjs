@@ -75,6 +75,24 @@ const COUNTRY_SOURCES = {
       'Valencia': ['valencia'],
     },
   },
+  PT: {
+    name: 'Portugal',
+    news: { hl: 'pt-PT', gl: 'PT', ceid: 'PT:pt-150', freightNoun: 'porto carga' },
+    strikeTerms: [...EN_STRIKE, 'greve', 'paralisacao'],
+    disruptionTerms: [...EN_DISRUPTION, 'cancelad', 'cancelament', 'atraso', 'suspens', 'encerrad', 'fechad', 'bloquead', 'temporal', 'acidente', 'congestionament'],
+    meteoalarmFeed: 'https://feeds.meteoalarm.org/feeds/meteoalarm-legacy-atom-portugal',
+    strikeSources: { unions: ['FECTRANS', 'Sindicato dos Estivadores', 'CGTP'] },
+    // IPMA/Meteoalarm Portugal issues warnings by DISTRICT (distrito); areaDesc = district name.
+    // Our port rows carry the NUTS-II region, so map each region to the district(s) its ports sit
+    // in: Sines (Alentejo region) is administratively in the Setúbal district; Leixões (Norte) is
+    // Porto district. Keywords are folded (lowercase, accent-free) to match foldText(areaDesc).
+    alertAreaKeywordsByRegion: {
+      'Alentejo': ['setubal', 'sines'],  // Sines → Setúbal district
+      'Lisboa': ['lisboa'],
+      'Norte': ['porto'],                // Leixões → Porto district
+      'Setúbal': ['setubal'],
+    },
+  },
   NL: {
     name: 'Netherlands',
     news: { hl: 'nl', gl: 'NL', ceid: 'NL:nl', freightNoun: 'haven vracht' },

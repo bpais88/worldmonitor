@@ -14,7 +14,7 @@ import { MARCO_PERSONA } from './slack/onboarding.mjs';
 
 // Port `country` code (Italian ports carry none) -> the token the coverage prose must contain.
 // Add an entry when the port data gains a new country.
-const COUNTRY_TOKEN = { IT: 'Italy', GB: 'UK', ES: 'Spain', NL: 'Netherlands' };
+const COUNTRY_TOKEN = { IT: 'Italy', GB: 'UK', ES: 'Spain', PT: 'Portugal', NL: 'Netherlands' };
 
 const { ports } = JSON.parse(
   readFileSync(new URL('../src/config/italy-ferries.data.json', import.meta.url)),
