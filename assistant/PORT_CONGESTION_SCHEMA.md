@@ -19,7 +19,7 @@ working hours); a **`forecasts` table** so the backtest gate is a query.
 CREATE TABLE ports (
   port_id     text PRIMARY KEY,
   name        text NOT NULL,
-  country     text NOT NULL,           -- 'IT' | 'GB' | 'ES' | 'NL'
+  country     text NOT NULL,           -- 'IT' | 'GB' | 'ES' | 'PT' | 'NL'
   region      text,
   lat         double precision,
   lon         double precision,
@@ -27,8 +27,8 @@ CREATE TABLE ports (
   commercial  boolean NOT NULL DEFAULT true
 );
 ```
-`tz` per country (all 4 are single-zone for our ports): IT→Europe/Rome, GB→Europe/London,
-ES→Europe/Madrid, NL→Europe/Amsterdam. Add a `tz` field to the JSON (or map country→tz at sync).
+`tz` per country (all 5 are single-zone for our ports): IT→Europe/Rome, GB→Europe/London,
+ES→Europe/Madrid, PT→Europe/Lisbon, NL→Europe/Amsterdam. Add a `tz` field to the JSON (or map country→tz at sync).
 
 ### `port_snapshots` — raw time-series (append-only, one row per port per tick)
 

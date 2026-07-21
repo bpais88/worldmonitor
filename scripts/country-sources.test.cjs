@@ -10,6 +10,7 @@ const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 const { COUNTRY_SOURCES, sourcesFor, alertAreaKeywordsFor, disruptionVocabularyFor, foldText } = require('./country-sources.cjs');
 const { COUNTRY_TZ } = require('./db.cjs');
+const { GDELT_COUNTRY } = require('./strike-sources.cjs');
 
 const { ports } = require('../src/config/italy-ferries.data.json');
 const commercial = ports.filter((p) => p.commercial);
@@ -33,6 +34,10 @@ test('every covered country has a COMPLETE source entry (news, vocabulary, alert
     // falls back to Europe/Rome and the country's congestion baselines are bucketed wrong.
     assert.ok(COUNTRY_TZ[code],
       `${code}: missing db.cjs COUNTRY_TZ entry — congestion baselines would silently bucket in Europe/Rome`);
+    // Every registered country must map to a GDELT sourcecountry, else fetchGdeltStrikes short-circuits
+    // to [] and that country silently loses GDELT strike coverage (the gap that dropped PT).
+    assert.ok(GDELT_COUNTRY[code],
+      `${code}: missing strike-sources.cjs GDELT_COUNTRY entry — GDELT strike reports would silently never fetch`);
   }
 });
 
