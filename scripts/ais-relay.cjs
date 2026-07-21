@@ -1765,7 +1765,7 @@ const { craneWindReason, baselineAnomalyReason, assemblePortContext } = require(
 const { fetchMitStrikes, fetchGdeltStrikes, fetchUnionStrikes, mergeDisruptionEvents, strikeReasonForPort } = require('./strike-sources.cjs');
 const { fetchChokepointEvents } = require('./chokepoint-markets.cjs');
 const { fetchWaterLevelEvents } = require('./water-levels.cjs');
-const { sourcesFor } = require('./country-sources.cjs');
+const { sourcesFor, COUNTRY_SOURCES } = require('./country-sources.cjs');
 const { weatherExplainer, fetchMarineWeather } = require('./explainer-weather.cjs');
 const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news.cjs');
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
@@ -2234,7 +2234,10 @@ async function refreshDisruptions() {
   // best-effort per source; like M6 events these carry no country/startsAt — pull-only (Marco +
   // /ais/disruptions), never watch pushes, until scope open question 4 is decided.
   try { lists.push(await fetchWaterLevelEvents()); } catch (e) { console.warn('[Relay] water levels failed:', e.message); }
-  for (const country of ['IT', 'GB', 'ES', 'NL']) {
+  // Strike/union news for EVERY registered country — derived from COUNTRY_SOURCES so a newly
+  // launched country (e.g. PT) is covered automatically. A hardcoded list here silently dropped
+  // Portugal's strike coverage; the registry is the single source of truth for covered countries.
+  for (const country of Object.keys(COUNTRY_SOURCES)) {
     try { lists.push(await fetchUnionStrikes(country)); } catch { /* best-effort */ }
     try { lists.push(await fetchGdeltStrikes(country)); } catch { /* best-effort */ }
     await sleepMs(6_000); // GDELT rate limit (1/5s) — also spaces the news queries politely

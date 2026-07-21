@@ -100,8 +100,9 @@ async function fetchMitStrikes(timeoutMs = 10_000) {
   return parseMitStrikeRss(xml).filter((e) => e.portRelevant);
 }
 
-/** GDELT sourcecountry values per our codes. */
-const GDELT_COUNTRY = { IT: 'italy', GB: 'unitedkingdom', ES: 'spain', NL: 'netherlands' };
+/** GDELT sourcecountry values per our codes. Every code in COUNTRY_SOURCES must appear here
+ *  (guarded by country-sources.test.cjs) — GDELT's names aren't derivable from our codes/tz. */
+const GDELT_COUNTRY = { IT: 'italy', GB: 'unitedkingdom', ES: 'spain', PT: 'portugal', NL: 'netherlands' };
 
 /**
  * GDELT strike reports for one country — STRICTLY best-effort: rate limits and non-JSON responses
@@ -236,5 +237,5 @@ function strikeReasonForPort(events, { country, region, portName } = {}, now = D
 
 module.exports = {
   parseMitStrikeRss, fetchMitStrikes, fetchGdeltStrikes, fetchUnionStrikes,
-  mergeDisruptionEvents, strikeReasonForPort, MIT_STRIKE_RSS, PORT_SECTOR_RE,
+  mergeDisruptionEvents, strikeReasonForPort, MIT_STRIKE_RSS, PORT_SECTOR_RE, GDELT_COUNTRY,
 };
