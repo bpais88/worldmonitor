@@ -875,6 +875,60 @@
       "commercial": true
     },
     {
+      "id": "sines",
+      "name": "Sines",
+      "lat": 37.95,
+      "lon": -8.83,
+      "side": "mainland",
+      "aisNames": [
+        "SINES"
+      ],
+      "region": "Alentejo",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "lisbon",
+      "name": "Lisboa",
+      "lat": 38.70,
+      "lon": -9.16,
+      "side": "mainland",
+      "aisNames": [
+        "LISBON",
+        "LISBOA"
+      ],
+      "region": "Lisboa",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "leixoes",
+      "name": "Leixões",
+      "lat": 41.18,
+      "lon": -8.70,
+      "side": "mainland",
+      "aisNames": [
+        "LEIXOES",
+        "PORTO"
+      ],
+      "region": "Norte",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "setubal",
+      "name": "Setúbal",
+      "lat": 38.52,
+      "lon": -8.89,
+      "side": "mainland",
+      "aisNames": [
+        "SETUBAL"
+      ],
+      "region": "Setúbal",
+      "country": "PT",
+      "commercial": true
+    },
+    {
       "id": "rotterdam",
       "name": "Rotterdam",
       "lat": 51.95,
@@ -991,6 +1045,10 @@
     "ESBIO": "bilbao",
     "ESTAR": "tarragona",
     "ESVGO": "vigo",
+    "PTSIN": "sines",
+    "PTLIS": "lisbon",
+    "PTLEI": "leixoes",
+    "PTSET": "setubal",
     "NLRTM": "rotterdam",
     "NLAMS": "amsterdam",
     "NLVLI": "vlissingen",

@@ -39,7 +39,7 @@ export function teamsOnboardingText(conversationType = 'personal') {
     ? 'Just message me here — no setup.'
     : '**@mention me** in any channel and I’ll jump in.';
   return [
-    "👋 Ciao, I’m **Marco** — your freight-ops coworker. I track every commercial cargo ship and RoPax ferry moving through European ports (Italy, the UK, Spain, the Netherlands), live.",
+    "👋 Ciao, I’m **Marco** — your freight-ops coworker. I track every commercial cargo ship and RoPax ferry moving through European ports (Italy, the UK, Spain, Portugal, the Netherlands), live.",
     '',
     "You don’t have to connect anything — I already see the data. " + cta,
     '',

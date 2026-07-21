@@ -76,7 +76,7 @@ function sparkline(vals: number[]): string {
 const WAITING_HIGH = 4;
 
 /**
- * Live board of European freight vessels (Italy, UK, Spain, Netherlands) derived
+ * Live board of European freight vessels (Italy, UK, Spain, Portugal, Netherlands) derived
  * from AIS, with a region filter and a Vessels/Ports toggle. Self-contained: call
  * start() after mounting to begin polling.
  */
