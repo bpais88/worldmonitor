@@ -19,6 +19,14 @@ const DEFAULTS = {
   congestedAt: 8,        // atPort >= this -> congested
 };
 
+// radiusKm above is only the DEFAULT — a port row may carry its own `radiusKm`, because one global
+// figure cannot fit both a compact terminal and a sprawling complex. Two ways it was wrong:
+// Rotterdam's port runs ~24 km inland from its coordinate, so 8 km missed half of it; and four
+// pairs of ports sit closer than 16 km apart (Savona/Vado Ligure 6.0, Venezia/Porto Marghera 6.3,
+// London Gateway/Tilbury 11.2, Immingham/Hull 13.9), so their 8 km discs OVERLAPPED and a vessel
+// berthed at one was counted at both. port-status.test.cjs enforces the non-overlap invariant.
+const radiusFor = (port, o) => (Number.isFinite(port && port.radiusKm) ? port.radiusKm : o.radiusKm);
+
 const NAV_AT_ANCHOR = 1;
 const NAV_MOORED = 5;
 
@@ -45,6 +53,7 @@ function congestionLevel(atPort, o) {
  */
 function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = {}) {
   const o = { ...DEFAULTS, ...opts };
+  const radiusKm = radiusFor(port, o);
   let atPort = 0;
   let atAnchor = 0; // navStatus "at anchor" = waiting for a berth (queue → leading indicator)
   let atBerth = 0; // navStatus "moored" = berthed / being served
@@ -57,7 +66,7 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
     // Distance to the port, computed once and reused for both the at-port check + ETA.
     const distKm = (Number.isFinite(v.lat) && Number.isFinite(v.lon)) ? haversineKm(v, port) : Infinity;
     // At port: stopped within the radius. Split anchor (waiting) vs berth (served).
-    if (distKm <= o.radiusKm && isStopped(v, o.stoppedKnots)) {
+    if (distKm <= radiusKm && isStopped(v, o.stoppedKnots)) {
       atPort++;
       if (v.navStatus === NAV_AT_ANCHOR) atAnchor++;
       else if (v.navStatus === NAV_MOORED) atBerth++;

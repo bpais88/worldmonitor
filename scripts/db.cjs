@@ -17,8 +17,11 @@ const sql = enabled ? neon(DATABASE_URL) : null;
 // bucketed in local port time (congestion follows local working hours), so tz must be accurate.
 const COUNTRY_TZ = { IT: 'Europe/Rome', GB: 'Europe/London', ES: 'Europe/Madrid', PT: 'Europe/Lisbon', NL: 'Europe/Amsterdam' };
 // Single source for the country→tz derivation (used by syncPorts on write AND the relay's PORT_TZ on
-// read — they must agree or the baseline's write/read bucket keys diverge). IT is the no-`country` default.
-const tzForCountry = (country) => COUNTRY_TZ[country || 'IT'] || 'Europe/Rome';
+// read — they must agree or the baseline's write/read bucket keys diverge). An unknown country falls
+// back to UTC, NOT to Europe/Rome: a wrong bucket is bad either way, but silently bucketing the world
+// in Italian local time is the failure that hides itself. country-sources.test.cjs keeps COUNTRY_TZ
+// complete for every covered country, so the fallback should never fire in practice.
+const tzForCountry = (country) => COUNTRY_TZ[country] || 'UTC';
 
 // In-memory counters read synchronously by /health (never do an async PG call in the health path).
 const stats = {

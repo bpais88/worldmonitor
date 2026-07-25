@@ -1857,7 +1857,9 @@ const _dtfByTz = new Map(); // cache the ≤4 Intl formatters (construction is c
 // A port's LOCAL day-of-week (0=Sun) + hour — congestion follows local working hours, and the
 // baseline is bucketed in the port's own tz, so the lookup must be too.
 function portLocalDowHour(now, tz) {
-  const z = tz || 'Europe/Rome';
+  // UTC, not Europe/Rome: this must agree with db.tzForCountry's fallback or the baseline's write
+  // and read bucket keys diverge for any port whose tz is missing.
+  const z = tz || 'UTC';
   let fmt = _dtfByTz.get(z);
   if (!fmt) { fmt = new Intl.DateTimeFormat('en-US', { timeZone: z, weekday: 'short', hour: '2-digit', hour12: false }); _dtfByTz.set(z, fmt); }
   const parts = fmt.formatToParts(new Date(now));
@@ -2192,7 +2194,7 @@ async function enrichFerryDelays(now = Date.now()) {
       destLat: port ? port.lat : undefined,
       destLon: port ? port.lon : undefined,
       destRegion: port ? port.region : undefined,
-      destCountry: port ? (port.country || 'IT') : undefined, // drives news locale/vocab + alert-area keywords
+      destCountry: port ? port.country : undefined, // drives news locale/vocab + alert-area keywords
       operatorName: resolveOperatorName(v.name || (stat && stat.name)),
       etaGrowthMin: drift.etaGrowthMin,
       stalled: drift.stalled,

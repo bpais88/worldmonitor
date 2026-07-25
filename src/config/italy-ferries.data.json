@@ -11,6 +11,7 @@
         "GENOVA"
       ],
       "region": "Liguria",
+      "country": "IT",
       "commercial": true
     },
     {
@@ -22,7 +23,8 @@
       "aisNames": [
         "CIVITAVECCHIA"
       ],
-      "region": "Lazio"
+      "region": "Lazio",
+      "country": "IT"
     },
     {
       "id": "livorno",
@@ -34,6 +36,7 @@
         "LIVORNO"
       ],
       "region": "Toscana",
+      "country": "IT",
       "commercial": true
     },
     {
@@ -45,7 +48,8 @@
       "aisNames": [
         "PIOMBINO"
       ],
-      "region": "Toscana"
+      "region": "Toscana",
+      "country": "IT"
     },
     {
       "id": "naples",
@@ -58,6 +62,7 @@
         "NAPOLI"
       ],
       "region": "Campania",
+      "country": "IT",
       "commercial": true
     },
     {
@@ -69,7 +74,8 @@
       "aisNames": [
         "SALERNO"
       ],
-      "region": "Campania"
+      "region": "Campania",
+      "country": "IT"
     },
     {
       "id": "villa_san_giovanni",
@@ -82,7 +88,8 @@
         "VILLA SAN GIOVANNI",
         "VILLA S.G."
       ],
-      "region": "Calabria"
+      "region": "Calabria",
+      "country": "IT"
     },
     {
       "id": "reggio_calabria",
@@ -94,7 +101,8 @@
         "REGGIO CALABRIA",
         "REGGIO"
       ],
-      "region": "Calabria"
+      "region": "Calabria",
+      "country": "IT"
     },
     {
       "id": "milazzo",
@@ -106,7 +114,8 @@
       "aisNames": [
         "MILAZZO"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "trapani",
@@ -118,7 +127,8 @@
       "aisNames": [
         "TRAPANI"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "porto_empedocle",
@@ -131,7 +141,8 @@
         "PORTO EMPEDOCLE",
         "EMPEDOCLE"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "termoli",
@@ -142,7 +153,8 @@
       "aisNames": [
         "TERMOLI"
       ],
-      "region": "Molise"
+      "region": "Molise",
+      "country": "IT"
     },
     {
       "id": "olbia",
@@ -155,6 +167,7 @@
         "OLBIA"
       ],
       "region": "Sardegna",
+      "country": "IT",
       "commercial": true
     },
     {
@@ -168,7 +181,8 @@
         "GOLFO ARANCI",
         "ARANCI"
       ],
-      "region": "Sardegna"
+      "region": "Sardegna",
+      "country": "IT"
     },
     {
       "id": "porto_torres",
@@ -182,7 +196,8 @@
         "P TORRES",
         "TORRES"
       ],
-      "region": "Sardegna"
+      "region": "Sardegna",
+      "country": "IT"
     },
     {
       "id": "cagliari",
@@ -195,6 +210,7 @@
         "CAGLIARI"
       ],
       "region": "Sardegna",
+      "country": "IT",
       "commercial": true
     },
     {
@@ -207,7 +223,8 @@
       "aisNames": [
         "ARBATAX"
       ],
-      "region": "Sardegna"
+      "region": "Sardegna",
+      "country": "IT"
     },
     {
       "id": "palermo",
@@ -219,7 +236,8 @@
       "aisNames": [
         "PALERMO"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "catania",
@@ -231,7 +249,8 @@
       "aisNames": [
         "CATANIA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "messina",
@@ -243,7 +262,8 @@
       "aisNames": [
         "MESSINA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "portoferraio",
@@ -256,7 +276,8 @@
         "PORTOFERRAIO",
         "P FERRAIO"
       ],
-      "region": "Toscana"
+      "region": "Toscana",
+      "country": "IT"
     },
     {
       "id": "rio_marina",
@@ -268,7 +289,8 @@
       "aisNames": [
         "RIO MARINA"
       ],
-      "region": "Toscana"
+      "region": "Toscana",
+      "country": "IT"
     },
     {
       "id": "cavo",
@@ -280,7 +302,8 @@
       "aisNames": [
         "CAVO"
       ],
-      "region": "Toscana"
+      "region": "Toscana",
+      "country": "IT"
     },
     {
       "id": "lipari",
@@ -292,7 +315,8 @@
       "aisNames": [
         "LIPARI"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "vulcano",
@@ -304,7 +328,8 @@
       "aisNames": [
         "VULCANO"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "salina",
@@ -317,7 +342,8 @@
         "SALINA",
         "SANTA MARINA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "stromboli",
@@ -329,7 +355,8 @@
       "aisNames": [
         "STROMBOLI"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "panarea",
@@ -341,7 +368,8 @@
       "aisNames": [
         "PANAREA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "capri",
@@ -353,7 +381,8 @@
       "aisNames": [
         "CAPRI"
       ],
-      "region": "Campania"
+      "region": "Campania",
+      "country": "IT"
     },
     {
       "id": "ischia",
@@ -365,7 +394,8 @@
       "aisNames": [
         "ISCHIA"
       ],
-      "region": "Campania"
+      "region": "Campania",
+      "country": "IT"
     },
     {
       "id": "procida",
@@ -377,7 +407,8 @@
       "aisNames": [
         "PROCIDA"
       ],
-      "region": "Campania"
+      "region": "Campania",
+      "country": "IT"
     },
     {
       "id": "ponza",
@@ -389,7 +420,8 @@
       "aisNames": [
         "PONZA"
       ],
-      "region": "Lazio"
+      "region": "Lazio",
+      "country": "IT"
     },
     {
       "id": "ventotene",
@@ -401,7 +433,8 @@
       "aisNames": [
         "VENTOTENE"
       ],
-      "region": "Lazio"
+      "region": "Lazio",
+      "country": "IT"
     },
     {
       "id": "favignana",
@@ -413,7 +446,8 @@
       "aisNames": [
         "FAVIGNANA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "levanzo",
@@ -425,7 +459,8 @@
       "aisNames": [
         "LEVANZO"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "marettimo",
@@ -437,7 +472,8 @@
       "aisNames": [
         "MARETTIMO"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "lampedusa",
@@ -449,7 +485,8 @@
       "aisNames": [
         "LAMPEDUSA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "linosa",
@@ -461,7 +498,8 @@
       "aisNames": [
         "LINOSA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "pantelleria",
@@ -473,7 +511,8 @@
       "aisNames": [
         "PANTELLERIA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "ustica",
@@ -485,7 +524,8 @@
       "aisNames": [
         "USTICA"
       ],
-      "region": "Sicilia"
+      "region": "Sicilia",
+      "country": "IT"
     },
     {
       "id": "tremiti",
@@ -498,7 +538,8 @@
         "TREMITI",
         "SAN DOMINO"
       ],
-      "region": "Puglia"
+      "region": "Puglia",
+      "country": "IT"
     },
     {
       "id": "gioia_tauro",
@@ -506,6 +547,7 @@
       "lat": 38.43,
       "lon": 15.9,
       "region": "Calabria",
+      "country": "IT",
       "aisNames": [
         "GIOIA TAURO",
         "GIOIATAURO",
@@ -520,6 +562,7 @@
       "lat": 44.1,
       "lon": 9.83,
       "region": "Liguria",
+      "country": "IT",
       "aisNames": [
         "LA SPEZIA",
         "SPEZIA"
@@ -533,6 +576,7 @@
       "lat": 45.64,
       "lon": 13.76,
       "region": "Friuli Venezia Giulia",
+      "country": "IT",
       "aisNames": [
         "TRIESTE"
       ],
@@ -545,6 +589,7 @@
       "lat": 44.48,
       "lon": 12.28,
       "region": "Emilia e Romagna",
+      "country": "IT",
       "aisNames": [
         "RAVENNA"
       ],
@@ -557,6 +602,8 @@
       "lat": 44.27,
       "lon": 8.44,
       "region": "Liguria",
+      "country": "IT",
+      "radiusKm": 2.5,
       "aisNames": [
         "VADO LIGURE",
         "VADO"
@@ -570,6 +617,8 @@
       "lat": 44.31,
       "lon": 8.49,
       "region": "Liguria",
+      "country": "IT",
+      "radiusKm": 2.5,
       "aisNames": [
         "SAVONA"
       ],
@@ -582,6 +631,7 @@
       "lat": 40.47,
       "lon": 17.22,
       "region": "Puglia",
+      "country": "IT",
       "aisNames": [
         "TARANTO"
       ],
@@ -594,6 +644,7 @@
       "lat": 41.14,
       "lon": 16.87,
       "region": "Puglia",
+      "country": "IT",
       "aisNames": [
         "BARI"
       ],
@@ -606,6 +657,7 @@
       "lat": 40.65,
       "lon": 17.99,
       "region": "Puglia",
+      "country": "IT",
       "aisNames": [
         "BRINDISI"
       ],
@@ -618,6 +670,7 @@
       "lat": 43.62,
       "lon": 13.51,
       "region": "Marche",
+      "country": "IT",
       "aisNames": [
         "ANCONA"
       ],
@@ -630,6 +683,8 @@
       "lat": 45.44,
       "lon": 12.34,
       "region": "Veneto",
+      "country": "IT",
+      "radiusKm": 2.5,
       "aisNames": [
         "VENEZIA",
         "VENICE"
@@ -643,6 +698,8 @@
       "lat": 45.45,
       "lon": 12.26,
       "region": "Veneto",
+      "country": "IT",
+      "radiusKm": 2.5,
       "aisNames": [
         "MARGHERA",
         "PORTO MARGHERA"
@@ -656,6 +713,7 @@
       "lat": 45.8,
       "lon": 13.55,
       "region": "Friuli Venezia Giulia",
+      "country": "IT",
       "aisNames": [
         "MONFALCONE"
       ],
@@ -668,6 +726,7 @@
       "lat": 37.2,
       "lon": 15.22,
       "region": "Sicilia",
+      "country": "IT",
       "aisNames": [
         "AUGUSTA"
       ],
@@ -714,6 +773,7 @@
       ],
       "region": "England",
       "country": "GB",
+      "radiusKm": 5,
       "commercial": true
     },
     {
@@ -740,6 +800,7 @@
       ],
       "region": "England",
       "country": "GB",
+      "radiusKm": 6,
       "commercial": true
     },
     {
@@ -753,6 +814,7 @@
       ],
       "region": "England",
       "country": "GB",
+      "radiusKm": 5,
       "commercial": true
     },
     {
@@ -781,6 +843,7 @@
       ],
       "region": "England",
       "country": "GB",
+      "radiusKm": 6,
       "commercial": true
     },
     {
@@ -940,6 +1003,7 @@
       ],
       "region": "South Holland",
       "country": "NL",
+      "radiusKm": 20,
       "commercial": true
     },
     {

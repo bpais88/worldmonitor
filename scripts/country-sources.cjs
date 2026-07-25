@@ -133,9 +133,15 @@ const COUNTRY_SOURCES = {
   },
 };
 
-/** Registry entry for a country code ('IT' default — Italian ports carry no country field). */
+/**
+ * Registry entry for a country code, or null if we don't cover it. There is deliberately NO default:
+ * Italy used to be the fallback (Italian port rows carried no `country`), which meant an unknown or
+ * missing code silently answered with Italian news locales and Italian strike vocabulary. Port rows
+ * now all declare a country, so absent means genuinely unknown — and the callers degrade to the
+ * shared English vocabulary rather than to one country's.
+ */
 function sourcesFor(country) {
-  return COUNTRY_SOURCES[country || 'IT'] || null;
+  return COUNTRY_SOURCES[country] || null;
 }
 
 /** Lowercase + strip accents, so 'Cádiz' matches 'cadiz' (feeds and our keywords both fold). */

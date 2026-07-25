@@ -19,7 +19,7 @@ const COUNTRY_TOKEN = { IT: 'Italy', GB: 'UK', ES: 'Spain', PT: 'Portugal', NL: 
 const { ports } = JSON.parse(
   readFileSync(new URL('../src/config/italy-ferries.data.json', import.meta.url)),
 );
-const covered = new Set(ports.filter((p) => p.commercial).map((p) => p.country || 'IT'));
+const covered = new Set(ports.filter((p) => p.commercial).map((p) => p.country));
 
 const desc = (name) => freightTools.find((t) => t.name === name).description;
 const COVERAGE = {

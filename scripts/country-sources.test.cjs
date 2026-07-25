@@ -14,7 +14,18 @@ const { GDELT_COUNTRY } = require('./strike-sources.cjs');
 
 const { ports } = require('../src/config/italy-ferries.data.json');
 const commercial = ports.filter((p) => p.commercial);
-const countries = [...new Set(commercial.map((p) => p.country || 'IT'))];
+const countries = [...new Set(commercial.map((p) => p.country))];
+
+test('every port declares its country explicitly (no implicit-Italy null)', () => {
+  // Italy used to be the absent value: Italian rows carried no `country`, so ~12 call sites spelled
+  // `p.country || 'IT'` and any new reader that forgot the fallback silently got undefined and a
+  // missed lookup. Every row now says which country it is, so the fallback is dead code, not load-bearing.
+  for (const p of ports) {
+    assert.match(String(p.country || ''), /^[A-Z]{2}$/,
+      `port "${p.id}" has no explicit "country" — add the ISO-3166 alpha-2 code to the port row. ` +
+        `Italy is not the default any more.`);
+  }
+});
 
 test('every covered country has a COMPLETE source entry (news, vocabulary, alert feed)', () => {
   for (const code of countries) {
@@ -43,9 +54,9 @@ test('every covered country has a COMPLETE source entry (news, vocabulary, alert
 
 test('every commercial port resolves to ≥1 alert-area keyword (else official warnings can never match it)', () => {
   for (const p of commercial) {
-    const kw = alertAreaKeywordsFor({ id: p.id, country: p.country || 'IT', region: p.region });
+    const kw = alertAreaKeywordsFor({ id: p.id, country: p.country, region: p.region });
     assert.ok(kw.length >= 1,
-      `port "${p.id}" (${p.country || 'IT'}, region "${p.region}") maps to NO alert-area keywords — ` +
+      `port "${p.id}" (${p.country}, region "${p.region}") maps to NO alert-area keywords — ` +
       'add its region to alertAreaKeywordsByRegion or a per-port override in alertAreaKeywordsByPort');
     for (const k of kw) assert.equal(k, foldText(k), `keyword "${k}" for ${p.id} must be pre-folded (lowercase, accent-free)`);
   }
@@ -55,7 +66,11 @@ test('vocabulary + folding helpers behave', () => {
   assert.equal(foldText('Cádiz — SCIOPERO'), 'cadiz — sciopero');
   assert.ok(disruptionVocabularyFor('NL').strikeTerms.includes('staking'));
   assert.ok(disruptionVocabularyFor('ES').strikeTerms.includes('huelga'));
-  assert.ok(disruptionVocabularyFor(undefined).strikeTerms.includes('sciopero')); // no country field = Italy
+  // No country is no longer a synonym for Italy — an unknown code degrades to the shared English
+  // vocabulary, not to Italian, so a future country can never inherit Italy's terms by accident.
+  assert.ok(!disruptionVocabularyFor(undefined).strikeTerms.includes('sciopero'));
+  assert.ok(disruptionVocabularyFor(undefined).strikeTerms.includes('strike'));
+  assert.equal(sourcesFor(undefined), null);
   assert.equal(sourcesFor('XX'), null);
 });
 
@@ -89,7 +104,7 @@ test('every covered country DECLARES its AIS fallback (null is allowed, undefine
 
 test('a declared AIS fallback actually covers that country\'s ports', () => {
   for (const p of commercial) {
-    const code = p.country || 'IT';
+    const code = p.country;
     const feed = COUNTRY_SOURCES[code].aisFallback;
     if (feed === null) continue;
     assert.ok(
@@ -105,7 +120,7 @@ test('a null AIS fallback is not hiding coverage the tiles already provide', () 
   // The mirror case: under-declaring is as wrong as over-declaring — it would have us caveat a
   // port we can actually see. Catches a country added inside ITALY_BBOX with a copy-pasted null.
   for (const p of commercial) {
-    const code = p.country || 'IT';
+    const code = p.country;
     if (COUNTRY_SOURCES[code].aisFallback !== null) continue;
     for (const feed of Object.keys(FALLBACK_TILES)) {
       assert.ok(

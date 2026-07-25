@@ -151,3 +151,49 @@ test('smoothPortStatus medians atPort over history and recomputes congestion', (
   assert.equal(p.atPort, 9);
   assert.equal(p.congestion, 'congested');
 });
+
+// --- Per-port radius + the non-overlap invariant ------------------------------------------------
+const { ports: ALL_PORTS } = require('../src/config/italy-ferries.data.json');
+const { haversineKm } = require('./ferry-eta.cjs');
+const COMMERCIAL = ALL_PORTS.filter((p) => p.commercial);
+const radiusOf = (p) => (Number.isFinite(p.radiusKm) ? p.radiusKm : 8);
+
+test('a port row can override the at-port radius', () => {
+  const v = { mmsi: 'r', lat: PORT.lat + 0.09, lon: PORT.lon, speed: 0, timestamp: NOW }; // ~10km out
+  assert.equal(computePortStatus(PORT, [v], resolveDest, NOW).atPort, 0);                  // default 8km: outside
+  assert.equal(computePortStatus({ ...PORT, radiusKm: 20 }, [v], resolveDest, NOW).atPort, 1);
+  assert.equal(computePortStatus({ ...PORT, radiusKm: 2.5 }, [v], resolveDest, NOW).atPort, 0);
+});
+
+test('an invalid per-port radius falls back to the default rather than counting nothing', () => {
+  const v = { mmsi: 'r', lat: PORT.lat + 0.02, lon: PORT.lon, speed: 0, timestamp: NOW }; // ~2km out
+  for (const bad of [null, undefined, 'wide', NaN]) {
+    assert.equal(computePortStatus({ ...PORT, radiusKm: bad }, [v], resolveDest, NOW).atPort, 1, String(bad));
+  }
+});
+
+test('no two commercial ports have overlapping at-port discs', () => {
+  // Overlap means one berthed vessel is counted at BOTH ports — inflating each, and inflating the
+  // baselines they are later judged against. This invariant is what makes a per-port radius safe
+  // to widen: you cannot grow one port's disc into its neighbour without failing here.
+  for (let i = 0; i < COMMERCIAL.length; i++) {
+    for (let j = i + 1; j < COMMERCIAL.length; j++) {
+      const a = COMMERCIAL[i], b = COMMERCIAL[j];
+      const gap = haversineKm(a, b);
+      assert.ok(
+        radiusOf(a) + radiusOf(b) <= gap,
+        `${a.id} (r=${radiusOf(a)}km) and ${b.id} (r=${radiusOf(b)}km) are only ${gap.toFixed(1)}km apart — ` +
+          `their at-port discs overlap, so a vessel berthed between them counts at both. ` +
+          `Lower one or both "radiusKm" in the port registry.`,
+      );
+    }
+  }
+});
+
+test('every per-port radius is a positive, plausible distance', () => {
+  for (const p of COMMERCIAL) {
+    if (p.radiusKm === undefined) continue;
+    assert.ok(Number.isFinite(p.radiusKm) && p.radiusKm > 0 && p.radiusKm <= 40,
+      `${p.id}: radiusKm ${p.radiusKm} is not a plausible port extent (expected 0 < r <= 40 km)`);
+  }
+});
