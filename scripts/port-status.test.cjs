@@ -66,6 +66,26 @@ test('buckets inbound vessels by geometric ETA (cumulative h6/h12/h24/h48)', () 
   assert.equal(s.inboundEta.h48, 2); // both
 });
 
+// Both fixtures above arrive inside 15h, so h48 was satisfied by vessels already counted in h24 —
+// the 24-48h band was asserted but never actually populated. That is an Italy-shaped assumption:
+// Mediterranean legs are hours, so nothing exercised a genuinely multi-day approach until Portugal
+// (Atlantic, routinely 40h+) put one in front of a user. These two fill the band and its far edge.
+test('a genuinely multi-day approach lands in h48 only, not the shorter buckets', () => {
+  const vDays = { mmsi: 'd', lat: PORT.lat + 9.0, lon: PORT.lon, speed: 15, destination: 'ITGIT', timestamp: NOW }; // ~1000km → ~36h
+  const s = computePortStatus(PORT, [vDays], resolveDest, NOW);
+  assert.equal(s.inbound, 1);
+  assert.deepEqual(s.inboundEta, { h6: 0, h12: 0, h24: 0, h48: 1 });
+});
+
+test('beyond 48h still counts as inbound but falls in no arrival bucket', () => {
+  // The buckets are an arrival horizon, not a census — a vessel 60h out is under way and bound here,
+  // but promoting it into h48 would overstate what arrives in the next two days.
+  const vFar = { mmsi: 'w', lat: PORT.lat + 15.0, lon: PORT.lon, speed: 15, destination: 'ITGIT', timestamp: NOW }; // ~1670km → ~60h
+  const s = computePortStatus(PORT, [vFar], resolveDest, NOW);
+  assert.equal(s.inbound, 1);
+  assert.deepEqual(s.inboundEta, { h6: 0, h12: 0, h24: 0, h48: 0 });
+});
+
 test('congestion level scales with the at-port count', () => {
   const many = (n) => Array.from({ length: n }, (_, i) => near({ mmsi: `m${i}` }));
   assert.equal(computePortStatus(PORT, many(2), resolveDest, NOW).congestion, 'clear');

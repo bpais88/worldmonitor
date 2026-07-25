@@ -58,3 +58,61 @@ test('vocabulary + folding helpers behave', () => {
   assert.ok(disruptionVocabularyFor(undefined).strikeTerms.includes('sciopero')); // no country field = Italy
   assert.equal(sourcesFor('XX'), null);
 });
+
+// --- SENSING parity (the gap that shipped the Lisboa "congestion clear" bug) -------------------
+// The tests above check that a country is DECLARED everywhere — news locale, vocabulary, alert
+// feed, timezone. None of them asked whether any AIS feed can physically SEE it. aisstream is
+// global, but the only tile-polled fallback covers ITALY_BBOX, so every non-Italian port goes dark
+// with aisstream and nothing failed CI to say so. These tests make the fallback's geometry a
+// registry obligation: declare it, and the declaration must match where the tiles actually are.
+const { ITALY_TILES, tileIndexFor } = require('./marinesia.cjs');
+
+const FALLBACK_TILES = { marinesia: ITALY_TILES };
+const inFallback = (feed, p) => tileIndexFor(FALLBACK_TILES[feed], p.lat, p.lon) >= 0;
+
+test('every covered country DECLARES its AIS fallback (null is allowed, undefined is not)', () => {
+  for (const code of countries) {
+    const src = COUNTRY_SOURCES[code];
+    assert.ok(
+      Object.hasOwn(src, 'aisFallback'),
+      `${code}: no "aisFallback" declaration. Say which tile-polled feed still sees this country's ` +
+        `ports when aisstream is dark, or null if none does — a country cannot ship without an ` +
+        `explicit answer, because null silently reads as "clear" to users.`,
+    );
+    assert.ok(
+      src.aisFallback === null || Object.hasOwn(FALLBACK_TILES, src.aisFallback),
+      `${code}: aisFallback "${src.aisFallback}" is not a known tile-polled feed (${Object.keys(FALLBACK_TILES).join(', ')}). ` +
+        `Add its tile grid to FALLBACK_TILES here when you add the feed.`,
+    );
+  }
+});
+
+test('a declared AIS fallback actually covers that country\'s ports', () => {
+  for (const p of commercial) {
+    const code = p.country || 'IT';
+    const feed = COUNTRY_SOURCES[code].aisFallback;
+    if (feed === null) continue;
+    assert.ok(
+      inFallback(feed, p),
+      `${p.id} (${code}) claims aisFallback "${feed}", but its coordinates (${p.lat}, ${p.lon}) fall ` +
+        `outside that feed's tile grid — the claim is false and the port would report stale counts ` +
+        `as live. Extend the grid, or declare aisFallback: null for ${code}.`,
+    );
+  }
+});
+
+test('a null AIS fallback is not hiding coverage the tiles already provide', () => {
+  // The mirror case: under-declaring is as wrong as over-declaring — it would have us caveat a
+  // port we can actually see. Catches a country added inside ITALY_BBOX with a copy-pasted null.
+  for (const p of commercial) {
+    const code = p.country || 'IT';
+    if (COUNTRY_SOURCES[code].aisFallback !== null) continue;
+    for (const feed of Object.keys(FALLBACK_TILES)) {
+      assert.ok(
+        !inFallback(feed, p),
+        `${p.id} (${code}) declares aisFallback: null, but it sits INSIDE the "${feed}" tile grid — ` +
+          `it does have fallback coverage. Declare aisFallback: "${feed}" for ${code}.`,
+      );
+    }
+  }
+});
