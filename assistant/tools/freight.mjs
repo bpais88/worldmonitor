@@ -37,8 +37,14 @@ export function coverageNote(ports) {
 // change vs earlier in this leg (+ = arriving later/slipping, − = ahead).
 export function etaView(v, now = Date.now()) {
   if (!Number.isFinite(v.etaTs)) return {}; // stopped / at port / no destination → no ETA
+  const d = new Date(v.etaTs);
   const out = {
-    eta: new Date(v.etaTs).toISOString().slice(0, 16).replace('T', ' ') + 'Z',
+    eta: d.toISOString().slice(0, 16).replace('T', ' ') + 'Z',
+    // Copy-ready calendar date. `eta` alone is an ISO string a model must parse to say "Mon 27 Jul",
+    // and a multi-day ETA is easy to render a day early (observed in prod: a 43.7h ETA correctly
+    // read as "~44h out" but written as "26 Jul" when the field said 2026-07-27). Spelling the day
+    // out means the answer is a transcription, never a date calculation.
+    etaDay: d.toLocaleDateString('en-GB', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' }),
     etaInHours: Math.round((v.etaTs - now) / 360000) / 10,
   };
   if (Number.isFinite(v.etaDeltaMin)) {
@@ -87,7 +93,7 @@ export const freightTools = [
   {
     name: 'find_freight_vessels',
     description:
-      'List tracked European freight vessels (cargo + RoPax) across Italy, the UK, Spain, Portugal, and the Netherlands. Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. If the result has a "feed" field (warming/stale), lead with that caveat — the count is partial or aging. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
+      'List tracked European freight vessels (cargo + RoPax) across Italy, the UK, Spain, Portugal, and the Netherlands. Filter by operator id, a vessel-name substring, destination (an AIS LOCODE like ITNAP — use when you know the code), and/or delayedOnly. Returns name, operator, category, destination, speed, whether delayed, and the live ETA. ETA fields: "eta" (computed live arrival, UTC) + "etaDay" (the same date spelled out — quote it verbatim; never work the calendar date out yourself from etaInHours) + "etaInHours"; "etaTrendMin" is how much the ETA has moved over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" minutes (+ = later, − = ahead). No eta field = the vessel is stopped/at port. Prefer this live ETA; do not invent one. If the result has a "feed" field (warming/stale), lead with that caveat — the count is partial or aging. Use for "which Grimaldi ships are sailing", "find vessel NAME", "delayed Moby ships", "when does X arrive".',
     input_schema: {
       type: 'object',
       properties: {
@@ -154,7 +160,7 @@ export const freightTools = [
   {
     name: 'get_vessel',
     description:
-      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, live ETA, and delay + cause if any. ETA fields: "eta" (computed live arrival, UTC) + "etaInHours"; "etaTrendMin" is the signed change since earlier this trip (+ later, − ahead) over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" min. No eta field = stopped/at port. Use for "tell me about VESSEL", "where is X", "when does X arrive", "is X delayed".',
+      'Look up ONE freight vessel by name (substring ok), IMO, or MMSI. Returns position, operator, destination, speed, status, dimensions, draught, live ETA, and delay + cause if any. ETA fields: "eta" (computed live arrival, UTC) + "etaDay" (the same date spelled out — quote it verbatim; never work the calendar date out yourself from etaInHours) + "etaInHours"; "etaTrendMin" is the signed change since earlier this trip (+ later, − ahead) over the recent window "etaTrendWindowMin"; "etaVsDepartureMin" is the drift vs the trip\'s DEPARTURE ETA over "voyageAgeMin" min. No eta field = stopped/at port. Use for "tell me about VESSEL", "where is X", "when does X arrive", "is X delayed".',
     input_schema: {
       type: 'object',
       properties: { query: { type: 'string', description: 'vessel name (substring), IMO, or MMSI' } },
