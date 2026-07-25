@@ -1713,19 +1713,20 @@ const { parseBbox, parseTypes, clampLimit, buildVesselList } = require('./ais-ve
 const { resolveDestinationPort, etaFor, resolveOperatorName, resolveOperator, isFreightVessel, freightReason } = require('./ferry-eta.cjs');
 const { recordSnapshot, detectDrift, updateVoyage } = require('./eta-history.cjs');
 const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, tripsDegraded } = require('./trip-lifecycle.cjs');
-const { relayFreshness, tileFreshness } = require('./freshness.cjs');
+const { relayFreshness, tileFreshness, DEFAULT_STALE_MS: FRESHNESS_DEFAULT_STALE_MS } = require('./freshness.cjs');
 // Freshness fields for a response — ONLY when Marinesia is the active feed. With no
 // MARINESIA_API_KEY the poll never runs (lastPollAt stays null), so emitting these
 // would falsely mark live aisstream-backed data as permanently warming/stale.
 function feedFreshness(now = Date.now()) {
   if (!MARINESIA_ENABLED) return {};
-  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: MARINESIA_TILES.length, now });
+  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: MARINESIA_TILES.length, now, staleMs: MARINESIA_STALE_MS });
 }
 
 // --- Per-port coverage (P0.2): honest "did THIS port have live coverage this tick?" ------------
 // Derived from feed GEOGRAPHY, not vessel counts (which conflate "quiet" with "uncovered").
-// aisstream streams the whole world → when fresh, every port is covered. When it's dark, only the
-// Marinesia fallback runs, and it polls MARINESIA_BBOX only → non-Italian ports are honestly uncovered.
+// aisstream streams the whole world → when fresh, every port is covered. When it's dark, the
+// Marinesia fallback runs a per-country tile grid derived from the port registry, so coverage is
+// per-TILE: a port is covered only if its own tile polled recently.
 // (These reference marinesia state defined later; called only at runtime, like feedFreshness above.)
 function aisstreamFresh(now = Date.now()) {
   return lastAisFrameAt > 0 && now - lastAisFrameAt <= AIS_FRAME_STALE_MS;
@@ -1735,10 +1736,11 @@ function marinesiaFresh(now = Date.now()) {
   const f = feedFreshness(now); // reuses the same relayFreshness args (guard above keeps it honest)
   return !f.stale && !f.warming; // usable only after a full tile sweep + a recent poll
 }
-function inMarinesiaBbox(lat, lon) {
-  return Number.isFinite(lat) && Number.isFinite(lon) &&
-    lat >= MARINESIA_BBOX.lat_min && lat <= MARINESIA_BBOX.lat_max &&
-    lon >= MARINESIA_BBOX.long_min && lon <= MARINESIA_BBOX.long_max;
+// Is this coordinate inside ANY polled region? The fallback used to be one Italian box; it is now
+// a per-country grid derived from the port registry, so "does a fallback feed own this geography"
+// is exactly "does some tile contain it".
+function inMarinesiaRegion(lat, lon) {
+  return tileIndexFor(MARINESIA_TILES, lat, lon) >= 0;
 }
 // Per-TILE freshness (P0.2 follow-up): the global marinesiaFresh() can stay true while ONE tile
 // quietly fails after the initial sweep (lastPollAt is global, tilesSeen cumulative-since-boot) —
@@ -1747,18 +1749,18 @@ function inMarinesiaBbox(lat, lon) {
 // marinesia state above — called only at runtime.)
 function marinesiaTileFresh(lat, lon, now = Date.now()) {
   const idx = tileIndexFor(MARINESIA_TILES, lat, lon);
-  return idx >= 0 && tileFreshness({ lastOkAt: marinesiaTileLastOkAt.get(idx), now });
+  return idx >= 0 && tileFreshness({ lastOkAt: marinesiaTileLastOkAt.get(idx), now, staleMs: MARINESIA_STALE_MS });
 }
 // Which feed covers this coordinate, given the tick's already-computed feed liveness. Geography +
 // per-tile poll recency (aisFresh/marinesiaOk are decided once per tick in the sampler; the tile
 // check is per-port because tiles fail independently).
 function portFeed(lat, lon, aisFresh, marinesiaOk, now = Date.now()) {
   if (aisFresh) return { source: 'aisstream', coverageOk: true };
-  const italy = inMarinesiaBbox(lat, lon);
-  if (marinesiaOk && italy && marinesiaTileFresh(lat, lon, now)) return { source: 'marinesia', coverageOk: true };
-  // Neither fresh (or non-Italian while only Marinesia runs, or this port's tile is dark): name the
-  // feed that OWNS this geography, but coverageOk=false — an honest "we can't currently see this port".
-  return { source: italy ? 'marinesia' : 'aisstream', coverageOk: false };
+  const inRegion = inMarinesiaRegion(lat, lon);
+  if (marinesiaOk && inRegion && marinesiaTileFresh(lat, lon, now)) return { source: 'marinesia', coverageOk: true };
+  // Neither feed is fresh (or this port sits outside every polled region, or its own tile is dark):
+  // name the feed that OWNS this geography, but coverageOk=false — an honest "can't see it now".
+  return { source: inRegion ? 'marinesia' : 'aisstream', coverageOk: false };
 }
 const { runExplainers } = require('./delay-explainers.cjs');
 const { craneWindReason, baselineAnomalyReason, assemblePortContext } = require('./port-context.cjs');
@@ -1771,7 +1773,7 @@ const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmAll, makeMeteoalarmExplainer, matchMeteoalarm } = require('./explainer-meteoalarm.cjs');
-const { MARINESIA_TILES, MARINESIA_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+const { MARINESIA_TILES, MARINESIA_REGIONS, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
@@ -2073,6 +2075,17 @@ async function syncVesselDim() {
 const MARINESIA_API_KEY = process.env.MARINESIA_API_KEY || '';
 const MARINESIA_ENABLED = !!MARINESIA_API_KEY;
 const MARINESIA_POLL_MS = safeInt(process.env.MARINESIA_POLL_MS, 13_000, 12_000); // >=12s keeps us <=5 req/min
+// How old a tile may be before it stops counting as covered. This CANNOT be a constant: the sweep
+// is round-robin, so the worst-case age of any one tile is a full sweep, and the sweep grew when
+// the fallback stopped being Italy-only (9 tiles ≈ 2min → 25 tiles ≈ 5.4min). The old fixed 4-min
+// default was itself sized to the Italian 9-tile sweep, so keeping it would have marked every tile
+// permanently stale the moment we covered more countries. Derive it instead: one full sweep plus
+// room for a rate-limit backoff, never below the shared default.
+const MARINESIA_SWEEP_MARGIN_MS = 90_000; // absorbs a 60s 429 backoff plus jitter
+const MARINESIA_STALE_MS = Math.max(
+  FRESHNESS_DEFAULT_STALE_MS,
+  MARINESIA_TILES.length * MARINESIA_POLL_MS + MARINESIA_SWEEP_MARGIN_MS,
+);
 let marinesiaTileIndex = 0;
 let marinesiaLastPollAt = null;
 let marinesiaLastError = null;
@@ -4869,7 +4882,7 @@ const handleRequest = async (req, res) => {
     // Median-smooth atPort over recent calls + recompute congestion, then re-sort.
     smoothPortStatus(ports, portStatusHistory);
     // Per-tick feed decision (P0.2), computed ONCE and passed into portFeed below — same pair the
-    // geofence tick uses. aisstream streams the world; the Marinesia fallback polls MARINESIA_BBOX only.
+    // geofence tick uses. aisstream streams the world; the Marinesia fallback sweeps its region tiles.
     const aisFresh = aisstreamFresh(now);
     const marinesiaOk = aisFresh ? false : marinesiaFresh(now); // skip the freshness calc when aisstream is live
     // P0.3: additive relative-congestion label — this port's at_berth vs its OWN local dow×hour

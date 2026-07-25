@@ -11,12 +11,14 @@
 //
 // `aisFallback` is the SENSING half of that invariant, and it is here because its absence shipped a
 // bug. Every entry above declared where a country's *context* comes from, but nothing declared
-// whether any feed can physically SEE it. aisstream is global; the only tile-polled fallback
-// (marinesia) covers MARINESIA_BBOX and nothing else — an Italy-shaped fact that lived silently in
+// whether any feed can physically SEE it. aisstream is global; the tile-polled fallback used to
+// cover one hardcoded Italian box and nothing else — an Italy-shaped fact that lived silently in
 // scripts/marinesia.cjs. Portugal launched with a complete entry here and was still invisible
-// whenever aisstream blinked, reporting "congestion clear" for a port nothing could see. So the
-// field is REQUIRED and may be null: a country with no fallback has to say so out loud, and the
-// parity test checks the declaration against the fallback's actual geometry rather than trusting it.
+// whenever aisstream blinked, reporting "congestion clear" for a port nothing could see. The
+// fallback now builds a tile grid per country straight from the port registry, so every entry below
+// declares 'marinesia'. The field stays REQUIRED and may be null: a future country the fallback
+// genuinely cannot reach has to say so out loud, and the parity test checks the declaration against
+// the grid's actual geometry rather than trusting it.
 
 // Shared English disruption vocabulary — every country's press mixes English into trade coverage.
 const EN_DISRUPTION = [
@@ -28,7 +30,7 @@ const COUNTRY_SOURCES = {
   IT: {
     name: 'Italy',
     // AIS FALLBACK (see the block comment above): the tile-polled feed that still sees this
-    // country's ports when the global aisstream feed goes dark. 'marinesia' polls MARINESIA_BBOX.
+    // country's ports when the global aisstream feed goes dark.
     aisFallback: 'marinesia',
     // Google News RSS locale + the freight noun that anchors the query in the local press.
     news: { hl: 'it', gl: 'IT', ceid: 'IT:it', freightNoun: 'porto traghetti' },
@@ -49,9 +51,7 @@ const COUNTRY_SOURCES = {
   },
   GB: {
     name: 'UK',
-    // No tile-polled fallback: when aisstream is dark, GB ports are genuinely unobservable and
-    // the relay reports coverageOk:false rather than a stale "clear".
-    aisFallback: null,
+    aisFallback: 'marinesia',
     news: { hl: 'en-GB', gl: 'GB', ceid: 'GB:en', freightNoun: 'port freight' },
     strikeTerms: [...EN_STRIKE, 'picket'],
     disruptionTerms: [...EN_DISRUPTION, 'shut', 'closure', 'stoppage', 'backlog', 'queue'],
@@ -73,8 +73,7 @@ const COUNTRY_SOURCES = {
   },
   ES: {
     name: 'Spain',
-    // No tile-polled fallback — see GB. Spanish ports all sit west of MARINESIA_BBOX.
-    aisFallback: null,
+    aisFallback: 'marinesia',
     news: { hl: 'es', gl: 'ES', ceid: 'ES:es', freightNoun: 'puerto carga' },
     strikeTerms: [...EN_STRIKE, 'huelga', 'paro'],
     disruptionTerms: [...EN_DISRUPTION, 'cancelad', 'retras', 'suspend', 'cerrad', 'bloquead', 'temporal', 'accidente', 'colapso'],
@@ -94,9 +93,7 @@ const COUNTRY_SOURCES = {
   },
   PT: {
     name: 'Portugal',
-    // No tile-polled fallback — see GB. This is the gap that made Lisboa report "congestion
-    // clear" on a dark feed; the honest answer is now "not currently visible".
-    aisFallback: null,
+    aisFallback: 'marinesia',
     news: { hl: 'pt-PT', gl: 'PT', ceid: 'PT:pt-150', freightNoun: 'porto carga' },
     strikeTerms: [...EN_STRIKE, 'greve', 'paralisacao'],
     disruptionTerms: [...EN_DISRUPTION, 'cancelad', 'cancelament', 'atraso', 'suspens', 'encerrad', 'fechad', 'bloquead', 'temporal', 'acidente', 'congestionament'],
@@ -115,8 +112,7 @@ const COUNTRY_SOURCES = {
   },
   NL: {
     name: 'Netherlands',
-    // No tile-polled fallback — see GB.
-    aisFallback: null,
+    aisFallback: 'marinesia',
     news: { hl: 'nl', gl: 'NL', ceid: 'NL:nl', freightNoun: 'haven vracht' },
     strikeTerms: [...EN_STRIKE, 'staking', 'werkonderbreking'],
     disruptionTerms: [...EN_DISRUPTION, 'vertraging', 'gesloten', 'geblokkeerd', 'stremming', 'storing', 'ongeval', 'afgelast'],

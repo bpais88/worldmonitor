@@ -4,8 +4,10 @@ const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
 const {
-  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile, MARINESIA_TILES, MARINESIA_BBOX,
+  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile, MARINESIA_TILES, MARINESIA_REGIONS, buildRegions,
 } = require('./marinesia.cjs');
+const { ports: REGISTRY_PORTS } = require('../src/config/maritime-ports.data.json');
+const COMMERCIAL = REGISTRY_PORTS.filter((p) => p.commercial);
 
 test('marinesiaStatusToNavStatus maps AIS status labels to numeric codes', () => {
   // The bug: Marinesia sends status as strings, so the port-status atAnchor(=1)/atBerth(=5) split
@@ -95,8 +97,39 @@ test('makeGrid splits a bbox into rows×cols contiguous tiles', () => {
   }
 });
 
-test('MARINESIA_TILES is a 3×3 grid (9 tiles)', () => {
-  assert.equal(MARINESIA_TILES.length, 9);
+test('the tile grid is built per country from the port registry', () => {
+  // Was a hardcoded 3x3 over Italian waters — which is exactly why every non-Italian port went dark
+  // whenever aisstream did. One region per country with a commercial port, derived, not hand-listed.
+  const countries = [...new Set(COMMERCIAL.map((p) => p.country))].sort();
+  assert.deepEqual(MARINESIA_REGIONS.map((r) => r.country), countries);
+  assert.equal(MARINESIA_TILES.length, MARINESIA_REGIONS.reduce((n, r) => n + r.tiles.length, 0));
+  assert.ok(MARINESIA_TILES.length > 0);
+});
+
+test('EVERY commercial port falls inside a polled tile', () => {
+  // The regression guard for the Lisboa bug: a port outside every tile can never be seen by the
+  // fallback, so it goes dark the moment aisstream does.
+  for (const p of COMMERCIAL) {
+    assert.ok(tileIndexFor(MARINESIA_TILES, p.lat, p.lon) >= 0,
+      `port "${p.id}" (${p.country}) sits outside every Marinesia tile — it has no fallback coverage`);
+  }
+});
+
+test('a newly registered country gets tiles without touching this file', () => {
+  const regions = buildRegions([
+    { id: 'a', lat: 10, lon: 10, country: 'XX', commercial: true },
+    { id: 'b', lat: 11, lon: 11, country: 'XX', commercial: true },
+    { id: 'skip', lat: 60, lon: 60, country: 'YY', commercial: false }, // non-commercial → no region
+  ]);
+  assert.deepEqual(regions.map((r) => r.country), ['XX']);
+  assert.ok(tileIndexFor(regions[0].tiles, 10.5, 10.5) >= 0);
+});
+
+test('each tile stays within the span the 2000-vessel cap was validated at', () => {
+  for (const t of MARINESIA_TILES) {
+    assert.ok(t.lat_max - t.lat_min <= 4.0 + 1e-9, 'tile lat span too wide for the per-request cap');
+    assert.ok(t.long_max - t.long_min <= 4.5 + 1e-9, 'tile lon span too wide for the per-request cap');
+  }
 });
 
 test('fetchTile returns the data array on success (injected fetch)', async () => {
@@ -186,15 +219,26 @@ test('fetchTile throws on an API error envelope', async () => {
   await assert.rejects(() => fetchTile(MARINESIA_TILES[0], 'k', fakeFetch), /Too Many Requests/);
 });
 
-test('tileIndexFor finds the tile containing a point (3×3 Italy grid)', () => {
-  // Genoa ~ (44.41, 8.93): top lat band (row 2: 42.67–46), first lon band (col 0: 6–10.33) → idx 6.
-  assert.equal(tileIndexFor(MARINESIA_TILES, 44.41, 8.93), 6);
-  // Palermo ~ (38.13, 13.36): bottom band (row 0: 36–39.33), middle lon band (col 1) → idx 1.
-  assert.equal(tileIndexFor(MARINESIA_TILES, 38.13, 13.36), 1);
-  // Every tile's own center maps back to its own index.
-  MARINESIA_TILES.forEach((t, i) => {
-    assert.equal(tileIndexFor(MARINESIA_TILES, (t.lat_min + t.lat_max) / 2, (t.long_min + t.long_max) / 2), i);
-  });
+test('tileIndexFor finds a tile that really contains the point', () => {
+  // NOT "its own index": country regions overlap where countries adjoin (Portugal's box sits partly
+  // inside Spain's), and tileIndexFor is first-match. Overlap costs a duplicate upsert, never a gap
+  // — every tile is swept regardless — so the invariant that matters is containment, not identity.
+  const contains = (t, lat, lon) => lat >= t.lat_min && lat <= t.lat_max && lon >= t.long_min && lon <= t.long_max;
+  for (const t of MARINESIA_TILES) {
+    const lat = (t.lat_min + t.lat_max) / 2, lon = (t.long_min + t.long_max) / 2;
+    const idx = tileIndexFor(MARINESIA_TILES, lat, lon);
+    assert.ok(idx >= 0 && contains(MARINESIA_TILES[idx], lat, lon), 'resolved tile must contain the point');
+  }
+  // And a port's coverage key must be a tile that actually covers it, or per-tile freshness would
+  // be reading the recency of a tile somewhere else entirely.
+  for (const p of COMMERCIAL) {
+    const idx = tileIndexFor(MARINESIA_TILES, p.lat, p.lon);
+    assert.ok(idx >= 0 && contains(MARINESIA_TILES[idx], p.lat, p.lon), `${p.id}: coverage tile must contain the port`);
+  }
+  // A 3x3 over a known box still indexes row-major, independent of the registry.
+  const g = makeGrid({ lat_min: 36, lat_max: 46, long_min: 6, long_max: 19 }, 3, 3);
+  assert.equal(tileIndexFor(g, 44.41, 8.93), 6);  // top lat band, first lon band
+  assert.equal(tileIndexFor(g, 38.13, 13.36), 1); // bottom band, middle lon band
 });
 
 test('tileIndexFor resolves a shared tile edge to the first matching tile', () => {
@@ -206,8 +250,10 @@ test('tileIndexFor resolves a shared tile edge to the first matching tile', () =
 });
 
 test('tileIndexFor returns -1 outside the grid or for bad coords', () => {
-  assert.equal(tileIndexFor(MARINESIA_TILES, 51.9, 4.1), -1);   // Rotterdam — not in the Italy grid
-  assert.equal(tileIndexFor(MARINESIA_TILES, MARINESIA_BBOX.lat_max + 1, 10), -1);
+  // Rotterdam (51.9, 4.1) used to assert -1 here — "not in the Italy grid" was the bug, not the
+  // spec. It is now covered; somewhere genuinely outside every region still is not.
+  assert.ok(tileIndexFor(MARINESIA_TILES, 51.9, 4.1) >= 0);
+  assert.equal(tileIndexFor(MARINESIA_TILES, 1.29, 103.85), -1); // Singapore — outside every region
   assert.equal(tileIndexFor(MARINESIA_TILES, NaN, 10), -1);
   assert.equal(tileIndexFor(MARINESIA_TILES, 40, undefined), -1);
 });
