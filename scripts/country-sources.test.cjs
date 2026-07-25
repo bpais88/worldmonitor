@@ -1,7 +1,7 @@
 'use strict';
 
 // PARITY GUARD — the source-side sibling of assistant/coverage.test.mjs (which guards the PROSE).
-// Every country with a commercial port in src/config/italy-ferries.data.json must have a COMPLETE
+// Every country with a commercial port in src/config/maritime-ports.data.json must have a COMPLETE
 // country-sources entry, and every commercial port must resolve to ≥1 weather-alert area keyword.
 // So "launch a new country" = add ports → THIS fails CI, listing exactly which sources are missing
 // → parity by construction, never by memory.
@@ -12,7 +12,7 @@ const { COUNTRY_SOURCES, sourcesFor, alertAreaKeywordsFor, disruptionVocabularyF
 const { COUNTRY_TZ } = require('./db.cjs');
 const { GDELT_COUNTRY } = require('./strike-sources.cjs');
 
-const { ports } = require('../src/config/italy-ferries.data.json');
+const { ports } = require('../src/config/maritime-ports.data.json');
 const commercial = ports.filter((p) => p.commercial);
 const countries = [...new Set(commercial.map((p) => p.country))];
 
@@ -77,12 +77,12 @@ test('vocabulary + folding helpers behave', () => {
 // --- SENSING parity (the gap that shipped the Lisboa "congestion clear" bug) -------------------
 // The tests above check that a country is DECLARED everywhere — news locale, vocabulary, alert
 // feed, timezone. None of them asked whether any AIS feed can physically SEE it. aisstream is
-// global, but the only tile-polled fallback covers ITALY_BBOX, so every non-Italian port goes dark
+// global, but the only tile-polled fallback covers MARINESIA_BBOX, so every non-Italian port goes dark
 // with aisstream and nothing failed CI to say so. These tests make the fallback's geometry a
 // registry obligation: declare it, and the declaration must match where the tiles actually are.
-const { ITALY_TILES, tileIndexFor } = require('./marinesia.cjs');
+const { MARINESIA_TILES, tileIndexFor } = require('./marinesia.cjs');
 
-const FALLBACK_TILES = { marinesia: ITALY_TILES };
+const FALLBACK_TILES = { marinesia: MARINESIA_TILES };
 const inFallback = (feed, p) => tileIndexFor(FALLBACK_TILES[feed], p.lat, p.lon) >= 0;
 
 test('every covered country DECLARES its AIS fallback (null is allowed, undefined is not)', () => {
@@ -118,7 +118,7 @@ test('a declared AIS fallback actually covers that country\'s ports', () => {
 
 test('a null AIS fallback is not hiding coverage the tiles already provide', () => {
   // The mirror case: under-declaring is as wrong as over-declaring — it would have us caveat a
-  // port we can actually see. Catches a country added inside ITALY_BBOX with a copy-pasted null.
+  // port we can actually see. Catches a country added inside MARINESIA_BBOX with a copy-pasted null.
   for (const p of commercial) {
     const code = p.country;
     if (COUNTRY_SOURCES[code].aisFallback !== null) continue;

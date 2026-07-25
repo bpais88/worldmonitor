@@ -8,12 +8,12 @@
 
 import type { VesselPosition, EtaEstimate } from './types';
 import {
-  ITALY_FERRY_PORTS,
-  ITALY_FERRY_OPERATORS,
+  ALL_PORTS,
+  ALL_OPERATORS,
   PORT_LOCODES,
   IMO_REGISTRY,
   type FerryPort,
-} from '../../config/italy-ferries';
+} from '../../config/maritime-ports';
 import { computeEta } from './eta';
 import { haversineKm, initialBearingDeg, bearingDeltaDeg } from './geo';
 
@@ -26,7 +26,7 @@ export function isFerryShipType(shipType: number | undefined): boolean {
 export function matchItalianFerryOperator(name: string | undefined): string | undefined {
   if (!name) return undefined;
   const upper = name.toUpperCase();
-  for (const op of ITALY_FERRY_OPERATORS) {
+  for (const op of ALL_OPERATORS) {
     if (op.keywords.some((k) => upper.includes(k))) return op.id;
   }
   return undefined;
@@ -45,7 +45,7 @@ export function isFreightOperator(name: string | undefined): boolean {
   if (!name) return false;
   const id = matchItalianFerryOperator(name);
   if (!id) return false;
-  const op = ITALY_FERRY_OPERATORS.find((o) => o.id === id);
+  const op = ALL_OPERATORS.find((o) => o.id === id);
   return !!op?.freight;
 }
 
@@ -67,8 +67,8 @@ export function isFreightVessel(vessel: Pick<VesselPosition, 'name' | 'shipType'
   return false;
 }
 
-const ISLAND_PORTS = ITALY_FERRY_PORTS.filter((p) => p.side === 'island');
-const PORT_BY_ID = new Map(ITALY_FERRY_PORTS.map((p) => [p.id, p] as const));
+const ISLAND_PORTS = ALL_PORTS.filter((p) => p.side === 'island');
+const PORT_BY_ID = new Map(ALL_PORTS.map((p) => [p.id, p] as const));
 
 // Tokens crews append for round trips ("e viceversa") — not destinations.
 const ROUNDTRIP_TOKENS = new Set(['VV', 'V', 'E', 'EVV', 'RT', 'AR', 'ANDATA', 'RITORNO']);
@@ -104,14 +104,14 @@ export function matchDestinationPort(aisDestination: string | undefined): FerryP
   const tokens = upper.split(/[^A-Z0-9]+/).filter((t) => t.length >= 3 && !ROUNDTRIP_TOKENS.has(t));
   for (let i = tokens.length - 1; i >= 0; i--) {
     const token = tokens[i] as string;
-    for (const port of ITALY_FERRY_PORTS) {
+    for (const port of ALL_PORTS) {
       if (port.aisNames.some((n) => token.includes(n))) return port;
     }
   }
 
   // 3. Whole-string fallback for multi-word port names ("VILLA S GIOVANNI").
   const spaced = upper.replace(/[^A-Z ]/g, ' ');
-  for (const port of ITALY_FERRY_PORTS) {
+  for (const port of ALL_PORTS) {
     if (port.aisNames.some((n) => spaced.includes(n))) return port;
   }
   return undefined;

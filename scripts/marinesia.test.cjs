@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
 const {
-  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile, ITALY_TILES, ITALY_BBOX,
+  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile, MARINESIA_TILES, MARINESIA_BBOX,
 } = require('./marinesia.cjs');
 
 test('marinesiaStatusToNavStatus maps AIS status labels to numeric codes', () => {
@@ -95,8 +95,8 @@ test('makeGrid splits a bbox into rows×cols contiguous tiles', () => {
   }
 });
 
-test('ITALY_TILES is a 3×3 grid (9 tiles)', () => {
-  assert.equal(ITALY_TILES.length, 9);
+test('MARINESIA_TILES is a 3×3 grid (9 tiles)', () => {
+  assert.equal(MARINESIA_TILES.length, 9);
 });
 
 test('fetchTile returns the data array on success (injected fetch)', async () => {
@@ -104,7 +104,7 @@ test('fetchTile returns the data array on success (injected fetch)', async () =>
     ok: true, status: 200,
     text: async () => JSON.stringify({ error: false, data: [{ mmsi: 1 }, { mmsi: 2 }] }),
   });
-  const out = await fetchTile(ITALY_TILES[0], 'k', fakeFetch);
+  const out = await fetchTile(MARINESIA_TILES[0], 'k', fakeFetch);
   assert.equal(out.length, 2);
 });
 
@@ -183,31 +183,31 @@ test('fetchTile throws on an API error envelope', async () => {
     ok: true, status: 200,
     text: async () => JSON.stringify({ error: true, message: 'Too Many Requests' }),
   });
-  await assert.rejects(() => fetchTile(ITALY_TILES[0], 'k', fakeFetch), /Too Many Requests/);
+  await assert.rejects(() => fetchTile(MARINESIA_TILES[0], 'k', fakeFetch), /Too Many Requests/);
 });
 
 test('tileIndexFor finds the tile containing a point (3×3 Italy grid)', () => {
   // Genoa ~ (44.41, 8.93): top lat band (row 2: 42.67–46), first lon band (col 0: 6–10.33) → idx 6.
-  assert.equal(tileIndexFor(ITALY_TILES, 44.41, 8.93), 6);
+  assert.equal(tileIndexFor(MARINESIA_TILES, 44.41, 8.93), 6);
   // Palermo ~ (38.13, 13.36): bottom band (row 0: 36–39.33), middle lon band (col 1) → idx 1.
-  assert.equal(tileIndexFor(ITALY_TILES, 38.13, 13.36), 1);
+  assert.equal(tileIndexFor(MARINESIA_TILES, 38.13, 13.36), 1);
   // Every tile's own center maps back to its own index.
-  ITALY_TILES.forEach((t, i) => {
-    assert.equal(tileIndexFor(ITALY_TILES, (t.lat_min + t.lat_max) / 2, (t.long_min + t.long_max) / 2), i);
+  MARINESIA_TILES.forEach((t, i) => {
+    assert.equal(tileIndexFor(MARINESIA_TILES, (t.lat_min + t.lat_max) / 2, (t.long_min + t.long_max) / 2), i);
   });
 });
 
 test('tileIndexFor resolves a shared tile edge to the first matching tile', () => {
   // A point exactly on the row-0/row-1 lat boundary and col-0/col-1 lon boundary is inside 4 tiles
   // by inclusive bounds — the lowest index (bottom-left of the four) wins, deterministically.
-  const latEdge = ITALY_TILES[0].lat_max;
-  const lonEdge = ITALY_TILES[0].long_max;
-  assert.equal(tileIndexFor(ITALY_TILES, latEdge, lonEdge), 0);
+  const latEdge = MARINESIA_TILES[0].lat_max;
+  const lonEdge = MARINESIA_TILES[0].long_max;
+  assert.equal(tileIndexFor(MARINESIA_TILES, latEdge, lonEdge), 0);
 });
 
 test('tileIndexFor returns -1 outside the grid or for bad coords', () => {
-  assert.equal(tileIndexFor(ITALY_TILES, 51.9, 4.1), -1);   // Rotterdam — not in the Italy grid
-  assert.equal(tileIndexFor(ITALY_TILES, ITALY_BBOX.lat_max + 1, 10), -1);
-  assert.equal(tileIndexFor(ITALY_TILES, NaN, 10), -1);
-  assert.equal(tileIndexFor(ITALY_TILES, 40, undefined), -1);
+  assert.equal(tileIndexFor(MARINESIA_TILES, 51.9, 4.1), -1);   // Rotterdam — not in the Italy grid
+  assert.equal(tileIndexFor(MARINESIA_TILES, MARINESIA_BBOX.lat_max + 1, 10), -1);
+  assert.equal(tileIndexFor(MARINESIA_TILES, NaN, 10), -1);
+  assert.equal(tileIndexFor(MARINESIA_TILES, 40, undefined), -1);
 });

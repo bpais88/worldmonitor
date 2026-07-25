@@ -100,7 +100,7 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
 
 /**
  * Status for every port. `ports` may be an ARRAY of port objects (each with an
- * `id`) — as in italy-ferries.data.json — or an object keyed by port id. The
+ * `id`) — as in maritime-ports.data.json — or an object keyed by port id. The
  * emitted portId always comes from the port's own `id` (else the map key) so it
  * matches resolveDest()'s portId for inbound counting. `filter(port)` optionally
  * restricts which ports (e.g. commercial only). Ports without coords are skipped.

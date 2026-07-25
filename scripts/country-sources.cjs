@@ -4,7 +4,7 @@
 // "why" signals come from: news locale + local disruption vocabulary, the official weather-alert
 // feed, and how alert areas map onto our ports. Everything source-shaped derives from here
 // (explainer-news, explainer-meteoalarm, the M2+ port-context / strike explainers), so LAUNCHING A
-// NEW COUNTRY = adding ports to italy-ferries.data.json + one complete entry here — and the parity
+// NEW COUNTRY = adding ports to maritime-ports.data.json + one complete entry here — and the parity
 // test (country-sources.test.cjs) fails CI until the entry is complete. That is the parity
 // invariant: no country ever ships with fewer sources than the others.
 // Spec: assistant/DISRUPTION_SOURCES_SCOPE.md (M1).
@@ -12,7 +12,7 @@
 // `aisFallback` is the SENSING half of that invariant, and it is here because its absence shipped a
 // bug. Every entry above declared where a country's *context* comes from, but nothing declared
 // whether any feed can physically SEE it. aisstream is global; the only tile-polled fallback
-// (marinesia) covers ITALY_BBOX and nothing else — an Italy-shaped fact that lived silently in
+// (marinesia) covers MARINESIA_BBOX and nothing else — an Italy-shaped fact that lived silently in
 // scripts/marinesia.cjs. Portugal launched with a complete entry here and was still invisible
 // whenever aisstream blinked, reporting "congestion clear" for a port nothing could see. So the
 // field is REQUIRED and may be null: a country with no fallback has to say so out loud, and the
@@ -28,7 +28,7 @@ const COUNTRY_SOURCES = {
   IT: {
     name: 'Italy',
     // AIS FALLBACK (see the block comment above): the tile-polled feed that still sees this
-    // country's ports when the global aisstream feed goes dark. 'marinesia' polls ITALY_BBOX.
+    // country's ports when the global aisstream feed goes dark. 'marinesia' polls MARINESIA_BBOX.
     aisFallback: 'marinesia',
     // Google News RSS locale + the freight noun that anchors the query in the local press.
     news: { hl: 'it', gl: 'IT', ceid: 'IT:it', freightNoun: 'porto traghetti' },
@@ -73,7 +73,7 @@ const COUNTRY_SOURCES = {
   },
   ES: {
     name: 'Spain',
-    // No tile-polled fallback — see GB. Spanish ports all sit west of ITALY_BBOX.
+    // No tile-polled fallback — see GB. Spanish ports all sit west of MARINESIA_BBOX.
     aisFallback: null,
     news: { hl: 'es', gl: 'ES', ceid: 'ES:es', freightNoun: 'puerto carga' },
     strikeTerms: [...EN_STRIKE, 'huelga', 'paro'],

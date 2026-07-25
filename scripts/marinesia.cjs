@@ -157,7 +157,7 @@ function mergeVesselStatic(prev, v, now = Date.now()) {
 }
 
 // Italian waters: Ligurian/Tyrrhenian/Adriatic/Ionian + Sicily channel.
-const ITALY_BBOX = { lat_min: 36, lat_max: 46, long_min: 6, long_max: 19 };
+const MARINESIA_BBOX = { lat_min: 36, lat_max: 46, long_min: 6, long_max: 19 };
 
 /** Split a bbox into a rows×cols grid of sub-boxes. */
 function makeGrid(bbox, rows, cols) {
@@ -179,7 +179,7 @@ function makeGrid(bbox, rows, cols) {
 
 // Default 3×3 grid over Italian waters — 9 tiles, each well under the 2000 cap
 // at observed densities; a full sweep is 9 requests (~108s at 5 req/min).
-const ITALY_TILES = makeGrid(ITALY_BBOX, 3, 3);
+const MARINESIA_TILES = makeGrid(MARINESIA_BBOX, 3, 3);
 
 /**
  * Index of the tile containing (lat, lon), or -1 if outside the grid. Bounds are inclusive, so a
@@ -214,6 +214,6 @@ async function fetchTile(tile, key, fetchImpl = fetch) {
 }
 
 module.exports = {
-  AREA_URL, VESSEL_CAP, ITALY_BBOX, ITALY_TILES,
+  AREA_URL, VESSEL_CAP, MARINESIA_BBOX, MARINESIA_TILES,
   marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile,
 };

@@ -2,9 +2,9 @@
 
 // Relay-side destination resolution + ETA, mirroring src/services/logistics/
 // ferry.ts (matchDestinationPort) and eta.ts (computeEta). Pure CommonJS so the
-// relay can require it. Static data is single-sourced from italy-ferries.data.json.
+// relay can require it. Static data is single-sourced from maritime-ports.data.json.
 
-const data = require('../src/config/italy-ferries.data.json');
+const data = require('../src/config/maritime-ports.data.json');
 
 const PORT_BY_ID = new Map(data.ports.map((p) => [p.id, p]));
 

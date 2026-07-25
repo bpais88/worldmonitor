@@ -15,7 +15,7 @@ import {
   REGION_LABELS,
   REGION_ORDER,
   type FreightRegion,
-} from '@/config/italy-ferries';
+} from '@/config/maritime-ports';
 import { getGeofences, type Geofence } from '@/services/logistics/geofences';
 import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
 import { describeFreshness } from '@/services/logistics/freshness';

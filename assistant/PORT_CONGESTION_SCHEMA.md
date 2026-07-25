@@ -13,7 +13,7 @@ working hours); a **`forecasts` table** so the backtest gate is a query.
 
 ## Tables
 
-### `ports` — dimension (synced from src/config/italy-ferries.data.json on deploy)
+### `ports` — dimension (synced from src/config/maritime-ports.data.json on deploy)
 
 ```sql
 CREATE TABLE ports (

@@ -1719,13 +1719,13 @@ const { relayFreshness, tileFreshness } = require('./freshness.cjs');
 // would falsely mark live aisstream-backed data as permanently warming/stale.
 function feedFreshness(now = Date.now()) {
   if (!MARINESIA_ENABLED) return {};
-  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: ITALY_TILES.length, now });
+  return relayFreshness({ lastPollAt: marinesiaLastPollAt, tilesSeen: marinesiaTilesSeen.size, tileCount: MARINESIA_TILES.length, now });
 }
 
 // --- Per-port coverage (P0.2): honest "did THIS port have live coverage this tick?" ------------
 // Derived from feed GEOGRAPHY, not vessel counts (which conflate "quiet" with "uncovered").
 // aisstream streams the whole world → when fresh, every port is covered. When it's dark, only the
-// Marinesia fallback runs, and it polls ITALY_BBOX only → non-Italian ports are honestly uncovered.
+// Marinesia fallback runs, and it polls MARINESIA_BBOX only → non-Italian ports are honestly uncovered.
 // (These reference marinesia state defined later; called only at runtime, like feedFreshness above.)
 function aisstreamFresh(now = Date.now()) {
   return lastAisFrameAt > 0 && now - lastAisFrameAt <= AIS_FRAME_STALE_MS;
@@ -1735,10 +1735,10 @@ function marinesiaFresh(now = Date.now()) {
   const f = feedFreshness(now); // reuses the same relayFreshness args (guard above keeps it honest)
   return !f.stale && !f.warming; // usable only after a full tile sweep + a recent poll
 }
-function inItalyBbox(lat, lon) {
+function inMarinesiaBbox(lat, lon) {
   return Number.isFinite(lat) && Number.isFinite(lon) &&
-    lat >= ITALY_BBOX.lat_min && lat <= ITALY_BBOX.lat_max &&
-    lon >= ITALY_BBOX.long_min && lon <= ITALY_BBOX.long_max;
+    lat >= MARINESIA_BBOX.lat_min && lat <= MARINESIA_BBOX.lat_max &&
+    lon >= MARINESIA_BBOX.long_min && lon <= MARINESIA_BBOX.long_max;
 }
 // Per-TILE freshness (P0.2 follow-up): the global marinesiaFresh() can stay true while ONE tile
 // quietly fails after the initial sweep (lastPollAt is global, tilesSeen cumulative-since-boot) —
@@ -1746,7 +1746,7 @@ function inItalyBbox(lat, lon) {
 // ITS OWN tile succeeded recently. (References marinesiaTileLastOkAt defined later, like the
 // marinesia state above — called only at runtime.)
 function marinesiaTileFresh(lat, lon, now = Date.now()) {
-  const idx = tileIndexFor(ITALY_TILES, lat, lon);
+  const idx = tileIndexFor(MARINESIA_TILES, lat, lon);
   return idx >= 0 && tileFreshness({ lastOkAt: marinesiaTileLastOkAt.get(idx), now });
 }
 // Which feed covers this coordinate, given the tick's already-computed feed liveness. Geography +
@@ -1754,7 +1754,7 @@ function marinesiaTileFresh(lat, lon, now = Date.now()) {
 // check is per-port because tiles fail independently).
 function portFeed(lat, lon, aisFresh, marinesiaOk, now = Date.now()) {
   if (aisFresh) return { source: 'aisstream', coverageOk: true };
-  const italy = inItalyBbox(lat, lon);
+  const italy = inMarinesiaBbox(lat, lon);
   if (marinesiaOk && italy && marinesiaTileFresh(lat, lon, now)) return { source: 'marinesia', coverageOk: true };
   // Neither fresh (or non-Italian while only Marinesia runs, or this port's tile is dark): name the
   // feed that OWNS this geography, but coverageOk=false — an honest "we can't currently see this port".
@@ -1771,15 +1771,15 @@ const { newsExplainer, fetchNews, matchNewsToDelay } = require('./explainer-news
 const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs');
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmAll, makeMeteoalarmExplainer, matchMeteoalarm } = require('./explainer-meteoalarm.cjs');
-const { ITALY_TILES, ITALY_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
+const { MARINESIA_TILES, MARINESIA_BBOX, normalizeMarinesiaVessel, mergeVesselStatic, tileIndexFor, fetchTile, VESSEL_CAP: MARINESIA_CAP } = require('./marinesia.cjs');
 const { computeAllPortStatus, smoothPortStatus, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 // Rolling per-port atPort history so /ais/ports reports a median-smoothed count +
 // congestion — Marinesia poll churn no longer flips ports or jiggles the numbers.
 const portStatusHistory = new Map();
-const ITALY_PORTS_BY_ID = require('../src/config/italy-ferries.data.json').ports;
+const PORTS_BY_ID = require('../src/config/maritime-ports.data.json').ports;
 // Despite the legacy name, that export is an ARRAY (computeAllPortStatus/syncPorts handle both
 // shapes) — anything needing an id-keyed lookup must use this map, NOT index the array by id.
-const PORT_META_BY_ID = new Map(ITALY_PORTS_BY_ID.map((p) => [p.id, p]));
+const PORT_META_BY_ID = new Map(PORTS_BY_ID.map((p) => [p.id, p]));
 
 // ── Geofence engine + port-history sampler ─────────────────────────────────
 // One circular geofence per commercial port (seeded from the ports dataset,
@@ -1790,7 +1790,7 @@ const PORT_META_BY_ID = new Map(ITALY_PORTS_BY_ID.map((p) => [p.id, p]));
 // will consume. Served read-only at /ais/geofences (zone shapes for the map)
 // and /ais/port-history (the time-series).
 const { buildPortGeofences, computeMembership, diffMembership } = require('./geofence-engine.cjs');
-const PORT_GEOFENCES = buildPortGeofences(ITALY_PORTS_BY_ID);
+const PORT_GEOFENCES = buildPortGeofences(PORTS_BY_ID);
 // Durable time-series sink (Neon Postgres). Fail-soft: a no-op when DATABASE_URL is unset, so the
 // relay is unchanged without it. Retires the Upstash single-blob port-history for snapshots/events
 // (which capped ~1MB/~1 day); membership/enterTimes stay in the small Upstash blob for restart-safety.
@@ -1851,7 +1851,7 @@ function buildFreightVesselList() {
 // P0.3 relative-congestion baseline: loaded on boot + refreshed nightly. congestionRel on /ais/ports
 // self-activates per port as its local dow×hour bucket is seen on ≥ db.BASELINE_MIN_DAYS days (null until).
 let portBaselines = new Map();
-const PORT_TZ = new Map(ITALY_PORTS_BY_ID.map((p) => [p.id, db.tzForCountry(p.country)]));
+const PORT_TZ = new Map(PORTS_BY_ID.map((p) => [p.id, db.tzForCountry(p.country)]));
 const LOCAL_DOW = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
 const _dtfByTz = new Map(); // cache the ≤4 Intl formatters (construction is costly; called per-port on /ais/ports)
 // A port's LOCAL day-of-week (0=Sun) + hour — congestion follows local working hours, and the
@@ -1918,7 +1918,7 @@ async function samplePortHistory(now = Date.now()) {
     }
     // Congestion snapshot on the slower cadence (baseline/seasonality fuel).
     if (now - lastPortSnapshotAt >= PORT_SNAPSHOT_MS) {
-      const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
+      const ports = computeAllPortStatus(PORTS_BY_ID, fresh, resolveDestinationPort, now, {}, (p) => p.commercial);
       smoothPortStatus(ports, portSnapshotHistory);
       // Stamp per-port coverage/source from feed GEOGRAPHY (P0.2), not vessel counts — survives into
       // ...dyn on the fallback path. writeSnapshot reads these (+ dynamic fields) by name.
@@ -2010,7 +2010,7 @@ async function startPortHistoryLoop() {
   if (!PORT_HISTORY_ENABLED) { console.log('[Relay] port-history sampler disabled (PORT_HISTORY_ENABLED=0)'); return; }
   await bootstrapPortHistory();
   if (db.enabled) {
-    try { await db.syncPorts(ITALY_PORTS_BY_ID); console.log(`[Relay] ports dim synced to Postgres (${db.stats.portsSynced} commercial ports)`); }
+    try { await db.syncPorts(PORTS_BY_ID); console.log(`[Relay] ports dim synced to Postgres (${db.stats.portsSynced} commercial ports)`); }
     catch (e) { console.warn('[Relay] ports sync failed:', e.message); }
   } else if (IS_PRODUCTION_RELAY) {
     // Loud, not silent: without a DB in prod the series falls back to the capped in-memory/Redis
@@ -2107,15 +2107,15 @@ async function pollMarinesiaTick() {
   if (!MARINESIA_ENABLED) return;
   const now = Date.now();
   if (now < marinesiaBackoffUntil) return;
-  const tileIdx = marinesiaTileIndex % ITALY_TILES.length;
-  const tile = ITALY_TILES[tileIdx];
+  const tileIdx = marinesiaTileIndex % MARINESIA_TILES.length;
+  const tile = MARINESIA_TILES[tileIdx];
   marinesiaTileIndex++;
   try {
     const raw = await fetchTile(tile, MARINESIA_API_KEY);
     for (const r of raw) applyMarinesiaVessel(normalizeMarinesiaVessel(r, now), now);
     marinesiaLastPollAt = now;
     marinesiaLastError = null;
-    if (marinesiaTilesSeen.size < ITALY_TILES.length) marinesiaTilesSeen.add(tileIdx);
+    if (marinesiaTilesSeen.size < MARINESIA_TILES.length) marinesiaTilesSeen.add(tileIdx);
     marinesiaTileLastOkAt.set(tileIdx, Date.now()); // per-tile recency (post-fetch, not tick start)
     if (raw.length >= MARINESIA_CAP) {
       console.warn(`[Relay] Marinesia tile hit the ${MARINESIA_CAP}-vessel cap — grid may need subdividing`);
@@ -2129,8 +2129,8 @@ async function pollMarinesiaTick() {
 
 function startMarinesiaLoop() {
   if (!MARINESIA_ENABLED) { console.log('[Relay] Marinesia disabled (no MARINESIA_API_KEY)'); return; }
-  const sweepS = Math.round(ITALY_TILES.length * MARINESIA_POLL_MS / 1000);
-  console.log(`[Relay] Marinesia enabled: ${ITALY_TILES.length} tiles, poll every ${MARINESIA_POLL_MS / 1000}s (~${sweepS}s/sweep)`);
+  const sweepS = Math.round(MARINESIA_TILES.length * MARINESIA_POLL_MS / 1000);
+  console.log(`[Relay] Marinesia enabled: ${MARINESIA_TILES.length} tiles, poll every ${MARINESIA_POLL_MS / 1000}s (~${sweepS}s/sweep)`);
   setInterval(() => { void pollMarinesiaTick(); }, MARINESIA_POLL_MS).unref?.();
 }
 
@@ -2274,7 +2274,7 @@ function baselineBucketFor(portId, now = Date.now()) {
 
 async function refreshPortContext(now = Date.now()) {
   const freight = buildFreightVesselList();
-  const ports = computeAllPortStatus(ITALY_PORTS_BY_ID, freight, resolveDestinationPort, now, {}, (p) => p.commercial);
+  const ports = computeAllPortStatus(PORTS_BY_ID, freight, resolveDestinationPort, now, {}, (p) => p.commercial);
   const busy = ports.filter((p) => p.congestion === 'busy' || p.congestion === 'congested');
   const due = busy
     .filter((p) => { const c = portContextCache.get(p.portId); return !c || now - c.ts > PORT_CONTEXT_TTL_MS; })
@@ -4668,11 +4668,11 @@ const handleRequest = async (req, res) => {
       aisKey: { active: aisKeyIndex + 1, pool: AIS_KEYS.length },
       marinesia: {
         enabled: MARINESIA_ENABLED,
-        tiles: ITALY_TILES.length,
+        tiles: MARINESIA_TILES.length,
         lastPollAt: marinesiaLastPollAt ? new Date(marinesiaLastPollAt).toISOString() : null,
         // Per-tile last-success age (sec) — null = never polled. A single high/never entry while the
         // others cycle is exactly the dark-tile case marinesiaTileFresh guards coverage against.
-        tileAgesSec: ITALY_TILES.map((_, i) => (marinesiaTileLastOkAt.has(i)
+        tileAgesSec: MARINESIA_TILES.map((_, i) => (marinesiaTileLastOkAt.has(i)
           ? Math.round((Date.now() - marinesiaTileLastOkAt.get(i)) / 1000) : null)),
         upserts: marinesiaUpserts,
         lastError: marinesiaLastError,
@@ -4864,12 +4864,12 @@ const handleRequest = async (req, res) => {
     const now = Date.now();
     const freightVessels = buildFreightVesselList();
     const ports = computeAllPortStatus(
-      ITALY_PORTS_BY_ID, freightVessels, resolveDestinationPort, now, {}, (p) => p.commercial,
+      PORTS_BY_ID, freightVessels, resolveDestinationPort, now, {}, (p) => p.commercial,
     );
     // Median-smooth atPort over recent calls + recompute congestion, then re-sort.
     smoothPortStatus(ports, portStatusHistory);
     // Per-tick feed decision (P0.2), computed ONCE and passed into portFeed below — same pair the
-    // geofence tick uses. aisstream streams the world; the Marinesia fallback polls ITALY_BBOX only.
+    // geofence tick uses. aisstream streams the world; the Marinesia fallback polls MARINESIA_BBOX only.
     const aisFresh = aisstreamFresh(now);
     const marinesiaOk = aisFresh ? false : marinesiaFresh(now); // skip the freshness calc when aisstream is live
     // P0.3: additive relative-congestion label — this port's at_berth vs its OWN local dow×hour

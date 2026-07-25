@@ -8,7 +8,7 @@
 
 import maplibregl from 'maplibre-gl';
 import { escapeHtml } from '@/utils/sanitize';
-import { EUROPE_BBOX, type Bbox } from '@/config/italy-ferries';
+import { EUROPE_BBOX, type Bbox } from '@/config/maritime-ports';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';

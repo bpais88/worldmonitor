@@ -9,9 +9,9 @@ import { aisStreamProvider } from './providers/aisstream';
 import type { EtaSource } from './types';
 import {
   EUROPE_BBOX,
-  ITALY_FERRY_PORTS,
-  ITALY_FERRY_OPERATORS,
-} from '../../config/italy-ferries';
+  ALL_PORTS,
+  ALL_OPERATORS,
+} from '../../config/maritime-ports';
 import { isFreightVessel, matchItalianFerryOperator, estimateFerryEta } from './ferry';
 import { validateSailing, type RouteStatus } from './route-validation';
 
@@ -56,8 +56,8 @@ export interface TrackedFerry {
   timestamp: number;
 }
 
-const PORT_BY_ID = new Map(ITALY_FERRY_PORTS.map((p) => [p.id, p] as const));
-const OPERATOR_BY_ID = new Map(ITALY_FERRY_OPERATORS.map((o) => [o.id, o] as const));
+const PORT_BY_ID = new Map(ALL_PORTS.map((p) => [p.id, p] as const));
+const OPERATOR_BY_ID = new Map(ALL_OPERATORS.map((o) => [o.id, o] as const));
 
 // AIS navigational status codes we care about.
 const NAV_STATUS_AT_ANCHOR = 1;

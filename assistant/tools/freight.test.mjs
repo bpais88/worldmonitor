@@ -89,7 +89,7 @@ test('the operator filter offers every tracked operator, not just the Italian fe
   // tracked 30, so the deep-sea and North-European carriers that actually call at the non-Italian
   // ports were unfilterable. It now derives from the registry.
   const { ports, operators } = JSON.parse(
-    readFileSync(new URL('../../src/config/italy-ferries.data.json', import.meta.url)),
+    readFileSync(new URL('../../src/config/maritime-ports.data.json', import.meta.url)),
   );
   const enumIds = freightTools.find((t) => t.name === 'find_freight_vessels')
     .input_schema.properties.operator.enum;

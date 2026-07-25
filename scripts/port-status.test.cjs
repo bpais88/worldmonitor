@@ -101,7 +101,7 @@ test('congestionLevel thresholds', () => {
 });
 
 test('computeAllPortStatus accepts an ARRAY and uses each port id (not the index)', () => {
-  // Mirrors italy-ferries.data.json: ports is an array of {id, ...}.
+  // Mirrors maritime-ports.data.json: ports is an array of {id, ...}.
   const ports = [
     { id: 'naples', name: 'Naples', lat: 40.84, lon: 14.26, commercial: true },
     { id: 'gioia_tauro', name: 'Gioia Tauro', lat: 38.43, lon: 15.9, commercial: true },
@@ -153,7 +153,7 @@ test('smoothPortStatus medians atPort over history and recomputes congestion', (
 });
 
 // --- Per-port radius + the non-overlap invariant ------------------------------------------------
-const { ports: ALL_PORTS } = require('../src/config/italy-ferries.data.json');
+const { ports: ALL_PORTS } = require('../src/config/maritime-ports.data.json');
 const { haversineKm } = require('./ferry-eta.cjs');
 const COMMERCIAL = ALL_PORTS.filter((p) => p.commercial);
 const radiusOf = (p) => (Number.isFinite(p.radiusKm) ? p.radiusKm : 8);

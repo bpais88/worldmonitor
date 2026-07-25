@@ -15,11 +15,11 @@ asks for passenger-ferry schedules.
 - **Two services, same repo:** `worldmonitor-relay` (runs `scripts/ais-relay.cjs` + `marinesia.cjs`
   — owns the AIS feed, `/ais/ports` congestion, `/ais/vessels`) and `italy-freight-assistant` (Marco,
   queries the relay). The expansion is **mostly a relay change**; the assistant only needs copy.
-- **Port-agnostic data model:** ports are a JSON dataset (`src/config/italy-ferries.data.json`,
+- **Port-agnostic data model:** ports are a JSON dataset (`src/config/maritime-ports.data.json`,
   shared by relay + app) with `lat/lon/aisNames/commercial`. Congestion is computed **live** from
   AIS vessel counts within 8 km of each port — **no per-port config**. Add a port entry → congestion,
   tracking, watches, port-call detection all activate automatically.
-- **Italy is a query-time bbox filter, not an ingestion wall** (`ITALY_BBOX [35,6,46.5,19.5]`).
+- **Italy is a query-time bbox filter, not an ingestion wall** (`MARINESIA_BBOX [35,6,46.5,19.5]`).
 
 ## Prerequisite — Marinesia procurement (USER ACTION, parallel)
 
@@ -39,7 +39,7 @@ validate the data before the feed swap.
 - Add the regional **operators/carriers** (Stena, DFDS, P&O, Brittany Ferries + container lines
   Maersk, MSC, CMA CGM, Hapag-Lloyd…) with AIS-name keywords; extend `OPERATOR_IDS` in
   `assistant/tools/freight.mjs`.
-- **Widen the bbox** Italy → W-Europe (`~[35,-10,56,20]`): `src/config/italy-ferries.ts`,
+- **Widen the bbox** Italy → W-Europe (`~[35,-10,56,20]`): `src/config/maritime-ports.ts`,
   `agent/lib/gather.mjs`, the relay vessel query default.
 - Congestion + tracking auto-compute. **Works on aisstream immediately** — a live demo before Marinesia.
 - Deploys to BOTH services (shared data file). Regression-test that Italy ports still report the same.
@@ -55,7 +55,7 @@ validate the data before the feed swap.
 
 ### PR-2 — Marinesia multi-region feed (relay) · *needs the key*
 
-- Refactor `scripts/marinesia.cjs`: `ITALY_TILES` → `REGION_TILES = { it, gb, es, nl }`, each a
+- Refactor `scripts/marinesia.cjs`: `MARINESIA_TILES` → `REGION_TILES = { it, gb, es, nl }`, each a
   `makeGrid(bbox)`; env to select active regions (`MARINESIA_REGIONS=it,gb,es,nl`).
 - `scripts/ais-relay.cjs` polls all active regions round-robin (mind the 5 req/min rate + 2000/tile cap).
 - Set `MARINESIA_API_KEY` (+ regions) on `worldmonitor-relay`; the reliability swap from aisstream.
@@ -81,7 +81,7 @@ agent loop, the approval flow, the Slack/Teams adapters. All port-agnostic — t
 - The relay serves the **live Italy pipeline** — every change is additive; regression-test Italy.
 - **Stage on aisstream first** (PR-1) to validate the port data before the Marinesia swap (PR-2).
 - Data curation (coords/aliases/LOCODEs) is the long pole — verify each port; wrong coords → wrong congestion.
-- Naming: the dataset is `italy-ferries.data.json`; consider renaming to `freight-ports.data.json`
+- Naming: the dataset is `maritime-ports.data.json`; consider renaming to `freight-ports.data.json`
   in PR-1, or keep it (less churn) and just add ports.
 
 ## Effort
