@@ -197,3 +197,42 @@ test('every per-port radius is a positive, plausible distance', () => {
       `${p.id}: radiusKm ${p.radiusKm} is not a plausible port extent (expected 0 < r <= 40 km)`);
   }
 });
+
+test('a port row can override the congestion thresholds', () => {
+  const busy = Array.from({ length: 5 }, (_, i) => near({ mmsi: `t${i}` })); // 5 stopped at the port
+  assert.equal(computePortStatus(PORT, busy, resolveDest, NOW).congestion, 'busy');        // default 4/8
+  // A large complex where 5 alongside is an ordinary day.
+  const big = computePortStatus({ ...PORT, busyAt: 20, congestedAt: 40 }, busy, resolveDest, NOW);
+  assert.equal(big.congestion, 'clear');
+  assert.equal(big.busyAt, 20);        // stamped, so the label is interpretable
+  assert.equal(big.congestedAt, 40);
+  // A small terminal where 5 alongside is a queue.
+  assert.equal(computePortStatus({ ...PORT, busyAt: 2, congestedAt: 4 }, busy, resolveDest, NOW).congestion, 'congested');
+});
+
+test('smoothing keeps a port on its OWN thresholds, not the fleet defaults', () => {
+  // Regression: smoothPortStatus recomputed the label from the global opts, so an overridden port
+  // was correctly labelled by computePortStatus and then silently re-labelled a tick later.
+  const busy = Array.from({ length: 5 }, (_, i) => near({ mmsi: `s${i}` }));
+  const p = computePortStatus({ ...PORT, busyAt: 20, congestedAt: 40 }, busy, resolveDest, NOW);
+  assert.equal(p.congestion, 'clear');
+  smoothPortStatus([p], new Map());
+  assert.equal(p.congestion, 'clear'); // would be 'busy' if the 4/8 defaults leaked back in
+});
+
+test('an invalid threshold override falls back to the default', () => {
+  const busy = Array.from({ length: 5 }, (_, i) => near({ mmsi: `b${i}` }));
+  for (const bad of [null, undefined, 'lots', NaN]) {
+    assert.equal(computePortStatus({ ...PORT, busyAt: bad }, busy, resolveDest, NOW).congestion, 'busy', String(bad));
+  }
+});
+
+test('any threshold override in the registry is sane', () => {
+  for (const p of COMMERCIAL) {
+    if (p.busyAt === undefined && p.congestedAt === undefined) continue;
+    const busyAt = p.busyAt ?? 4, congestedAt = p.congestedAt ?? 8;
+    assert.ok(Number.isFinite(busyAt) && busyAt > 0, `${p.id}: busyAt must be a positive number`);
+    assert.ok(Number.isFinite(congestedAt) && congestedAt > busyAt,
+      `${p.id}: congestedAt (${congestedAt}) must exceed busyAt (${busyAt}), else "busy" is unreachable`);
+  }
+});

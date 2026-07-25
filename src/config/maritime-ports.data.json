@@ -759,6 +759,7 @@
       ],
       "region": "England",
       "country": "GB",
+      "radiusKm": 10,
       "commercial": true
     },
     {
@@ -787,6 +788,7 @@
       ],
       "region": "England",
       "country": "GB",
+      "radiusKm": 12,
       "commercial": true
     },
     {
@@ -1017,6 +1019,7 @@
       ],
       "region": "North Holland",
       "country": "NL",
+      "radiusKm": 15,
       "commercial": true
     },
     {
