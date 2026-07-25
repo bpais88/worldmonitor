@@ -4866,6 +4866,10 @@ const handleRequest = async (req, res) => {
     );
     // Median-smooth atPort over recent calls + recompute congestion, then re-sort.
     smoothPortStatus(ports, portStatusHistory);
+    // Per-tick feed decision (P0.2), computed ONCE and passed into portFeed below — same pair the
+    // geofence tick uses. aisstream streams the world; the Marinesia fallback polls ITALY_BBOX only.
+    const aisFresh = aisstreamFresh(now);
+    const marinesiaOk = aisFresh ? false : marinesiaFresh(now); // skip the freshness calc when aisstream is live
     // P0.3: additive relative-congestion label — this port's at_berth vs its OWN local dow×hour
     // baseline (null/"unknown" until the baseline fills; leaves the absolute `congestion` untouched).
     for (const p of ports) {
@@ -4874,6 +4878,13 @@ const handleRequest = async (req, res) => {
       // Port context (M2): hedged candidate reasons for busy ports (news/alerts/crane-wind/baseline).
       const pc = portContextCache.get(p.portId);
       if (pc && pc.context.length) { p.context = pc.context; p.contextAsOf = pc.ts; }
+      // Per-port coverage (P0.2) on the LIVE path too. The 5-min snapshot writer already stamps this,
+      // but /ais/ports is what the assistant and the FE actually read, and an uncovered port otherwise
+      // reports congestion:"clear" with residual counts — "we can't see it" rendered as "it's quiet".
+      // Non-Italian ports (ES/GB/NL/PT) go dark whenever aisstream does, since the fallback is Italy-only.
+      const fp = portFeed(p.lat, p.lon, aisFresh, marinesiaOk, now);
+      p.source = fp.source;
+      p.coverageOk = fp.coverageOk;
     }
     const rank = { congested: 2, busy: 1, clear: 0 };
     ports.sort((a, b) => (rank[b.congestion] - rank[a.congestion]) || (b.atPort - a.atPort) || (b.inbound - a.inbound));
@@ -4883,6 +4894,8 @@ const handleRequest = async (req, res) => {
       'CDN-Cache-Control': 'public, max-age=30',
     }, JSON.stringify({
       ports, count: ports.length, freightTracked: freightVessels.length, generatedAt: now,
+      // Roll-up of the per-port stamp above so a client can caveat without scanning every port.
+      uncoveredPorts: ports.filter((p) => !p.coverageOk).map((p) => p.portId),
       ...feedFreshness(),
     }));
   } else if (pathname === '/ais/geofences') {

@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { etaView } from './freight.mjs';
+import { etaView, coverageNote } from './freight.mjs';
 
 const NOW = Date.parse('2026-06-22T21:00:00Z');
 
@@ -35,4 +35,29 @@ test('vs-departure drift + voyage age surfaced when present', () => {
   }, NOW);
   assert.equal(r.etaVsDepartureMin, 40);  // +40 min later than the departure ETA
   assert.equal(r.voyageAgeMin, 240);      // 4h into the trip
+});
+
+test('fully covered ports produce no coverage note', () => {
+  assert.equal(coverageNote([{ name: 'Genoa', coverageOk: true }, { name: 'Lisboa', coverageOk: true }]), null);
+});
+
+test('an older relay that omits coverageOk is treated as covered, not dark', () => {
+  assert.equal(coverageNote([{ name: 'Genoa' }, { name: 'Lisboa' }]), null);
+});
+
+test('an uncovered port is named, so it cannot be reported as "clear"', () => {
+  // The Lisbon case: aisstream dark + the Italy-only fallback ⇒ PT invisible, but the port row
+  // still carries last-known counts and congestion "clear".
+  const n = coverageNote([
+    { name: 'Genoa', coverageOk: true },
+    { name: 'Lisboa', coverageOk: false, congestion: 'clear' },
+  ]);
+  assert.deepEqual(n.uncovered, ['Lisboa']);
+  assert.match(n.note, /No live AIS coverage/);
+  assert.match(n.note, /Lisboa/);
+});
+
+test('coverage note is empty-safe', () => {
+  assert.equal(coverageNote(undefined), null);
+  assert.equal(coverageNote([]), null);
 });

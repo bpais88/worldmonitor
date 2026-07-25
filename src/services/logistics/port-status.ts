@@ -37,6 +37,14 @@ export interface PortStatus {
   /** Of inbound, how many arrive within 6/12/24/48 h (geometric ETA). */
   inboundEta: InboundEta;
   congestion: PortCongestion;
+  /**
+   * Whether a live feed currently sees this port's geography (P0.2). False means the counts and
+   * `congestion` above are last-known, not current — render that as "no coverage", never as the
+   * "clear" it would otherwise look identical to. Older relay builds omit it; absent ⇒ true.
+   */
+  coverageOk: boolean;
+  /** Which feed owns this port right now ('aisstream' | 'marinesia'), or null if unstamped. */
+  source: string | null;
 }
 
 function toPortStatus(row: unknown): PortStatus | null {
@@ -62,6 +70,8 @@ function toPortStatus(row: unknown): PortStatus | null {
       h48: Number(eta.h48) || 0,
     },
     congestion,
+    coverageOk: r.coverageOk !== false,
+    source: typeof r.source === 'string' ? r.source : null,
   };
 }
 
