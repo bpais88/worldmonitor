@@ -36,7 +36,17 @@ export interface PortStatus {
   inbound: number;
   /** Of inbound, how many arrive within 6/12/24/48 h (geometric ETA). */
   inboundEta: InboundEta;
+  /**
+   * ABSOLUTE congestion: the at-port count against fleet-wide thresholds (busyAt 4 / congestedAt 8),
+   * which were calibrated on Italian terminals. It does not scale — Rotterdam clears 8 on a normal
+   * Tuesday while Setúbal rarely reaches 4 — so prefer `congestionRel` for cross-country comparison.
+   */
   congestion: PortCongestion;
+  /**
+   * RELATIVE congestion: this port versus its OWN day-of-week/hour baseline (p75/p90), so it means
+   * the same thing at every port in every country. Null until the port has enough history.
+   */
+  congestionRel: PortCongestion | null;
   /**
    * Whether a live feed currently sees this port's geography (P0.2). False means the counts and
    * `congestion` above are last-known, not current — render that as "no coverage", never as the
@@ -70,6 +80,9 @@ function toPortStatus(row: unknown): PortStatus | null {
       h48: Number(eta.h48) || 0,
     },
     congestion,
+    congestionRel: r.congestionRel === 'congested' || r.congestionRel === 'busy' || r.congestionRel === 'clear'
+      ? r.congestionRel
+      : null, // absent / unknown baseline → null, never silently "clear"
     coverageOk: r.coverageOk !== false,
     source: typeof r.source === 'string' ? r.source : null,
   };

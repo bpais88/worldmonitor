@@ -153,7 +153,12 @@ function __setImoRegistryForTests(reg) {
   imoRegistry = reg || data.imoRegistry || {};
 }
 
+// Every configured operator id, straight from the registry. Exported so consumers (the agent's
+// operator filter) enumerate what we ACTUALLY track instead of keeping their own copy — a hardcoded
+// list silently froze the filter at the 7 Italian ferry lines while the registry grew to 30.
+const OPERATOR_IDS = (data.operators || []).map((o) => o.id).filter(Boolean);
+
 module.exports = {
   resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, resolveOperator,
-  isFreightOperator, isFreightVessel, freightReason, __setImoRegistryForTests,
+  isFreightOperator, isFreightVessel, freightReason, __setImoRegistryForTests, OPERATOR_IDS,
 };

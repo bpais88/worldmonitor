@@ -6,8 +6,12 @@ import { relayGet } from '../relay.mjs';
 // Reuse the relay's exact LOCODE→port resolver (no duplication) to name inbound vessels.
 import ferryEta from '../../scripts/ferry-eta.cjs';
 
-const { resolveDestinationPort } = ferryEta;
-const OPERATOR_IDS = ['tirrenia', 'gnv', 'moby', 'grimaldi', 'corsica_sardinia', 'snav', 'caronte'];
+// Derived from the port/operator registry, never hand-listed: the previous hardcoded array named 7
+// operators, all of them Italian domestic ferry lines, while the registry tracks 30. That silently
+// put every deep-sea and North-European carrier — Maersk, MSC, CMA CGM, Hapag-Lloyd, DFDS, P&O,
+// Stena, Spliethoff — outside the filter's enum, i.e. exactly the lines calling at the non-Italian
+// ports we launched. Reading the registry means adding an operator there is enough.
+const { resolveDestinationPort, OPERATOR_IDS } = ferryEta;
 
 // Pull the relay's freshness signals into a compact note so the agent can caveat a
 // count it would otherwise quote as authoritative. Only present when not fully fresh.
@@ -73,7 +77,7 @@ export const freightTools = [
   {
     name: 'get_port_congestion',
     description:
-      'Congestion status for European commercial freight ports (Italy, the UK, Spain, Portugal, the Netherlands). Returns, per port: congestion level (clear/busy/congested), atPort (freight vessels waiting/berthed within ~8 km), inbound (under way, bound there), and coverageOk. If the result has a "feed" field (warming/stale), LEAD your answer with that caveat — the counts are partial or aging. If a port has coverageOk:false (also listed in "coverage"), it is NOT currently visible to any live feed: its congestion and counts are last-known, so report it as "no live coverage" — never as "clear" or "quiet", which would present a blind spot as a calm port. Use for "which ports are busy/congested", "how many vessels waiting at X".',
+      'Congestion status for European commercial freight ports (Italy, the UK, Spain, Portugal, the Netherlands). Returns, per port: congestion level (clear/busy/congested), atPort (freight vessels waiting/berthed within ~8 km), inbound (under way, bound there), and coverageOk. If the result has a "feed" field (warming/stale), LEAD your answer with that caveat — the counts are partial or aging. If a port has coverageOk:false (also listed in "coverage"), it is NOT currently visible to any live feed: its congestion and counts are last-known, so report it as "no live coverage" — never as "clear" or "quiet", which would present a blind spot as a calm port. Two congestion signals ship together: "congestion" is an ABSOLUTE vessel count against fleet-wide thresholds that were calibrated on Italian terminals, so it over-reads huge ports (Rotterdam is near-permanently "congested") and under-reads small ones; "congestionRel" compares the port to its OWN day-of-week/hour baseline and is therefore comparable across countries. When congestionRel is present, LEAD with it and treat it as the real answer to "is this port busy"; it is null until that port has enough history, and only then does the absolute label stand alone. Use for "which ports are busy/congested", "how many vessels waiting at X".',
     input_schema: { type: 'object', properties: {}, additionalProperties: false },
     handler: async () => {
       const j = await relayGet('/ais/ports');
@@ -85,6 +89,7 @@ export const freightTools = [
         ...(coverage ? { coverage } : {}),
         ports: (j.ports || []).map((p) => ({
           port: p.name, region: p.region, congestion: p.congestion, atPort: p.atPort, inbound: p.inbound,
+          congestionRel: p.congestionRel ?? null, // vs this port's OWN baseline; null until it fills
           coverageOk: p.coverageOk !== false, // missing → covered (older relay build)
         })),
       };
@@ -191,7 +196,7 @@ export const freightTools = [
   {
     name: 'get_port',
     description:
-      'Deep dive on one commercial freight port: congestion level, the freight vessels physically AT the port (within ~8 km), and the vessels INBOUND (under way with this port as their resolved destination), each with names/speed. Busy ports may carry `context`: candidate WHY-reasons (news, official weather alerts, crane-wind, above-baseline anomaly) with confidence — present these hedged ("possibly related"), never as the established cause. If coverageOk is false (see the "coverage" field), no live feed can currently see this port — OPEN with that, and present congestion, the vessel lists and every ETA as last-known rather than current; do not call the port clear or quiet, and do not offer arrival timings as if they were live. Use for "what is happening at Genoa", "which ships are at / heading to Ravenna", "why is Rotterdam busy".',
+      'Deep dive on one commercial freight port: congestion level, the freight vessels physically AT the port (within ~8 km), and the vessels INBOUND (under way with this port as their resolved destination), each with names/speed. Busy ports may carry `context`: candidate WHY-reasons (news, official weather alerts, crane-wind, above-baseline anomaly) with confidence — present these hedged ("possibly related"), never as the established cause. If coverageOk is false (see the "coverage" field), no live feed can currently see this port — OPEN with that, and present congestion, the vessel lists and every ETA as last-known rather than current; do not call the port clear or quiet, and do not offer arrival timings as if they were live. Two congestion signals ship together: "congestion" is an ABSOLUTE vessel count against fleet-wide thresholds that were calibrated on Italian terminals, so it over-reads huge ports (Rotterdam is near-permanently "congested") and under-reads small ones; "congestionRel" compares the port to its OWN day-of-week/hour baseline and is therefore comparable across countries. When congestionRel is present, LEAD with it and treat it as the real answer to "is this port busy"; it is null until that port has enough history, and only then does the absolute label stand alone. Use for "what is happening at Genoa", "which ships are at / heading to Ravenna", "why is Rotterdam busy".',
     input_schema: {
       type: 'object',
       properties: { port: { type: 'string', description: 'port name or id, e.g. "Genoa"' } },
@@ -232,6 +237,7 @@ export const freightTools = [
         ...(feed ? { feed } : {}),
         ...(coverage ? { coverage } : {}),
         port: p.name, region: p.region, congestion: p.congestion,
+        congestionRel: p.congestionRel ?? null, // vs this port's OWN baseline; null until it fills
         coverageOk: p.coverageOk !== false, // missing → covered (older relay build)
         atPortCount: p.atPort, vesselsAtPort: atPort,
         inboundCount: inbound.length, vesselsInbound: inbound,

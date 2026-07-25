@@ -1,6 +1,7 @@
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
-import { etaView, coverageNote } from './freight.mjs';
+import { readFileSync } from 'node:fs';
+import { etaView, coverageNote, freightTools } from './freight.mjs';
 
 const NOW = Date.parse('2026-06-22T21:00:00Z');
 
@@ -81,4 +82,23 @@ test('an uncovered port is named, so it cannot be reported as "clear"', () => {
 test('coverage note is empty-safe', () => {
   assert.equal(coverageNote(undefined), null);
   assert.equal(coverageNote([]), null);
+});
+
+test('the operator filter offers every tracked operator, not just the Italian ferry lines', () => {
+  // Regression: the enum was a hardcoded array of 7 Italian domestic lines while the registry
+  // tracked 30, so the deep-sea and North-European carriers that actually call at the non-Italian
+  // ports were unfilterable. It now derives from the registry.
+  const { ports, operators } = JSON.parse(
+    readFileSync(new URL('../../src/config/italy-ferries.data.json', import.meta.url)),
+  );
+  const enumIds = freightTools.find((t) => t.name === 'find_freight_vessels')
+    .input_schema.properties.operator.enum;
+  assert.deepEqual([...enumIds].sort(), operators.map((o) => o.id).sort());
+
+  // And the enum must reach beyond Italy, or we have silently regressed to a domestic-only filter.
+  const countries = new Set(ports.filter((p) => p.commercial).map((p) => p.country || 'IT'));
+  assert.ok(countries.size > 1, 'fixture sanity: more than one country is covered');
+  for (const id of ['maersk', 'msc_line', 'dfds', 'po_ferries']) {
+    assert.ok(enumIds.includes(id), `operator "${id}" missing from the filter enum`);
+  }
 });
