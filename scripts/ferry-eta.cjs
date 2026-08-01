@@ -2,9 +2,9 @@
 
 // Relay-side destination resolution + ETA, mirroring src/services/logistics/
 // ferry.ts (matchDestinationPort) and eta.ts (computeEta). Pure CommonJS so the
-// relay can require it. Static data is single-sourced from italy-ferries.data.json.
+// relay can require it. Static data is single-sourced from maritime-ports.data.json.
 
-const data = require('../src/config/italy-ferries.data.json');
+const data = require('../src/config/maritime-ports.data.json');
 
 const PORT_BY_ID = new Map(data.ports.map((p) => [p.id, p]));
 
@@ -153,7 +153,12 @@ function __setImoRegistryForTests(reg) {
   imoRegistry = reg || data.imoRegistry || {};
 }
 
+// Every configured operator id, straight from the registry. Exported so consumers (the agent's
+// operator filter) enumerate what we ACTUALLY track instead of keeping their own copy — a hardcoded
+// list silently froze the filter at the 7 Italian ferry lines while the registry grew to 30.
+const OPERATOR_IDS = (data.operators || []).map((o) => o.id).filter(Boolean);
+
 module.exports = {
   resolveDestinationPort, etaFor, haversineKm, resolveOperatorName, resolveOperator,
-  isFreightOperator, isFreightVessel, freightReason, __setImoRegistryForTests,
+  isFreightOperator, isFreightVessel, freightReason, __setImoRegistryForTests, OPERATOR_IDS,
 };

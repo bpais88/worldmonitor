@@ -65,7 +65,7 @@ CREATE INDEX IF NOT EXISTS ix_fc_target ON forecasts (target_ts) WHERE actual_at
 CREATE INDEX IF NOT EXISTS ix_fc_port_made ON forecasts (port_id, made_at DESC);
 
 -- Seed the ports dimension (39 commercial ports, tz per country). The relay also re-syncs
--- this from src/config/italy-ferries.data.json on boot, so this is just a convenience seed.
+-- this from src/config/maritime-ports.data.json on boot, so this is just a convenience seed.
 INSERT INTO ports (port_id, name, country, region, lat, lon, tz) VALUES
   ('algeciras', 'Algeciras', 'ES', 'Andalusia', 36.13, -5.43, 'Europe/Madrid'),
   ('amsterdam', 'Amsterdam', 'NL', 'North Holland', 52.42, 4.85, 'Europe/Amsterdam'),

@@ -65,7 +65,7 @@ fetchOperatorSource(source)            // type: 'rss' | 'json' | 'html'
 makeOperatorStatusExplainer(registry)  // -> { id: 'operator', explain(ctx) }
 ```
 
-Registry shape (curated; seed in `src/config/italy-ferries.data.json` next to
+Registry shape (curated; seed in `src/config/maritime-ports.data.json` next to
 operators, so the TS app and cjs relay share one source of truth):
 
 ```jsonc

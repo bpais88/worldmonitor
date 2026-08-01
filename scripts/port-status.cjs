@@ -19,6 +19,24 @@ const DEFAULTS = {
   congestedAt: 8,        // atPort >= this -> congested
 };
 
+// radiusKm above is only the DEFAULT — a port row may carry its own `radiusKm`, because one global
+// figure cannot fit both a compact terminal and a sprawling complex. Two ways it was wrong:
+// Rotterdam's port runs ~24 km inland from its coordinate, so 8 km missed half of it; and four
+// pairs of ports sit closer than 16 km apart (Savona/Vado Ligure 6.0, Venezia/Porto Marghera 6.3,
+// London Gateway/Tilbury 11.2, Immingham/Hull 13.9), so their 8 km discs OVERLAPPED and a vessel
+// berthed at one was counted at both. port-status.test.cjs enforces the non-overlap invariant.
+const radiusFor = (port, o) => (Number.isFinite(port && port.radiusKm) ? port.radiusKm : o.radiusKm);
+
+// busyAt/congestedAt are ABSOLUTE vessel counts, and were calibrated when every port was Italian.
+// They do not scale: Rotterdam clears 8 on an ordinary Tuesday while Setubal rarely reaches 4, so
+// one pair of numbers reads "congested" forever at the big ports and "clear" forever at the small
+// ones. A port row may override either. The genuinely size-independent signal is congestionRel
+// (each port against its OWN dow x hour baseline) — prefer it; this stays for the raw count.
+const thresholdsFor = (port, o) => ({
+  busyAt: Number.isFinite(port && port.busyAt) ? port.busyAt : o.busyAt,
+  congestedAt: Number.isFinite(port && port.congestedAt) ? port.congestedAt : o.congestedAt,
+});
+
 const NAV_AT_ANCHOR = 1;
 const NAV_MOORED = 5;
 
@@ -45,6 +63,8 @@ function congestionLevel(atPort, o) {
  */
 function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = {}) {
   const o = { ...DEFAULTS, ...opts };
+  const radiusKm = radiusFor(port, o);
+  const thresholds = thresholdsFor(port, o);
   let atPort = 0;
   let atAnchor = 0; // navStatus "at anchor" = waiting for a berth (queue → leading indicator)
   let atBerth = 0; // navStatus "moored" = berthed / being served
@@ -57,7 +77,7 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
     // Distance to the port, computed once and reused for both the at-port check + ETA.
     const distKm = (Number.isFinite(v.lat) && Number.isFinite(v.lon)) ? haversineKm(v, port) : Infinity;
     // At port: stopped within the radius. Split anchor (waiting) vs berth (served).
-    if (distKm <= o.radiusKm && isStopped(v, o.stoppedKnots)) {
+    if (distKm <= radiusKm && isStopped(v, o.stoppedKnots)) {
       atPort++;
       if (v.navStatus === NAV_AT_ANCHOR) atAnchor++;
       else if (v.navStatus === NAV_MOORED) atBerth++;
@@ -85,13 +105,17 @@ function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = 
     atBerth,
     inbound,
     inboundEta,
-    congestion: congestionLevel(atPort, o),
+    congestion: congestionLevel(atPort, thresholds),
+    // The thresholds this label was produced with, so "6 at port" is interpretable rather than a
+    // bare word — and so smoothPortStatus can recompute the label without re-reading the registry.
+    busyAt: thresholds.busyAt,
+    congestedAt: thresholds.congestedAt,
   };
 }
 
 /**
  * Status for every port. `ports` may be an ARRAY of port objects (each with an
- * `id`) — as in italy-ferries.data.json — or an object keyed by port id. The
+ * `id`) — as in maritime-ports.data.json — or an object keyed by port id. The
  * emitted portId always comes from the port's own `id` (else the map key) so it
  * matches resolveDest()'s portId for inbound counting. `filter(port)` optionally
  * restricts which ports (e.g. commercial only). Ports without coords are skipped.
@@ -134,9 +158,11 @@ function smoothPortStatus(ports, history, n = 5, opts = {}) {
     const sm = median(h);
     p.atPortRaw = p.atPort;
     p.atPort = sm;
-    p.congestion = congestionLevel(sm, o);
+    // Reuse THIS port's thresholds (stamped by computePortStatus), not the fleet defaults —
+    // otherwise smoothing silently re-labels an overridden port with the global numbers.
+    p.congestion = congestionLevel(sm, thresholdsFor(p, o));
   }
   return ports;
 }
 
-module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, DEFAULTS };
+module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, radiusFor, DEFAULTS };

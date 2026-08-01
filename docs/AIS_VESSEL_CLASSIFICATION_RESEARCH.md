@@ -75,7 +75,7 @@ classes it a passenger ship (0-3 against).
   lines + tourist ferries that also broadcast "passenger".
 - **tanker / HSC (40-49) / other** → excluded.
 
-Operator freight/tourist flag is single-sourced in `italy-ferries.data.json`
+Operator freight/tourist flag is single-sourced in `maritime-ports.data.json`
 (`operators[].freight`). We deliberately use the operator (not hull size) as the
 RoPax signal, because live data showed size-alone catches 300 m cruise ships.
 

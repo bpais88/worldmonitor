@@ -7,7 +7,7 @@
 //   - was at a port, now moving away     => DEPARTED that port
 //   - was at sea, now moored at a port   => ARRIVED at that port
 
-import { ITALY_FERRY_PORTS, type FerryPort } from '../../config/italy-ferries';
+import { ALL_PORTS, type FerryPort } from '../../config/maritime-ports';
 import { haversineKm } from './geo';
 import type { LiveVessel } from './providers/types';
 import type { Milestone } from './types';
@@ -17,7 +17,7 @@ export const PORT_PROXIMITY_KM = 5;
 /** Max speed (knots) to count as moored/manoeuvring rather than transiting. */
 export const AT_PORT_MAX_KNOTS = 3;
 
-const PORT_BY_ID = new Map(ITALY_FERRY_PORTS.map((p) => [p.id, p] as const));
+const PORT_BY_ID = new Map(ALL_PORTS.map((p) => [p.id, p] as const));
 
 /** Nearest ferry port within maxKm of a point, if any. */
 export function findNearestPort(
@@ -26,7 +26,7 @@ export function findNearestPort(
   maxKm: number = PORT_PROXIMITY_KM,
 ): { port: FerryPort; distanceKm: number } | undefined {
   let best: { port: FerryPort; distanceKm: number } | undefined;
-  for (const port of ITALY_FERRY_PORTS) {
+  for (const port of ALL_PORTS) {
     const distanceKm = haversineKm({ lat, lon }, port);
     if (distanceKm > maxKm) continue;
     if (!best || distanceKm < best.distanceKm) best = { port, distanceKm };

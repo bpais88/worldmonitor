@@ -7,14 +7,14 @@
 
 import {
   ITALY_FERRY_ROUTES,
-  ITALY_FERRY_PORTS,
+  ALL_PORTS,
   type FerryRoute,
-} from '../../config/italy-ferries';
+} from '../../config/maritime-ports';
 
 const routeKey = (fromId: string, toId: string): string => `${fromId}>${toId}`;
 
 const ROUTE_BY_KEY = new Map(ITALY_FERRY_ROUTES.map((r) => [routeKey(r.fromId, r.toId), r] as const));
-const PORT_IDS = new Set(ITALY_FERRY_PORTS.map((p) => p.id));
+const PORT_IDS = new Set(ALL_PORTS.map((p) => p.id));
 
 const ROUTES_BY_DEST = new Map<string, FerryRoute[]>();
 for (const r of ITALY_FERRY_ROUTES) {

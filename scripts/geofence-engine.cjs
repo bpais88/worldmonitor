@@ -4,9 +4,10 @@
 //
 // A geofence = identity + geometry + rules + style + metadata. Today the only
 // geofences are one circle per commercial port (seeded from the shared ports
-// dataset, radius = the existing "atPort" 8 km), but the model is polygon-ready
-// and kind-tagged so custom zones (anchorage / chokepoint / risk / customer)
-// drop in later without a schema change.
+// dataset, radius = that port's own "atPort" radius — its `radiusKm` if it sets
+// one, else the 8 km default), but the model is polygon-ready and kind-tagged so
+// custom zones (anchorage / chokepoint / risk / customer) drop in later without
+// a schema change.
 //
 // Two jobs, both pure + testable:
 //   1. define/seed geofences (buildPortGeofences)
@@ -18,10 +19,13 @@
 // The relay owns the timers + persistence; this module stays I/O-free.
 
 const { haversineKm } = require('./ferry-eta.cjs');
+// The SAME resolver port-status.cjs counts "atPort" with, imported rather than reimplemented: a
+// port geofence and its congestion count must describe one circle, and a duplicated constant here
+// is exactly how they drifted apart when port rows gained a per-port `radiusKm` (Rotterdam counted
+// to 20 km while its geofence still fired enter/exit at 8 km, and the four sub-16 km pairs kept
+// double-counting through the geofence layer after port-status stopped).
+const { radiusFor, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
 
-// "atPort" radius in port-status.cjs — kept in sync so a port geofence and the
-// congestion count describe the same circle.
-const DEFAULT_PORT_RADIUS_KM = 8;
 const DEFAULT_DWELL_MIN = 30;
 
 // Render styling per zone kind (consumed by the ferry.html "Zones" overlay).
@@ -37,9 +41,13 @@ const KIND_STYLE = {
  * Seed one circular geofence per commercial port. Deterministic from the ports
  * dataset — the default set that a future admin edit layer (Redis-backed) would
  * override. `updatedBy: 'system'` marks these as defaults, not human edits.
+ *
+ * Each circle takes THAT port's at-port radius, so arrivals/dwell and the
+ * congestion count agree per port. `opts.radiusKm` overrides the fleet default
+ * only — a port's own `radiusKm` still wins, or the two layers diverge again.
  */
 function buildPortGeofences(ports, opts = {}) {
-  const radiusKm = opts.radiusKm || DEFAULT_PORT_RADIUS_KM;
+  const defaults = { ...PORT_STATUS_DEFAULTS, ...(Number.isFinite(opts.radiusKm) ? { radiusKm: opts.radiusKm } : {}) };
   const dwellMin = opts.dwellMin || DEFAULT_DWELL_MIN;
   const out = [];
   for (const p of ports || []) {
@@ -50,7 +58,7 @@ function buildPortGeofences(ports, opts = {}) {
       portId: p.id,
       name: `${p.name} — port area`,
       kind: 'port',
-      geometry: { type: 'circle', center: { lat: p.lat, lon: p.lon }, radiusKm },
+      geometry: { type: 'circle', center: { lat: p.lat, lon: p.lon }, radiusKm: radiusFor(p, defaults) },
       // `rules` is a declarative contract: the sampler currently applies freight +
       // enter/exit/dwell uniformly; per-zone enforcement lands with the alert layer.
       // `style` is consumed by the ferry.html "Zones" overlay.

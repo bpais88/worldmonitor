@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus } = require('./port-status.cjs');
+const { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, radiusFor, DEFAULTS } = require('./port-status.cjs');
 
 // Gioia Tauro terminal.
 const PORT = { portId: 'gioia_tauro', name: 'Gioia Tauro', lat: 38.43, lon: 15.9, region: 'Calabria' };
@@ -66,6 +66,26 @@ test('buckets inbound vessels by geometric ETA (cumulative h6/h12/h24/h48)', () 
   assert.equal(s.inboundEta.h48, 2); // both
 });
 
+// Both fixtures above arrive inside 15h, so h48 was satisfied by vessels already counted in h24 —
+// the 24-48h band was asserted but never actually populated. That is an Italy-shaped assumption:
+// Mediterranean legs are hours, so nothing exercised a genuinely multi-day approach until Portugal
+// (Atlantic, routinely 40h+) put one in front of a user. These two fill the band and its far edge.
+test('a genuinely multi-day approach lands in h48 only, not the shorter buckets', () => {
+  const vDays = { mmsi: 'd', lat: PORT.lat + 9.0, lon: PORT.lon, speed: 15, destination: 'ITGIT', timestamp: NOW }; // ~1000km → ~36h
+  const s = computePortStatus(PORT, [vDays], resolveDest, NOW);
+  assert.equal(s.inbound, 1);
+  assert.deepEqual(s.inboundEta, { h6: 0, h12: 0, h24: 0, h48: 1 });
+});
+
+test('beyond 48h still counts as inbound but falls in no arrival bucket', () => {
+  // The buckets are an arrival horizon, not a census — a vessel 60h out is under way and bound here,
+  // but promoting it into h48 would overstate what arrives in the next two days.
+  const vFar = { mmsi: 'w', lat: PORT.lat + 15.0, lon: PORT.lon, speed: 15, destination: 'ITGIT', timestamp: NOW }; // ~1670km → ~60h
+  const s = computePortStatus(PORT, [vFar], resolveDest, NOW);
+  assert.equal(s.inbound, 1);
+  assert.deepEqual(s.inboundEta, { h6: 0, h12: 0, h24: 0, h48: 0 });
+});
+
 test('congestion level scales with the at-port count', () => {
   const many = (n) => Array.from({ length: n }, (_, i) => near({ mmsi: `m${i}` }));
   assert.equal(computePortStatus(PORT, many(2), resolveDest, NOW).congestion, 'clear');
@@ -81,7 +101,7 @@ test('congestionLevel thresholds', () => {
 });
 
 test('computeAllPortStatus accepts an ARRAY and uses each port id (not the index)', () => {
-  // Mirrors italy-ferries.data.json: ports is an array of {id, ...}.
+  // Mirrors maritime-ports.data.json: ports is an array of {id, ...}.
   const ports = [
     { id: 'naples', name: 'Naples', lat: 40.84, lon: 14.26, commercial: true },
     { id: 'gioia_tauro', name: 'Gioia Tauro', lat: 38.43, lon: 15.9, commercial: true },
@@ -130,4 +150,92 @@ test('smoothPortStatus medians atPort over history and recomputes congestion', (
   feed(9); p = feed(9);            // history [4,4,9,9,9] -> median 9: sustained high finally registers
   assert.equal(p.atPort, 9);
   assert.equal(p.congestion, 'congested');
+});
+
+// --- Per-port radius + the non-overlap invariant ------------------------------------------------
+const { ports: ALL_PORTS } = require('../src/config/maritime-ports.data.json');
+const { haversineKm } = require('./ferry-eta.cjs');
+const COMMERCIAL = ALL_PORTS.filter((p) => p.commercial);
+// Resolve through the module's own helper + defaults, never a literal 8: a hardcoded copy here
+// would keep passing against the wrong number the moment DEFAULTS.radiusKm moved, which is exactly
+// the failure this whole invariant exists to catch.
+const radiusOf = (p) => radiusFor(p, DEFAULTS);
+
+test('a port row can override the at-port radius', () => {
+  const v = { mmsi: 'r', lat: PORT.lat + 0.09, lon: PORT.lon, speed: 0, timestamp: NOW }; // ~10km out
+  assert.equal(computePortStatus(PORT, [v], resolveDest, NOW).atPort, 0);                  // default 8km: outside
+  assert.equal(computePortStatus({ ...PORT, radiusKm: 20 }, [v], resolveDest, NOW).atPort, 1);
+  assert.equal(computePortStatus({ ...PORT, radiusKm: 2.5 }, [v], resolveDest, NOW).atPort, 0);
+});
+
+test('an invalid per-port radius falls back to the default rather than counting nothing', () => {
+  const v = { mmsi: 'r', lat: PORT.lat + 0.02, lon: PORT.lon, speed: 0, timestamp: NOW }; // ~2km out
+  for (const bad of [null, undefined, 'wide', NaN]) {
+    assert.equal(computePortStatus({ ...PORT, radiusKm: bad }, [v], resolveDest, NOW).atPort, 1, String(bad));
+  }
+});
+
+test('no two commercial ports have overlapping at-port discs', () => {
+  // Overlap means one berthed vessel is counted at BOTH ports — inflating each, and inflating the
+  // baselines they are later judged against. This invariant is what makes a per-port radius safe
+  // to widen: you cannot grow one port's disc into its neighbour without failing here.
+  for (let i = 0; i < COMMERCIAL.length; i++) {
+    for (let j = i + 1; j < COMMERCIAL.length; j++) {
+      const a = COMMERCIAL[i], b = COMMERCIAL[j];
+      const gap = haversineKm(a, b);
+      assert.ok(
+        radiusOf(a) + radiusOf(b) <= gap,
+        `${a.id} (r=${radiusOf(a)}km) and ${b.id} (r=${radiusOf(b)}km) are only ${gap.toFixed(1)}km apart — ` +
+          `their at-port discs overlap, so a vessel berthed between them counts at both. ` +
+          `Lower one or both "radiusKm" in the port registry.`,
+      );
+    }
+  }
+});
+
+test('every per-port radius is a positive, plausible distance', () => {
+  for (const p of COMMERCIAL) {
+    if (p.radiusKm === undefined) continue;
+    assert.ok(Number.isFinite(p.radiusKm) && p.radiusKm > 0 && p.radiusKm <= 40,
+      `${p.id}: radiusKm ${p.radiusKm} is not a plausible port extent (expected 0 < r <= 40 km)`);
+  }
+});
+
+test('a port row can override the congestion thresholds', () => {
+  const busy = Array.from({ length: 5 }, (_, i) => near({ mmsi: `t${i}` })); // 5 stopped at the port
+  assert.equal(computePortStatus(PORT, busy, resolveDest, NOW).congestion, 'busy');        // default 4/8
+  // A large complex where 5 alongside is an ordinary day.
+  const big = computePortStatus({ ...PORT, busyAt: 20, congestedAt: 40 }, busy, resolveDest, NOW);
+  assert.equal(big.congestion, 'clear');
+  assert.equal(big.busyAt, 20);        // stamped, so the label is interpretable
+  assert.equal(big.congestedAt, 40);
+  // A small terminal where 5 alongside is a queue.
+  assert.equal(computePortStatus({ ...PORT, busyAt: 2, congestedAt: 4 }, busy, resolveDest, NOW).congestion, 'congested');
+});
+
+test('smoothing keeps a port on its OWN thresholds, not the fleet defaults', () => {
+  // Regression: smoothPortStatus recomputed the label from the global opts, so an overridden port
+  // was correctly labelled by computePortStatus and then silently re-labelled a tick later.
+  const busy = Array.from({ length: 5 }, (_, i) => near({ mmsi: `s${i}` }));
+  const p = computePortStatus({ ...PORT, busyAt: 20, congestedAt: 40 }, busy, resolveDest, NOW);
+  assert.equal(p.congestion, 'clear');
+  smoothPortStatus([p], new Map());
+  assert.equal(p.congestion, 'clear'); // would be 'busy' if the 4/8 defaults leaked back in
+});
+
+test('an invalid threshold override falls back to the default', () => {
+  const busy = Array.from({ length: 5 }, (_, i) => near({ mmsi: `b${i}` }));
+  for (const bad of [null, undefined, 'lots', NaN]) {
+    assert.equal(computePortStatus({ ...PORT, busyAt: bad }, busy, resolveDest, NOW).congestion, 'busy', String(bad));
+  }
+});
+
+test('any threshold override in the registry is sane', () => {
+  for (const p of COMMERCIAL) {
+    if (p.busyAt === undefined && p.congestedAt === undefined) continue;
+    const busyAt = p.busyAt ?? DEFAULTS.busyAt, congestedAt = p.congestedAt ?? DEFAULTS.congestedAt;
+    assert.ok(Number.isFinite(busyAt) && busyAt > 0, `${p.id}: busyAt must be a positive number`);
+    assert.ok(Number.isFinite(congestedAt) && congestedAt > busyAt,
+      `${p.id}: congestedAt (${congestedAt}) must exceed busyAt (${busyAt}), else "busy" is unreachable`);
+  }
 });

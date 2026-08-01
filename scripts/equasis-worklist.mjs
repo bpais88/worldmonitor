@@ -2,7 +2,7 @@
 // Equasis worklist generator.
 //
 // Equasis has no bulk API, so the IMO->ship-type registry
-// (italy-ferries.data.json `imoRegistry`) is populated by hand. This script
+// (maritime-ports.data.json `imoRegistry`) is populated by hand. This script
 // produces the *finite* worklist: the ambiguous PASSENGER vessels (60-69) seen
 // in the live feed that have an IMO and aren't yet in the registry — i.e. the
 // RoPax-vs-cruise cases the heuristic can't be sure about. Cargo is unambiguous
@@ -17,7 +17,7 @@
 import { createRequire } from 'module';
 const require = createRequire(import.meta.url);
 const { resolveOperatorName } = require('./ferry-eta.cjs');
-const data = require('../src/config/italy-ferries.data.json');
+const data = require('../src/config/maritime-ports.data.json');
 
 const RELAY = process.env.RELAY_URL || 'http://localhost:3004';
 const SECRET = process.env.RELAY_SHARED_SECRET || '';
@@ -46,7 +46,7 @@ async function main() {
   console.log(`# Equasis worklist — ${rows.length} ambiguous passenger vessels to verify`);
   console.log('# Look up each IMO at https://www.equasis.org -> "Type of ship":');
   console.log('#   "Passenger/Ro-Ro Cargo Ship" => freight:true ; "Passenger (Cruise) Ship" => false');
-  console.log('# Then add to imoRegistry in src/config/italy-ferries.data.json.\n');
+  console.log('# Then add to imoRegistry in src/config/maritime-ports.data.json.\n');
   console.log('IMO'.padEnd(10), 'LEN'.padEnd(6), 'CURRENT GUESS'.padEnd(26), 'NAME');
   for (const r of rows) {
     console.log(String(r.imo).padEnd(10), String(r.length).padEnd(6), r.guess.padEnd(26), r.name);

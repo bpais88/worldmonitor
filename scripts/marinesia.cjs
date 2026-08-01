@@ -156,8 +156,20 @@ function mergeVesselStatic(prev, v, now = Date.now()) {
   };
 }
 
-// Italian waters: Ligurian/Tyrrhenian/Adriatic/Ionian + Sicily channel.
-const ITALY_BBOX = { lat_min: 36, lat_max: 46, long_min: 6, long_max: 19 };
+// Region geography is DERIVED FROM THE PORT REGISTRY, not hand-written. It used to be a single
+// hardcoded box over Italian waters, which is why every non-Italian port went dark whenever
+// aisstream did: the fallback simply never looked there, and no launch step made that visible.
+// Deriving it means a country added to the registry gets fallback tiles automatically.
+const portData = require('../src/config/maritime-ports.data.json');
+
+// Grown around each country's own ports so vessels are seen on APPROACH, not just alongside
+// (~0.6° ≈ 65 km, comfortably more than the widest at-port radius).
+const REGION_MARGIN_DEG = 0.6;
+// Cap on a single tile's span. The endpoint truncates at 2000 vessels per box with no pagination,
+// so tiles must stay small enough to fit under it; this matches the density the original Italian
+// 3×3 (3.33° × 4.33°) was validated at.
+const TILE_MAX_LAT_DEG = 4.0;
+const TILE_MAX_LON_DEG = 4.5;
 
 /** Split a bbox into a rows×cols grid of sub-boxes. */
 function makeGrid(bbox, rows, cols) {
@@ -177,9 +189,41 @@ function makeGrid(bbox, rows, cols) {
   return tiles;
 }
 
-// Default 3×3 grid over Italian waters — 9 tiles, each well under the 2000 cap
-// at observed densities; a full sweep is 9 requests (~108s at 5 req/min).
-const ITALY_TILES = makeGrid(ITALY_BBOX, 3, 3);
+/** Bounding box around a country's commercial ports, grown by REGION_MARGIN_DEG. */
+function bboxForPorts(ports) {
+  const lats = ports.map((p) => p.lat);
+  const lons = ports.map((p) => p.lon);
+  return {
+    lat_min: Math.min(...lats) - REGION_MARGIN_DEG,
+    lat_max: Math.max(...lats) + REGION_MARGIN_DEG,
+    long_min: Math.min(...lons) - REGION_MARGIN_DEG,
+    long_max: Math.max(...lons) + REGION_MARGIN_DEG,
+  };
+}
+
+/**
+ * One tile grid per covered country, keyed by country code. Regions may overlap where countries
+ * adjoin (Portugal sits partly inside Spain's box) — that costs a duplicate upsert, never a gap.
+ */
+function buildRegions(ports) {
+  const byCountry = new Map();
+  for (const p of ports) {
+    if (!p.commercial || !Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
+    if (!byCountry.has(p.country)) byCountry.set(p.country, []);
+    byCountry.get(p.country).push(p);
+  }
+  return [...byCountry.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([country, ps]) => {
+    const bbox = bboxForPorts(ps);
+    const rows = Math.max(1, Math.ceil((bbox.lat_max - bbox.lat_min) / TILE_MAX_LAT_DEG));
+    const cols = Math.max(1, Math.ceil((bbox.long_max - bbox.long_min) / TILE_MAX_LON_DEG));
+    return { country, bbox, tiles: makeGrid(bbox, rows, cols) };
+  });
+}
+
+const MARINESIA_REGIONS = buildRegions(portData.ports);
+// Flattened sweep order. Tile INDEX is the coverage key (see tileIndexFor), so this order is the
+// contract between the poller's per-tile success map and per-port coverage.
+const MARINESIA_TILES = MARINESIA_REGIONS.flatMap((r) => r.tiles);
 
 /**
  * Index of the tile containing (lat, lon), or -1 if outside the grid. Bounds are inclusive, so a
@@ -214,6 +258,6 @@ async function fetchTile(tile, key, fetchImpl = fetch) {
 }
 
 module.exports = {
-  AREA_URL, VESSEL_CAP, ITALY_BBOX, ITALY_TILES,
+  AREA_URL, VESSEL_CAP, MARINESIA_TILES, MARINESIA_REGIONS, bboxForPorts, buildRegions,
   marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile,
 };

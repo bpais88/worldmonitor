@@ -9,10 +9,10 @@
 // Elba, Aeolian, Bay of Naples, …) and was widened to Western Europe; the file
 // name is kept for now to avoid churning the relay's require() path.
 //
-// The static ports + LOCODEs live in italy-ferries.data.json so the CommonJS
+// The static ports + LOCODEs live in maritime-ports.data.json so the CommonJS
 // relay (scripts/ferry-eta.cjs) and this TS app share ONE source of truth.
 
-import ferryData from './italy-ferries.data.json';
+import ferryData from './maritime-ports.data.json';
 
 /** A ferry terminal — a mainland gateway or an island destination. */
 export interface FerryPort {
@@ -122,7 +122,7 @@ export function regionOf(lat: number, lon: number): Exclude<FreightRegion, 'all'
   return null;
 }
 
-export const ITALY_FERRY_PORTS: FerryPort[] = ferryData.ports as unknown as FerryPort[];
+export const ALL_PORTS: FerryPort[] = ferryData.ports as unknown as FerryPort[];
 
 /**
  * UN/LOCODE -> port id. Most ferries broadcast a LOCODE (e.g. "ITNAP") in the
@@ -142,7 +142,7 @@ export const PORT_LOCODES: Record<string, string> = ferryData.locodes;
 export const IMO_REGISTRY: Record<string, { freight: boolean }> =
   (ferryData as { imoRegistry?: Record<string, { freight: boolean }> }).imoRegistry ?? {};
 
-export const ITALY_FERRY_OPERATORS: FerryOperator[] = ferryData.operators as unknown as FerryOperator[];
+export const ALL_OPERATORS: FerryOperator[] = ferryData.operators as unknown as FerryOperator[];
 
 export const ITALY_FERRY_ROUTES: FerryRoute[] = [
   // Sardinia

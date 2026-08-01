@@ -5,7 +5,7 @@
     "buildCommand": "npm install --omit=dev --no-audit --no-fund",
     "watchPatterns": [
       "scripts/**",
-      "src/config/italy-ferries.data.json",
+      "src/config/maritime-ports.data.json",
       "package.json",
       "package-lock.json",
       "railway.json"

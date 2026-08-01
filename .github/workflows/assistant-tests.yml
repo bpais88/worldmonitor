@@ -2,12 +2,12 @@ name: Assistant tests
 
 # Runs the Marco assistant unit suite (node:test) on PRs touching the assistant or the
 # port data it derives coverage from. Includes the coverage guard: if a commercial port in a
-# new country is added to src/config/italy-ferries.data.json, coverage.test.mjs fails until
+# new country is added to src/config/maritime-ports.data.json, coverage.test.mjs fails until
 # Marco's coverage prose names it (otherwise the model treats those ports as out of scope).
 on:
   pull_request:
     # Invert (ignore-list, not include-list): the assistant imports across boundaries —
-    # scripts/ferry-eta.cjs and src/config/italy-ferries.data.json — so an enumerated include-list
+    # scripts/ferry-eta.cjs and src/config/maritime-ports.data.json — so an enumerated include-list
     # silently misses a change to those (and typecheck.yml ignores scripts/**). Run the suite on any
     # code change, skipping only obviously non-code paths.
     paths-ignore:
