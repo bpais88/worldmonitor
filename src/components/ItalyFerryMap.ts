@@ -208,6 +208,14 @@ export class ItalyFerryMap {
   }
 
   private onLoad(): void {
+    // Re-measure once the style is actually ready. The ResizeObserver alone is NOT enough: when the
+    // host already has its final size at construction, the observer fires exactly once — during
+    // observe(), before the style has loaded — and then never again, because the box never changes.
+    // A resize at that moment is a no-op, so the map is left having never run an update pass with a
+    // live style and paints nothing. Verified in production: the map stayed black with the observer
+    // deployed, and only appeared when the browser window was resized, which forced this same call
+    // later in the lifecycle. Doing it here is that same kick, at the right time, every time.
+    this.map.resize();
     this.addArrowIcon();
 
     // Geofence zones render UNDER the vessels (added first). Hidden until toggled on.
