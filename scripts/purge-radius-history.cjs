@@ -13,6 +13,13 @@
 // Deleting the pre-cutover rows for the affected ports starts a clean baseline instead of waiting
 // out the window.
 //
+// THE DELETE ALONE IS NOT ENOUGH — RESTART THE RELAY AFTER --apply
+// congestionRel is served from an in-memory map (`portBaselines` in scripts/ais-relay.cjs), loaded
+// on boot and refreshed on a 24h timer, with no reload endpoint. Deleting the rows underneath it
+// changes nothing that users see until that reload, so the old geometry's labels stay live for up
+// to a day — the exact wrong-but-confident answer this purge exists to remove. --apply prints the
+// redeploy command and a verification query; run them.
+//
 // RECOVERY TIME — READ THIS BEFORE RUNNING
 // It is ~3 WEEKS, not 3 days. `BASELINE_MIN_DAYS = 3` is measured per (port, dow, hour) bucket, and
 // a dow x hour bucket recurs ONCE A WEEK — so "3 distinct local days" inside that bucket means three
@@ -138,6 +145,10 @@ async function main() {
   console.log(`port_baselines    delete ${baselines[0].buckets} buckets (${baselines[0].trusted} currently trusted, n>=3)`);
   console.log('                  -> congestionRel returns null ("unknown") for these ports until rebuilt,');
   console.log('                     which is the designed degradation, not a silent "clear".');
+  console.log('                  -> BUT NOT UNTIL THE RELAY RELOADS: it serves congestionRel from an');
+  console.log('                     in-memory baselines map refreshed only on boot + every 24h, so');
+  console.log('                     deleting rows alone leaves the OLD labels live for up to a day.');
+  console.log('                     Restart the relay right after --apply (see the note it prints).');
   console.log('                  -> REBUILD TAKES ~3 WEEKS, not 3 days: n counts WEEKS (a dow x hour');
   console.log('                     bucket recurs weekly), so n>=3 needs three successive weeks.\n');
   console.log(`UNTOUCHED         port_events ${untouched[0].port_events}, arrived trips ${untouched[0].arrived_trips}`);
@@ -156,7 +167,28 @@ async function main() {
     sql`DELETE FROM port_baselines WHERE port_id = ANY(${portIds}::text[]) RETURNING 1`,
   ]);
   console.log(`DELETED  port_snapshots ${snapRes.length} rows, port_baselines ${baseRes.length} buckets.`);
-  console.log('Baselines start rebuilding on the next nightly refresh. Each dow x hour bucket');
+  console.log('');
+  console.log('  !! REQUIRED NEXT STEP — THE PURGE IS NOT YET VISIBLE !!');
+  console.log('  The relay answers congestionRel from an IN-MEMORY baselines map (ais-relay.cjs:');
+  console.log('  `portBaselines`), loaded on boot and refreshed on a 24h timer. There is no reload');
+  console.log('  endpoint. Until it reloads, /ais/ports keeps serving the very percentiles just');
+  console.log('  deleted — the old geometry\'s labels, for up to 24 hours, with nothing to show it.');
+  console.log('');
+  console.log('      railway redeploy --service worldmonitor-relay --yes');
+  console.log('');
+  // Scoped to the purged ids ONLY. A whole-response count is useless here: this purge touches 12 of
+  // 43 ports, so the other 31 keep healthy baselines and any global count comes back positive
+  // whether the reload worked or not. Print the offending port ids instead of a number — the empty
+  // list is the pass condition, and a non-empty one names exactly which port is still stale.
+  console.log('  Then confirm the labels really went unknown FOR THE PURGED PORTS (the other');
+  console.log('  ports keep their baselines, so a global count proves nothing):');
+  console.log('      curl -s -H "Authorization: Bearer $RELAY_SHARED_SECRET" "$PROD_RELAY_URL/ais/ports" \\');
+  console.log(`        | jq --argjson ids '${JSON.stringify(portIds)}' \\`);
+  console.log('            \'[.ports[] | select(.portId as $p | $ids | index($p)) \\');
+  console.log('              | select(.congestionRel != null) | .portId]\'');
+  console.log('  Expected: []   — anything listed is a purged port STILL serving a stale label.');
+  console.log('');
+  console.log('Baselines then start rebuilding on the next nightly refresh. Each dow x hour bucket');
   console.log('self-activates once it has been seen in 3 successive WEEKS of clean coverage_ok');
   console.log('history — so expect congestionRel = "unknown" for these ports for roughly 3 weeks.');
 }
