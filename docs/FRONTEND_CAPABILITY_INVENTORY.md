@@ -13,6 +13,61 @@ map **while keeping and documenting every existing feature**.
 
 ---
 
+## 0. Read this first — two findings that reframe everything below
+
+### 0.1 This repo is a FORK, and it is 3,629 commits behind
+
+`bpais88/worldmonitor` is a fork of **`koala73/worldmonitor`**.
+
+| | Ours | Upstream |
+|---|---|---|
+| Version | **2.5.24** | **2.10.0** |
+| Commits the other side has that we don't | — | **3,629** |
+| Our own commits | **175** | — |
+
+**`worldmonitor.app` is upstream's deployment, not ours.** Ours is a separate Vercel project
+(`bruno-pais-projects/worldmonitor`). Confirmed: `worldmonitor.app/ferry.html` returns the generic
+SPA shell with zero freight content — our freight board is not live there.
+
+Upstream's current UI already has things a redesign would otherwise propose from scratch: a **2D/3D
+toggle**, mission/workspace presets (Crisis Desk, Supply-Chain Risk, Energy Security, …), a
+searchable layers panel, and OpenFreeMap basemap tiles. Upstream's dashboard has **no
+`.maplibregl-map` element at all** — they have moved to a different renderer than the one this
+fork uses.
+
+**So the first decision is strategic, not visual: what is our relationship to upstream?** Rebuilding
+the map on a 3,629-commit-old base risks reimplementing work that already exists 5 minor versions
+ahead. Options are (a) sync/rebase onto upstream and carry our 175 commits forward, (b) stay
+diverged and build our own, (c) cherry-pick specific map work. That choice governs everything else
+in this document.
+
+### 0.2 Our basemap does not render — the map is blank, not merely plain
+
+Measured on our own production deployment (`worldmonitor-g2g1u74g1`), after a full settle:
+
+```
+vectorTiles requested : 0          <-- never loads a single map tile
+cartocdn requests     : 4          <-- style.json, tiles.json, sprite@2x.json, sprite@2x.png
+.maplibregl-map       : 1395x353   <-- correctly sized
+.maplibregl-canvas    : 1395x353   (2790x706 @dpr2)
+.maplibregl-canvas-container : height 0
+console errors        : none
+```
+
+The style, TileJSON and sprites all load; **no `.pbf`/`.mvt` vector tile is ever fetched.** The map
+area is black apart from what deck.gl draws on top. Same symptom on `ferry.html`: host div 422px
+tall, canvas-container 0px, zero tiles, and a completely black map under a fully populated
+UI (1,385 vessels, live operator counts).
+
+This is a **rendering defect, not a design shortcoming**, and it very likely accounts for much of
+the "the map is very limited" experience. It should be fixed and re-assessed *before* any redesign
+is scoped — the honest baseline for a visual proposal is a map that actually draws its basemap.
+
+*(Unrelated, spotted on ferry.html: the header renders `LIVE · as of 10:56 CEST1385` — the vessel
+count is being concatenated into the timestamp string.)*
+
+---
+
 ## 1. The headline finding
 
 The product is **data-rich and display-poor**. There is an enormous amount of live intelligence
@@ -92,9 +147,20 @@ Toggling flows through `event-handlers.ts:671`, and `data-loader.ts` uses the sa
 which fetches to run — **layers are lazily loaded, so toggling is a data-cost decision, not just a
 visual one.** This is a real asset for a redesign: turning a layer on already implies fetching it.
 
-There is **no dedicated legend or layer-control surface on the map itself** — discovery happens via
-settings and the command palette (`src/config/commands.ts`, `search-manager.ts`). *For 68 layers,
-that is almost certainly the single biggest discoverability gap.*
+**Correction after the visual audit:** an earlier draft of this document claimed there was no on-map
+legend or layer control. That was wrong — reading the source alone missed it. The running app has
+both:
+
+- a **LAYERS panel** docked top-left, with a "Search layers…" box, per-layer checkboxes and an
+  `(i)` info affordance on each row
+- a **LEGEND strip** along the bottom of the map (`High Alert · Elevated · Monitoring · Conflict
+  Zone · Base · Nuclear`)
+- a time-range selector above it (`1h / 6h / 24h / 48h / 7d / All`)
+
+The command palette (`src/config/commands.ts`, `search-manager.ts`) is an additional route, not the
+only one. The real discoverability question is therefore narrower than "there is no control": it is
+whether a flat, searchable checkbox list is the right instrument for ~47 toggles, and whether the
+legend can express 68 layers when it currently names 6 categories.
 
 ---
 
@@ -187,6 +253,7 @@ with the relay, so **the assistant and the map already read from one source of t
 
 Stated plainly, as the input to the proposal:
 
+0. **No basemap at all, in production** — see §0.2. Everything below is secondary to this.
 1. **No visual hierarchy.** 76% of layers are dots; importance can only be shown via colour/radius.
 2. **No temporal dimension on the main map**, despite `VoyageReplay` + `PlaybackControl` existing
    and the backend holding months of time-series.
@@ -216,6 +283,20 @@ Stated plainly, as the input to the proposal:
 Verified by reading source: layer counts and types, `MapLayers` surface, renderer split, basemap
 styles, variant configs, endpoint lists, component and service counts, DB schema, 50vh map height.
 
-**Not yet done: a visual audit of the running app.** Layer *density in practice*, real-world
-overlap, colour collisions and actual perceived hierarchy need the live site, and should be
-step 1b before any proposal is written.
+**Visual audit: done** (step 1b, same day) against our own production deployment and, as a control,
+upstream's. It produced the two findings in §0 and corrected the layer-control claim in §2. Measured
+directly in-page: element geometry, resource timings, vector-tile counts, console errors.
+
+**Still not verified:** layer density *with a working basemap* — colour collisions, overlap and
+perceived hierarchy at various zooms can only be judged once tiles render (§0.2). That re-assessment
+is the remaining input to a design proposal, and is deliberately blocked on the basemap fix rather
+than guessed at.
+
+## 9. Recommended sequence
+
+1. **Decide the upstream question** (§0.1) — it governs whether map work lands here or on a synced
+   base. Everything else is cheaper after this.
+2. **Fix the basemap** (§0.2) — small, isolated, and it changes what "the map looks limited" even
+   means.
+3. **Re-run the visual audit** on a working map, at several zooms and across the four variants.
+4. *Then* write the redesign proposal, grounded in what it actually looks like.
