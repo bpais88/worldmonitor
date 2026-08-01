@@ -160,6 +160,7 @@ export class ItalyFerryMap {
   private pendingTripId: number | null = null;  // `?trip=` deep-link that arrived before the map was ready
   private voyageSeq = 0;                        // bumps on every selection/close; stale async voyage loads bail
   private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
+  private resizeObserver: ResizeObserver | null = null; // see setupResizeObserver — this is load-bearing
 
   constructor(container: HTMLElement) {
     this.map = new maplibregl.Map({
@@ -177,6 +178,33 @@ export class ItalyFerryMap {
     this.popup.on('close', () => { this.selectedMmsi = null; this.voyageSeq++; this.replay?.clear(); setTripUrlParam(null); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
+    this.setupResizeObserver(container);
+  }
+
+  /**
+   * Re-measure whenever the host's box changes — WITHOUT this the map renders nothing at all.
+   *
+   * The panel builds its scaffold and constructs this map in the same synchronous pass, and hides
+   * the host with `display:none` whenever the mode isn't "vessels". Either way MapLibre can latch a
+   * zero-sized viewport at construction, and a zero viewport means NO TILE IS EVER IN VIEW: the
+   * style, TileJSON and sprites all load (they are main-thread fetches that don't depend on the
+   * viewport) while not one .pbf is ever requested. The result looks like a broken basemap rather
+   * than a sizing bug, which is exactly why it survived — there is no error, no failed request, and
+   * the host measures correctly by the time anyone inspects it.
+   *
+   * Observed in production: the map was blank until the browser window itself was resized, which
+   * finally fired MapLibre's own observer; the full basemap and ~1,900 vessels then appeared at
+   * once. DeckGLMap has had this observer since it was written (setupResizeObserver there) — this
+   * map simply never got one, and relied on the panel remembering to call resize().
+   */
+  private setupResizeObserver(container: HTMLElement): void {
+    this.resizeObserver = new ResizeObserver(() => {
+      // Only meaningful once the host actually occupies space; resizing to 0x0 is a no-op that
+      // would just re-latch the empty viewport.
+      const { width, height } = container.getBoundingClientRect();
+      if (width > 0 && height > 0) this.map.resize();
+    });
+    this.resizeObserver.observe(container);
   }
 
   private onLoad(): void {
@@ -430,6 +458,8 @@ export class ItalyFerryMap {
   }
 
   public destroy(): void {
+    this.resizeObserver?.disconnect();
+    this.resizeObserver = null;
     this.map.remove();
   }
 }
