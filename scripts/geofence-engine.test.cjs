@@ -25,11 +25,71 @@ test('buildPortGeofences seeds one circle per commercial port with valid coords'
   assert.equal(rtm.kind, 'port');
   assert.equal(rtm.geometry.type, 'circle');
   assert.deepEqual(rtm.geometry.center, { lat: 51.95, lon: 4.14 });
-  assert.equal(rtm.geometry.radiusKm, 8);
+  assert.equal(rtm.geometry.radiusKm, 8); // no per-port radiusKm on this fixture → fleet default
   assert.deepEqual(rtm.rules.events, ['enter', 'exit', 'dwell']);
   assert.equal(rtm.rules.appliesTo, 'freight');
   assert.equal(rtm.enabled, true);
   assert.equal(rtm.updatedBy, 'system');
+});
+
+// --- One circle, two consumers ------------------------------------------------------------------
+// A port geofence and that port's congestion count MUST describe the same disc. They are computed
+// in different modules for different purposes — geofences drive enter/exit/dwell (arrivals, trips,
+// the forecast's fuel), port-status drives the atPort count — and the only thing that kept them
+// aligned used to be a duplicated `8` and a comment saying "kept in sync". The moment port rows
+// gained their own `radiusKm`, that comment was the only thing still true: Rotterdam counted to
+// 20 km while its geofence fired at 8. These tests make the agreement mechanical.
+const { radiusFor, DEFAULTS: PORT_STATUS_DEFAULTS } = require('./port-status.cjs');
+const { haversineKm } = require('./ferry-eta.cjs');
+const REGISTRY = require('../src/config/maritime-ports.data.json').ports.filter((p) => p.commercial);
+
+test('a port geofence uses THAT port\'s at-port radius, not the fleet default', () => {
+  const gfs = buildPortGeofences([
+    { id: 'wide', name: 'Wide', lat: 51.95, lon: 4.14, commercial: true, radiusKm: 20 },
+    { id: 'tight', name: 'Tight', lat: 45.44, lon: 12.34, commercial: true, radiusKm: 2.5 },
+    { id: 'plain', name: 'Plain', lat: 44.41, lon: 8.9, commercial: true },
+    { id: 'bogus', name: 'Bogus', lat: 40.84, lon: 14.26, commercial: true, radiusKm: 'wide' },
+  ]);
+  const r = (id) => gfs.find((g) => g.portId === id).geometry.radiusKm;
+  assert.equal(r('wide'), 20);
+  assert.equal(r('tight'), 2.5);
+  assert.equal(r('plain'), PORT_STATUS_DEFAULTS.radiusKm);
+  assert.equal(r('bogus'), PORT_STATUS_DEFAULTS.radiusKm); // unusable value → default, never 0/NaN
+});
+
+test('opts.radiusKm moves the DEFAULT only — a port\'s own radius still wins', () => {
+  const gfs = buildPortGeofences([
+    { id: 'own', name: 'Own', lat: 51.95, lon: 4.14, commercial: true, radiusKm: 20 },
+    { id: 'none', name: 'None', lat: 44.41, lon: 8.9, commercial: true },
+  ], { radiusKm: 5 });
+  assert.equal(gfs.find((g) => g.portId === 'own').geometry.radiusKm, 20);
+  assert.equal(gfs.find((g) => g.portId === 'none').geometry.radiusKm, 5);
+});
+
+test('every real port geofence matches its port-status disc exactly', () => {
+  for (const g of buildPortGeofences(REGISTRY)) {
+    const p = REGISTRY.find((x) => x.id === g.portId);
+    assert.equal(g.geometry.radiusKm, radiusFor(p, PORT_STATUS_DEFAULTS),
+      `${p.id}: geofence radius ${g.geometry.radiusKm}km != at-port radius ${radiusFor(p, PORT_STATUS_DEFAULTS)}km — ` +
+        'arrivals/dwell and the congestion count would describe different circles for this port.');
+  }
+});
+
+test('no two port geofences overlap', () => {
+  // The mirror of port-status.test.cjs\'s non-overlap invariant, enforced on the geometry actually
+  // served at /ais/geofences. Without it the four sub-16km pairs (Savona/Vado Ligure, Venezia/Porto
+  // Marghera, London Gateway/Tilbury, Immingham/Hull) kept double-counting here after port-status
+  // stopped — one vessel raising an enter event at two ports.
+  const gfs = buildPortGeofences(REGISTRY);
+  for (let i = 0; i < gfs.length; i++) {
+    for (let j = i + 1; j < gfs.length; j++) {
+      const a = gfs[i], b = gfs[j];
+      const gap = haversineKm(a.geometry.center, b.geometry.center);
+      assert.ok(a.geometry.radiusKm + b.geometry.radiusKm <= gap,
+        `${a.portId} (r=${a.geometry.radiusKm}km) and ${b.portId} (r=${b.geometry.radiusKm}km) are ` +
+          `${gap.toFixed(1)}km apart — their zones overlap, so one vessel enters both.`);
+    }
+  }
 });
 
 test('pointInRing: inside vs outside a square', () => {

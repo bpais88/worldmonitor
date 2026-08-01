@@ -165,4 +165,4 @@ function smoothPortStatus(ports, history, n = 5, opts = {}) {
   return ports;
 }
 
-module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, DEFAULTS };
+module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, radiusFor, DEFAULTS };

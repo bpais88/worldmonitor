@@ -3,7 +3,7 @@
 const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
-const { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus } = require('./port-status.cjs');
+const { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, radiusFor, DEFAULTS } = require('./port-status.cjs');
 
 // Gioia Tauro terminal.
 const PORT = { portId: 'gioia_tauro', name: 'Gioia Tauro', lat: 38.43, lon: 15.9, region: 'Calabria' };
@@ -156,7 +156,10 @@ test('smoothPortStatus medians atPort over history and recomputes congestion', (
 const { ports: ALL_PORTS } = require('../src/config/maritime-ports.data.json');
 const { haversineKm } = require('./ferry-eta.cjs');
 const COMMERCIAL = ALL_PORTS.filter((p) => p.commercial);
-const radiusOf = (p) => (Number.isFinite(p.radiusKm) ? p.radiusKm : 8);
+// Resolve through the module's own helper + defaults, never a literal 8: a hardcoded copy here
+// would keep passing against the wrong number the moment DEFAULTS.radiusKm moved, which is exactly
+// the failure this whole invariant exists to catch.
+const radiusOf = (p) => radiusFor(p, DEFAULTS);
 
 test('a port row can override the at-port radius', () => {
   const v = { mmsi: 'r', lat: PORT.lat + 0.09, lon: PORT.lon, speed: 0, timestamp: NOW }; // ~10km out
@@ -230,7 +233,7 @@ test('an invalid threshold override falls back to the default', () => {
 test('any threshold override in the registry is sane', () => {
   for (const p of COMMERCIAL) {
     if (p.busyAt === undefined && p.congestedAt === undefined) continue;
-    const busyAt = p.busyAt ?? 4, congestedAt = p.congestedAt ?? 8;
+    const busyAt = p.busyAt ?? DEFAULTS.busyAt, congestedAt = p.congestedAt ?? DEFAULTS.congestedAt;
     assert.ok(Number.isFinite(busyAt) && busyAt > 0, `${p.id}: busyAt must be a positive number`);
     assert.ok(Number.isFinite(congestedAt) && congestedAt > busyAt,
       `${p.id}: congestedAt (${congestedAt}) must exceed busyAt (${busyAt}), else "busy" is unreachable`);
