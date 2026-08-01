@@ -176,10 +176,17 @@ async function main() {
   console.log('');
   console.log('      railway redeploy --service worldmonitor-relay --yes');
   console.log('');
-  console.log('  Then confirm the labels really went unknown:');
-  console.log('      curl -s -H "Authorization: Bearer $RELAY_SHARED_SECRET" \\');
-  console.log('        "$PROD_RELAY_URL/ais/ports" | jq \'[.ports[]|select(.congestionRel!=null)]|length\'');
-  console.log('  It should EXCLUDE every purged port (0 if all 12 were purged and no others qualify).');
+  // Scoped to the purged ids ONLY. A whole-response count is useless here: this purge touches 12 of
+  // 43 ports, so the other 31 keep healthy baselines and any global count comes back positive
+  // whether the reload worked or not. Print the offending port ids instead of a number — the empty
+  // list is the pass condition, and a non-empty one names exactly which port is still stale.
+  console.log('  Then confirm the labels really went unknown FOR THE PURGED PORTS (the other');
+  console.log('  ports keep their baselines, so a global count proves nothing):');
+  console.log('      curl -s -H "Authorization: Bearer $RELAY_SHARED_SECRET" "$PROD_RELAY_URL/ais/ports" \\');
+  console.log(`        | jq --argjson ids '${JSON.stringify(portIds)}' \\`);
+  console.log('            \'[.ports[] | select(.portId as $p | $ids | index($p)) \\');
+  console.log('              | select(.congestionRel != null) | .portId]\'');
+  console.log('  Expected: []   — anything listed is a purged port STILL serving a stale label.');
   console.log('');
   console.log('Baselines then start rebuilding on the next nightly refresh. Each dow x hour bucket');
   console.log('self-activates once it has been seen in 3 successive WEEKS of clean coverage_ok');
