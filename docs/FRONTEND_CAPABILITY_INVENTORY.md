@@ -15,7 +15,20 @@ map **while keeping and documenting every existing feature**.
 
 ## 0. Read this first — two findings that reframe everything below
 
-### 0.1 This repo is a FORK, and it is 3,629 commits behind
+### 0.1 This repo is a fork of a shared ancestor — but we are our own product
+
+**Decided:** we are not tracking upstream. This is our project; the fork relationship is historical
+only. Recorded here purely so nobody re-derives it and mistakes upstream's site for ours.
+
+Two practical consequences worth remembering:
+
+- **`worldmonitor.app` is upstream's deployment, not ours.** Don't audit it, don't screenshot it as
+  "our app". Ours is the `bruno-pais-projects/worldmonitor` Vercel project.
+- **Do not add an `upstream` git remote.** Doing so silently retargets `gh pr create` at
+  `koala73/worldmonitor`, which fails with a confusing "No commits between main and …". If a PR
+  ever fails that way, check `git remote -v` first, or pass `--repo bpais88/worldmonitor`.
+
+The original comparison, for the record:
 
 `bpais88/worldmonitor` is a fork of **`koala73/worldmonitor`**.
 
@@ -35,13 +48,11 @@ searchable layers panel, and OpenFreeMap basemap tiles. Upstream's dashboard has
 `.maplibregl-map` element at all** — they have moved to a different renderer than the one this
 fork uses.
 
-**So the first decision is strategic, not visual: what is our relationship to upstream?** Rebuilding
-the map on a 3,629-commit-old base risks reimplementing work that already exists 5 minor versions
-ahead. Options are (a) sync/rebase onto upstream and carry our 175 commits forward, (b) stay
-diverged and build our own, (c) cherry-pick specific map work. That choice governs everything else
-in this document.
+**Resolved: (b) — stay diverged and build our own.** Upstream's feature set is therefore not a
+constraint, a benchmark, or a source to cherry-pick from. Everything in this document describes our
+codebase and our deployment only.
 
-### 0.2 Our basemap does not render — the map is blank, not merely plain
+### 0.2 The freight map rendered nothing — DIAGNOSED AND FIXED
 
 Measured on our own production deployment (`worldmonitor-g2g1u74g1`), after a full settle:
 
@@ -49,19 +60,38 @@ Measured on our own production deployment (`worldmonitor-g2g1u74g1`), after a fu
 vectorTiles requested : 0          <-- never loads a single map tile
 cartocdn requests     : 4          <-- style.json, tiles.json, sprite@2x.json, sprite@2x.png
 .maplibregl-map       : 1395x353   <-- correctly sized
-.maplibregl-canvas    : 1395x353   (2790x706 @dpr2)
-.maplibregl-canvas-container : height 0
 console errors        : none
 ```
 
-The style, TileJSON and sprites all load; **no `.pbf`/`.mvt` vector tile is ever fetched.** The map
-area is black apart from what deck.gl draws on top. Same symptom on `ferry.html`: host div 422px
-tall, canvas-container 0px, zero tiles, and a completely black map under a fully populated
-UI (1,385 vessels, live operator counts).
+The style, TileJSON and sprites all load; **no `.pbf` vector tile is ever fetched.** The map area
+is black apart from what deck.gl draws. On `ferry.html` it was worse — a completely black map under
+a fully populated UI (1,937 vessels, live operator counts, working filters).
 
-This is a **rendering defect, not a design shortcoming**, and it very likely accounts for much of
-the "the map is very limited" experience. It should be fixed and re-assessed *before* any redesign
-is scoped — the honest baseline for a visual proposal is a map that actually draws its basemap.
+**Root cause: a zero-sized viewport at construction, never re-measured.** `ItalyFerryPanel` builds
+its scaffold and constructs the map in one synchronous pass, and hides the host with `display:none`
+whenever the mode isn't "vessels". Either path lets MapLibre latch a 0x0 viewport — and with a zero
+viewport *no tile is ever in view*, so none is requested, while the style/TileJSON/sprites still
+load because those are main-thread fetches independent of the viewport. No error, no failed request,
+and the host measures correctly by the time anyone inspects it. It reads as "the basemap is broken"
+rather than "the map has no size".
+
+Ruled out first, each by direct measurement rather than inference:
+
+| Suspect | Verdict |
+|---|---|
+| CSP blocking tiles | **No** — from the page, a real tile fetches `200` (691 KB), a glyph `200`, a blob worker spawns |
+| MapLibre / CARTO | **No** — a bare map with the same style URL on the same page renders perfectly |
+| `ItalyFerryMap` itself | **No** — constructed against a pre-sized container it renders perfectly |
+| `.maplibregl-canvas-container` height 0 | **Red herring.** An earlier draft of this document called this out as the smoking gun. It is not — the *working* control map shows height 0 too. That is normal MapLibre DOM. |
+
+Decisive confirmation: **resizing the browser window on production made the whole map appear at
+once** — basemap and ~1,900 vessels — because that finally fired MapLibre's own observer.
+
+Fixed by giving `ItalyFerryMap` the `ResizeObserver` that `DeckGLMap` has always had, guarded on a
+non-zero box (PR #128).
+
+**Still open:** the main dashboard map *has* that observer yet still showed a partial render in this
+audit. That needs its own re-check now the freight map is fixed.
 
 *(Unrelated, spotted on ferry.html: the header renders `LIVE · as of 10:56 CEST1385` — the vessel
 count is being concatenated into the timestamp string.)*
@@ -253,7 +283,8 @@ with the relay, so **the assistant and the map already read from one source of t
 
 Stated plainly, as the input to the proposal:
 
-0. **No basemap at all, in production** — see §0.2. Everything below is secondary to this.
+0. **The freight map drew no basemap at all** — see §0.2. Fixed (#128); the main dashboard map still
+   needs re-checking. Everything below is secondary to having a map that renders.
 1. **No visual hierarchy.** 76% of layers are dots; importance can only be shown via colour/radius.
 2. **No temporal dimension on the main map**, despite `VoyageReplay` + `PlaybackControl` existing
    and the backend holding months of time-series.
@@ -294,9 +325,8 @@ than guessed at.
 
 ## 9. Recommended sequence
 
-1. **Decide the upstream question** (§0.1) — it governs whether map work lands here or on a synced
-   base. Everything else is cheaper after this.
-2. **Fix the basemap** (§0.2) — small, isolated, and it changes what "the map looks limited" even
-   means.
-3. **Re-run the visual audit** on a working map, at several zooms and across the four variants.
-4. *Then* write the redesign proposal, grounded in what it actually looks like.
+1. ~~Decide the upstream question~~ — **done**: we stay diverged (§0.1).
+2. ~~Fix the freight basemap~~ — **done** (§0.2, PR #128).
+3. **Re-check the main dashboard map**, which has a ResizeObserver yet still rendered partially.
+4. **Re-run the visual audit** on a working map, at several zooms and across the four variants.
+5. *Then* write the redesign proposal, grounded in what it actually looks like.
