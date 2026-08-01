@@ -4,7 +4,7 @@ const { test } = require('node:test');
 const { strict: assert } = require('node:assert');
 
 const {
-  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile, MARINESIA_TILES, MARINESIA_REGIONS, buildRegions,
+  marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile, MARINESIA_TILES, MARINESIA_REGIONS, buildRegions, MAX_TILE_AREA_DEG2, VESSEL_CAP,
 } = require('./marinesia.cjs');
 const { ports: REGISTRY_PORTS } = require('../src/config/maritime-ports.data.json');
 const COMMERCIAL = REGISTRY_PORTS.filter((p) => p.commercial);
@@ -125,11 +125,29 @@ test('a newly registered country gets tiles without touching this file', () => {
   assert.ok(tileIndexFor(regions[0].tiles, 10.5, 10.5) >= 0);
 });
 
-test('each tile stays within the span the 2000-vessel cap was validated at', () => {
+test('no tile is large enough to hit the 2000-vessel cap at observed densities', () => {
+  // AREA, not span, is the thing that fills a tile — and the original 4.0 x 4.5 caps were sized to
+  // the Italian grid's area while northern European waters run ~2x denser. The result shipped a
+  // single Dutch tile covering Rotterdam + the Dover Strait that measured EXACTLY 2000 vessels on
+  // 2026-08-01: the cap, silently truncated, with no signal in the payload. Peak measured density
+  // was ~230/deg^2 (GB Channel), so MAX_TILE_AREA_DEG2 keeps the worst case near 70% of the cap.
   for (const t of MARINESIA_TILES) {
-    assert.ok(t.lat_max - t.lat_min <= 4.0 + 1e-9, 'tile lat span too wide for the per-request cap');
-    assert.ok(t.long_max - t.long_min <= 4.5 + 1e-9, 'tile lon span too wide for the per-request cap');
+    const area = (t.lat_max - t.lat_min) * (t.long_max - t.long_min);
+    assert.ok(area <= MAX_TILE_AREA_DEG2 + 1e-9,
+      `tile lat[${t.lat_min},${t.lat_max}] lon[${t.long_min},${t.long_max}] is ${area.toFixed(2)} deg^2, ` +
+      `over the ${MAX_TILE_AREA_DEG2} deg^2 ceiling — at ~230 vessels/deg^2 it can hit the ${VESSEL_CAP} cap ` +
+      'and silently return an arbitrary subset.');
   }
+});
+
+test('the Rotterdam/Dover tile that measured AT CAP is now subdivided', () => {
+  // Regression pin for the specific tile that truncated. Rotterdam must resolve to a tile whose
+  // area is comfortably under the ceiling, not the 14.24 deg^2 box that returned exactly 2000.
+  const idx = tileIndexFor(MARINESIA_TILES, 51.95, 4.14);
+  assert.ok(idx >= 0, 'Rotterdam must fall inside a tile');
+  const t = MARINESIA_TILES[idx];
+  const area = (t.lat_max - t.lat_min) * (t.long_max - t.long_min);
+  assert.ok(area < 14.24, `Rotterdam's tile is ${area.toFixed(2)} deg^2 — the truncating box was 14.24`);
 });
 
 test('fetchTile returns the data array on success (injected fetch)', async () => {
@@ -217,6 +235,39 @@ test('fetchTile throws on an API error envelope', async () => {
     text: async () => JSON.stringify({ error: true, message: 'Too Many Requests' }),
   });
   await assert.rejects(() => fetchTile(MARINESIA_TILES[0], 'k', fakeFetch), /Too Many Requests/);
+});
+
+test('an EMPTY box (404 "No data found") is a successful poll, not a failure', async () => {
+  // THE bug that silently disabled the fallback for five countries. Because the grid is derived
+  // from a bbox around each country's ports, some tiles are entirely inland — central Spain has
+  // one — and the API answers 404 {"error":true,"message":"No data found"} on every sweep. Treating
+  // that as an error meant the poller never marked the tile as seen, so tilesSeen could never reach
+  // tileCount, relayFreshness kept `warming` true forever, marinesiaFresh() never returned true,
+  // and NO port could ever be granted fallback coverage. Verified live: polled_ok stuck at 24/25.
+  const fakeFetch = async () => ({
+    ok: false, status: 404,
+    text: async () => JSON.stringify({ error: true, message: 'No data found' }),
+  });
+  const out = await fetchTile(MARINESIA_TILES[0], 'k', fakeFetch);
+  assert.deepEqual(out, [], 'an empty box must resolve to zero vessels, never throw');
+});
+
+test('a 404 that is NOT "no data" still throws', async () => {
+  const fakeFetch = async () => ({
+    ok: false, status: 404,
+    text: async () => JSON.stringify({ error: true, message: 'Endpoint not found' }),
+  });
+  await assert.rejects(() => fetchTile(MARINESIA_TILES[0], 'k', fakeFetch), /Endpoint not found/);
+});
+
+test('a non-JSON error keeps a snippet of the body', async () => {
+  // The 403 HTML block page that took ten days to diagnose read only as "non-JSON response
+  // (HTTP 403)" — indistinguishable from a parser bug. The body is the evidence; keep some.
+  const fakeFetch = async () => ({
+    ok: false, status: 403,
+    text: async () => '<!DOCTYPE html><html><body>Access denied by edge</body></html>',
+  });
+  await assert.rejects(() => fetchTile(MARINESIA_TILES[0], 'k', fakeFetch), /403.*Access denied by edge/s);
 });
 
 test('tileIndexFor finds a tile that really contains the point', () => {

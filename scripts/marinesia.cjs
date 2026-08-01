@@ -165,11 +165,42 @@ const portData = require('../src/config/maritime-ports.data.json');
 // Grown around each country's own ports so vessels are seen on APPROACH, not just alongside
 // (~0.6° ≈ 65 km, comfortably more than the widest at-port radius).
 const REGION_MARGIN_DEG = 0.6;
-// Cap on a single tile's span. The endpoint truncates at 2000 vessels per box with no pagination,
-// so tiles must stay small enough to fit under it; this matches the density the original Italian
-// 3×3 (3.33° × 4.33°) was validated at.
-const TILE_MAX_LAT_DEG = 4.0;
-const TILE_MAX_LON_DEG = 4.5;
+// Cap on a single tile's span. The endpoint truncates at 2000 vessels per box with NO pagination
+// and no signal in the payload, so an oversized tile silently returns an arbitrary subset.
+//
+// These were originally sized to the AREA of the Italian 3x3 (4.0 x 4.5). That was the wrong
+// axis: what fills a tile is DENSITY, not area, and northern European waters are far denser than
+// the Tyrrhenian. Measured live on 2026-08-01, vessels per square degree:
+//
+//   GB  Channel/Thames   227/deg^2   (1535 in 6.76 deg^2)
+//   ES  Alboran/Gibraltar 169/deg^2  (1911 in 11.33 deg^2 — 96% of cap)
+//   NL  Rotterdam/Dover  >140/deg^2  (2000 in 14.24 deg^2 — AT CAP, truncated)
+//   IT  busiest tile     112/deg^2   (1310 in 11.71 deg^2)
+//
+// 2.5 x 2.5 (6.25 deg^2) clears the cap for ES, GB, IT and PT — ES drops from 96% of cap to 56%,
+// which was the most urgent case since it would have truncated on any busy day.
+//
+// IT DOES NOT FIX THE NETHERLANDS, and that is not a tuning oversight. Measured the same day:
+//
+//   Rotterdam mouth, 1.00 deg^2 -> 2000 vessels (capped)
+//   Rotterdam mouth, 0.49 deg^2 -> 1808 vessels  => ~3700/deg^2
+//
+// Roughly 16x the Channel's density. Staying under the cap there needs ~0.38 deg^2 tiles, and
+// applying that resolution to these country-sized bounding boxes yields ~677 tiles — a 2.4 HOUR
+// sweep at the fixed 5 req/min. So the country-bbox grid cannot cover the busiest port at any
+// workable sweep time; two of the four Dutch tiles still return exactly 2000, Rotterdam's among
+// them. The fix is to tile around PORTS rather than countries (~31-43 small boxes, ~7-9 min
+// sweep) — a redesign, tracked separately. This constant is a real but PARTIAL improvement.
+//
+// Cost: more tiles means a longer round-robin sweep, NOT more requests — the poll interval is
+// fixed by the 5 req/min rate limit either way, so quota is unchanged. Only worst-case tile age
+// grows (5.4 -> 11.3 min), and MARINESIA_STALE_MS in the relay derives from the tile count, so it
+// tracks this automatically.
+const TILE_MAX_LAT_DEG = 2.5;
+const TILE_MAX_LON_DEG = 2.5;
+// Asserted in tests so a future span change can't silently re-create an even larger truncating
+// tile. Note this bounds AREA, which is necessary but — as the Dutch case proves — not sufficient.
+const MAX_TILE_AREA_DEG2 = TILE_MAX_LAT_DEG * TILE_MAX_LON_DEG;
 
 /** Split a bbox into a rows×cols grid of sub-boxes. */
 function makeGrid(bbox, rows, cols) {
@@ -252,12 +283,24 @@ async function fetchTile(tile, key, fetchImpl = fetch) {
   const res = await fetchImpl(`${AREA_URL}?${qs}`, { headers: { Accept: 'application/json' } });
   const body = await res.text();
   let json;
-  try { json = JSON.parse(body); } catch { throw new Error(`Marinesia non-JSON response (HTTP ${res.status})`); }
+  // Keep a snippet of the body: a 403 from the edge (expired plan / blocked account) is an HTML
+  // page, and discarding it cost ten days of "why is the fallback dark?" — the error said only
+  // "non-JSON response (HTTP 403)", which reads like a parser bug rather than an account problem.
+  try { json = JSON.parse(body); } catch {
+    throw new Error(`Marinesia non-JSON response (HTTP ${res.status}): ${body.slice(0, 160).replace(/\s+/g, ' ')}`);
+  }
+  // An EMPTY box answers 404 {"error":true,"message":"No data found"}. That is a successful poll of
+  // a box with no vessels, not a failure — and since the grid is derived from a bbox around each
+  // country's ports, some tiles are entirely inland (central Spain has one) and answer this on every
+  // single sweep. Treating it as an error meant tilesSeen could never reach tileCount, so
+  // relayFreshness kept `warming` true FOREVER, marinesiaFresh() never returned true, and the whole
+  // fallback could never engage — one landlocked tile silently disabling coverage for five countries.
+  if (res.status === 404 && json && /no data found/i.test(String(json.message || ''))) return [];
   if (!res.ok || json.error) throw new Error(`Marinesia error (HTTP ${res.status}): ${json.message || body.slice(0, 120)}`);
   return Array.isArray(json.data) ? json.data : [];
 }
 
 module.exports = {
-  AREA_URL, VESSEL_CAP, MARINESIA_TILES, MARINESIA_REGIONS, bboxForPorts, buildRegions,
+  AREA_URL, VESSEL_CAP, MAX_TILE_AREA_DEG2, MARINESIA_TILES, MARINESIA_REGIONS, bboxForPorts, buildRegions,
   marinesiaTypeToShipType, marinesiaStatusToNavStatus, normalizeMarinesiaVessel, mergeVesselStatic, makeGrid, tileIndexFor, fetchTile,
 };
