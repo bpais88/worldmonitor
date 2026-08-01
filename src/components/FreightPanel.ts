@@ -1,6 +1,6 @@
 import { Panel } from './Panel';
 import { escapeHtml, sanitizeUrl } from '@/utils/sanitize';
-import { ItalyFerryMap } from './ItalyFerryMap';
+import { FreightMap } from './FreightMap';
 import {
   getTrackedFreightVessels,
   type TrackedFerry,
@@ -80,7 +80,7 @@ const WAITING_HIGH = 4;
  * from AIS, with a region filter and a Vessels/Ports toggle. Self-contained: call
  * start() after mounting to begin polling.
  */
-export class ItalyFerryPanel extends Panel {
+export class FreightPanel extends Panel {
   private ferries: TrackedFerry[] = [];
   private ports: PortStatus[] = [];
   private disruptions: DisruptionEvent[] = [];
@@ -91,11 +91,15 @@ export class ItalyFerryPanel extends Panel {
   private geofences: Geofence[] | null = null; // lazy-loaded on first toggle
   private searchText = '';
   private timer: ReturnType<typeof setInterval> | null = null;
-  private map: ItalyFerryMap | null = null;
+  private map: FreightMap | null = null;
   private mapMounted = false;
   private readonly ferryByMmsi = new Map<string, TrackedFerry>();
 
   constructor() {
+    // The id stays 'italy-ferries' ON PURPOSE even though nothing here is Italy-specific any more:
+    // it is a PERSISTED key (localStorage panel layout, see STORAGE_KEYS.panels). Renaming it would
+    // silently discard every existing user's saved layout for this panel. The class, file and title
+    // are the parts users and developers actually read, and those now say what this is.
     super({ id: 'italy-ferries', title: 'European Freight', showCount: true });
   }
 
@@ -432,7 +436,7 @@ export class ItalyFerryPanel extends Panel {
       </div>
     `;
     const host = this.content.querySelector<HTMLElement>('.ferry-map-host');
-    if (host) this.map = new ItalyFerryMap(host);
+    if (host) this.map = new FreightMap(host);
 
     // `?trip=<id>` deep-link (Phase C shareable voyage record): open that voyage on boot. The map
     // queues it until its style loads; a stale/unknown id quietly clears the param.
