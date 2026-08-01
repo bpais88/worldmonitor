@@ -52,7 +52,7 @@ fork uses.
 constraint, a benchmark, or a source to cherry-pick from. Everything in this document describes our
 codebase and our deployment only.
 
-### 0.2 The freight map rendered nothing — DIAGNOSED AND FIXED
+### 0.2 The freight map renders nothing — STILL OPEN (two fixes attempted, neither worked)
 
 Measured on our own production deployment (`worldmonitor-g2g1u74g1`), after a full settle:
 
@@ -87,11 +87,37 @@ Ruled out first, each by direct measurement rather than inference:
 Decisive confirmation: **resizing the browser window on production made the whole map appear at
 once** — basemap and ~1,900 vessels — because that finally fired MapLibre's own observer.
 
-Fixed by giving `ItalyFerryMap` the `ResizeObserver` that `DeckGLMap` has always had, guarded on a
-non-zero box (PR #128).
+**Two fixes were merged and NEITHER resolved production.** Recording that honestly, because both
+looked convincing in isolation:
 
-**Still open:** the main dashboard map *has* that observer yet still showed a partial render in this
-audit. That needs its own re-check now the freight map is fixed.
+- **#128** added the `ResizeObserver` that `DeckGLMap` has always had. Proven against a synthetic
+  0-height host; production stayed black.
+- **#129** added a `resize()` in `onLoad()`, on the theory that the observer's single `observe()`
+  callback lands before the style loads. Production stayed black.
+
+A reviewer flagged #129 as a same-size no-op. That specific mechanism does **not** apply here —
+maplibre-gl **5.16.0**'s `resize()` has exactly one early return, for a lost WebGL context
+(`maplibre-gl-dev.js:69016`), then unconditionally runs `_resizeInternal` and fires
+`movestart`/`move`/`moveend`. But the reviewer's conclusion was right even though the mechanism
+wasn't: it didn't work.
+
+**What is established:**
+
+- Local dev renders correctly through the *same* construction path, with a healthy camera
+  (zoom 2.66, centre Europe, transform 800x420) whether the host starts at 0 or full height.
+- Production: canvas correctly sized, **WebGL context alive** (`isContextLost() === false`),
+  style + TileJSON + sprites fetched, and **zero vector tiles**. Glyph `.pbf` fetched on one load
+  and not on another — so there is a race, not a hard failure.
+- A real browser-window resize still rescues it.
+
+**Leading hypothesis:** something production-bundle-specific. MapLibre parses vector tiles in a
+worker; the style/sprites/glyphs that *do* load are main-thread fetches, and tiles — the one thing
+that never loads — are the worker's job. Local dev doesn't reproduce, which fits a bundling
+difference. **Next diagnostic: instrument the `Worker` constructor before app boot on a production
+build and confirm whether MapLibre's tile worker starts and responds.**
+
+**Also still open:** the main dashboard map *has* the observer yet showed a partial render in this
+audit — likely the same underlying cause.
 
 *(Unrelated, spotted on ferry.html: the header renders `LIVE · as of 10:56 CEST1385` — the vessel
 count is being concatenated into the timestamp string.)*
@@ -283,8 +309,8 @@ with the relay, so **the assistant and the map already read from one source of t
 
 Stated plainly, as the input to the proposal:
 
-0. **The freight map drew no basemap at all** — see §0.2. Fixed (#128); the main dashboard map still
-   needs re-checking. Everything below is secondary to having a map that renders.
+0. **The freight map draws no basemap at all** — see §0.2. STILL OPEN: two fixes merged, neither
+   worked. Everything below is secondary to having a map that renders.
 1. **No visual hierarchy.** 76% of layers are dots; importance can only be shown via colour/radius.
 2. **No temporal dimension on the main map**, despite `VoyageReplay` + `PlaybackControl` existing
    and the backend holding months of time-series.
@@ -326,7 +352,7 @@ than guessed at.
 ## 9. Recommended sequence
 
 1. ~~Decide the upstream question~~ — **done**: we stay diverged (§0.1).
-2. ~~Fix the freight basemap~~ — **done** (§0.2, PR #128).
+2. **Fix the freight basemap** — STILL OPEN (§0.2). #128 and #129 both missed.
 3. **Re-check the main dashboard map**, which has a ResizeObserver yet still rendered partially.
 4. **Re-run the visual audit** on a working map, at several zooms and across the four variants.
 5. *Then* write the redesign proposal, grounded in what it actually looks like.
