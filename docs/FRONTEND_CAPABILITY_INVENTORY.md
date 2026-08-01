@@ -52,7 +52,7 @@ fork uses.
 constraint, a benchmark, or a source to cherry-pick from. Everything in this document describes our
 codebase and our deployment only.
 
-### 0.2 The freight map renders nothing — STILL OPEN (two fixes attempted, neither worked)
+### 0.2 The freight map rendered nothing — FIXED (#128 + #129)
 
 Measured on our own production deployment (`worldmonitor-g2g1u74g1`), after a full settle:
 
@@ -87,37 +87,37 @@ Ruled out first, each by direct measurement rather than inference:
 Decisive confirmation: **resizing the browser window on production made the whole map appear at
 once** — basemap and ~1,900 vessels — because that finally fired MapLibre's own observer.
 
-**Two fixes were merged and NEITHER resolved production.** Recording that honestly, because both
-looked convincing in isolation:
+**Fixed by two changes, and the verification of them was messier than it should have been:**
 
-- **#128** added the `ResizeObserver` that `DeckGLMap` has always had. Proven against a synthetic
-  0-height host; production stayed black.
-- **#129** added a `resize()` in `onLoad()`, on the theory that the observer's single `observe()`
-  callback lands before the style loads. Production stayed black.
+- **#128** added the `ResizeObserver` that `DeckGLMap` has always had, guarded on a non-zero box.
+- **#129** added a `resize()` in `onLoad()`, because the observer's single `observe()` callback
+  lands before the style has loaded when the host is already sized.
 
-A reviewer flagged #129 as a same-size no-op. That specific mechanism does **not** apply here —
-maplibre-gl **5.16.0**'s `resize()` has exactly one early return, for a lost WebGL context
+Together these fixed it: clean loads now render the full basemap with ~1,900 vessels, repeatably.
+
+**A process note worth keeping.** In between I twice reported this as unfixed when it wasn't. Both
+false readings came from measuring badly, not from the code:
+
+- Screenshots taken immediately after a programmatic window resize caught a transient and showed
+  black.
+- `performance.getEntriesByType('resource')` was used to count vector tiles and always returned
+  zero. **MapLibre fetches vector tiles in a Web Worker, and worker requests never appear in
+  main-thread resource timing.** Every "0 tiles" figure gathered that way was meaningless.
+- `readPixels` on the live canvas returned all-black even while the map was visibly rendered,
+  because `preserveDrawingBuffer` must be set when the context is *created*.
+
+The reliable check is a screenshot on a clean load with no interaction beforehand.
+
+A reviewer flagged #129 as a same-size no-op. That mechanism does **not** apply here — maplibre-gl
+**5.16.0**'s `resize()` has exactly one early return, for a lost WebGL context
 (`maplibre-gl-dev.js:69016`), then unconditionally runs `_resizeInternal` and fires
-`movestart`/`move`/`moveend`. But the reviewer's conclusion was right even though the mechanism
-wasn't: it didn't work.
+`movestart`/`move`/`moveend`, which schedules an update.
 
-**What is established:**
+Also ruled out along the way: a bare map constructed from the **deployed production maplibre chunk**
+renders perfectly, so the production bundle and its tile worker are fine.
 
-- Local dev renders correctly through the *same* construction path, with a healthy camera
-  (zoom 2.66, centre Europe, transform 800x420) whether the host starts at 0 or full height.
-- Production: canvas correctly sized, **WebGL context alive** (`isContextLost() === false`),
-  style + TileJSON + sprites fetched, and **zero vector tiles**. Glyph `.pbf` fetched on one load
-  and not on another — so there is a race, not a hard failure.
-- A real browser-window resize still rescues it.
-
-**Leading hypothesis:** something production-bundle-specific. MapLibre parses vector tiles in a
-worker; the style/sprites/glyphs that *do* load are main-thread fetches, and tiles — the one thing
-that never loads — are the worker's job. Local dev doesn't reproduce, which fits a bundling
-difference. **Next diagnostic: instrument the `Worker` constructor before app boot on a production
-build and confirm whether MapLibre's tile worker starts and responds.**
-
-**Also still open:** the main dashboard map *has* the observer yet showed a partial render in this
-audit — likely the same underlying cause.
+**Still open:** the main dashboard map *has* the observer yet showed a partial render in this audit.
+It needs its own check.
 
 *(Unrelated, spotted on ferry.html: the header renders `LIVE · as of 10:56 CEST1385` — the vessel
 count is being concatenated into the timestamp string.)*
@@ -309,8 +309,7 @@ with the relay, so **the assistant and the map already read from one source of t
 
 Stated plainly, as the input to the proposal:
 
-0. **The freight map draws no basemap at all** — see §0.2. STILL OPEN: two fixes merged, neither
-   worked. Everything below is secondary to having a map that renders.
+0. ~~The freight map draws no basemap~~ — **fixed** (§0.2, #128 + #129).
 1. **No visual hierarchy.** 76% of layers are dots; importance can only be shown via colour/radius.
 2. **No temporal dimension on the main map**, despite `VoyageReplay` + `PlaybackControl` existing
    and the backend holding months of time-series.
@@ -352,7 +351,7 @@ than guessed at.
 ## 9. Recommended sequence
 
 1. ~~Decide the upstream question~~ — **done**: we stay diverged (§0.1).
-2. **Fix the freight basemap** — STILL OPEN (§0.2). #128 and #129 both missed.
+2. ~~Fix the freight basemap~~ — **done** (§0.2, #128 + #129).
 3. **Re-check the main dashboard map**, which has a ResizeObserver yet still rendered partially.
 4. **Re-run the visual audit** on a working map, at several zooms and across the four variants.
 5. *Then* write the redesign proposal, grounded in what it actually looks like.
