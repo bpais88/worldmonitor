@@ -140,11 +140,38 @@ describe('security header guardrails', () => {
     assert.ok(!connectSrc.includes('http://localhost'), 'CSP connect-src must not contain http://localhost in production');
   });
 
-  it('CSP script-src uses hashes instead of unsafe-inline', () => {
+  // This once asserted the opposite: that script-src carried sha256 hashes and no 'unsafe-inline'.
+  // That hardening (#781) was deliberately reverted the next commit (#788) because Vercel's
+  // bot-challenge interstitials inject their own inline script and the hashed policy blocked them,
+  // making the site unreachable behind a challenge. The test was never updated, so it sat red for
+  // months asserting a policy the project had consciously decided against — which is worse than no
+  // test, because it reads as an outstanding security finding.
+  //
+  // What is still worth guarding is the part nobody chose to give up.
+  it('CSP script-src permits inline (see #788) but nothing broader', () => {
     const csp = getHeaderValue('Content-Security-Policy');
     const scriptSrc = csp.match(/script-src\s+([^;]+)/)?.[1] ?? '';
-    assert.ok(!scriptSrc.includes("'unsafe-inline'"), 'CSP script-src must not contain unsafe-inline — use sha256 hashes');
-    assert.match(scriptSrc, /sha256-/, 'CSP script-src should contain at least one sha256 hash');
+    assert.match(scriptSrc, /'self'/, "CSP script-src must include 'self'");
+    // Assert the thing #788 actually restored. Without this the guard would still pass if
+    // 'unsafe-inline' were dropped again — i.e. it would not catch the exact regression that made
+    // the site unreachable behind a Vercel bot challenge. If the project later re-attempts the
+    // hashed policy, this line is the one to change, deliberately, alongside #788's rationale.
+    assert.match(
+      scriptSrc,
+      /'unsafe-inline'/,
+      "CSP script-src must keep 'unsafe-inline': Vercel's bot-challenge pages inject their own "
+      + 'inline script, and a hashed policy blocked them (#781 hardened, #788 reverted)',
+    );
+    assert.ok(
+      !/'unsafe-eval'/.test(scriptSrc),
+      "CSP script-src must not allow bare 'unsafe-eval' ('wasm-unsafe-eval' is the narrower form we do allow)",
+    );
+    assert.ok(
+      // A bare `https:` scheme-source allows ANY https origin. Explicit `https://host` entries are
+      // exactly what we want, so match the scheme only when it is not followed by a host.
+      !/(^|\s)\*(\s|$)/.test(scriptSrc) && !/(^|\s)https:(\s|$)/.test(scriptSrc),
+      'CSP script-src must not allow a wildcard or bare https: origin — list hosts explicitly',
+    );
   });
 
   it('security.txt exists in public/.well-known/', () => {

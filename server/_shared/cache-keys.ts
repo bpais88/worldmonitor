@@ -6,6 +6,8 @@ export const BOOTSTRAP_CACHE_KEYS: Record<string, string> = {
   earthquakes:      'seismology:earthquakes:v1',
   outages:          'infra:outages:v1',
   serviceStatuses:  'infra:service-statuses:v1',
+  marketQuotes:     'market:stocks-bootstrap:v1',
+  commodityQuotes:  'market:commodities-bootstrap:v1',
   sectors:          'market:sectors:v1',
   etfFlows:         'market:etf-flows:v1',
   macroSignals:     'economic:macro-signals:v1',
@@ -27,4 +29,5 @@ export const BOOTSTRAP_TIERS: Record<string, 'slow' | 'fast'> = {
   climateAnomalies: 'slow',
   earthquakes: 'fast', outages: 'fast', serviceStatuses: 'fast',
   macroSignals: 'fast', chokepoints: 'fast',
+  marketQuotes: 'fast', commodityQuotes: 'fast',
 };
