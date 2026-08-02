@@ -20,6 +20,7 @@ import {
 import { getGeofences, type Geofence } from '@/services/logistics/geofences';
 import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
 import { describeFreshness } from '@/services/logistics/freshness';
+import { UNATTRIBUTED, tallyOperators, matchesOperatorFilter } from '@/services/logistics/operator-filter';
 
 const REFRESH_INTERVAL_MS = 60_000;
 
@@ -245,7 +246,7 @@ export class FreightPanel extends Panel {
   private filteredFerries(regional: TrackedFerry[]): TrackedFerry[] {
     const q = this.searchText.trim().toLowerCase();
     return regional.filter((f) => {
-      if (this.operatorFilter && f.operatorId !== this.operatorFilter) return false;
+      if (!matchesOperatorFilter(f, this.operatorFilter)) return false;
       if (q) {
         const hay = `${f.name} ${f.operatorName ?? ''}`.toLowerCase();
         if (!hay.includes(q)) return false;
@@ -258,22 +259,29 @@ export class FreightPanel extends Panel {
   private refreshChips(regional: TrackedFerry[]): void {
     const host = this.content.querySelector<HTMLElement>('.ferry-chips');
     if (!host) return;
-    // One pass: collect operator names + tally counts together (avoids a filter per chip).
-    const byId = new Map<string, string>();
-    const counts = new Map<string, number>();
-    for (const f of regional) {
-      if (f.operatorId && f.operatorName) {
-        byId.set(f.operatorId, f.operatorName);
-        counts.set(f.operatorId, (counts.get(f.operatorId) ?? 0) + 1);
-      }
-    }
-    const ops = [...byId.entries()].sort((a, b) => a[1].localeCompare(b[1]));
-    const chip = (id: string | null, label: string, count: number) => {
+    // One pass, shared with the filter — see operator-filter.ts for why they must not diverge.
+    const { operators, attributed, unattributed, total } = tallyOperators(regional);
+    const chip = (id: string | null, label: string, count: number, title = '') => {
       const active = (this.operatorFilter ?? null) === id ? ' is-active' : '';
-      return `<button type="button" class="ferry-chip${active}" data-op="${id ?? ''}">${escapeHtml(label)}${count >= 0 ? ` <span class="ferry-chip-n">${count}</span>` : ''}</button>`;
+      const t = title ? ` title="${escapeHtml(title)}"` : '';
+      return `<button type="button" class="ferry-chip${active}" data-op="${id ?? ''}"${t}>${escapeHtml(label)}${count >= 0 ? ` <span class="ferry-chip-n">${count}</span>` : ''}</button>`;
     };
-    const chips = [chip(null, 'All', regional.length)]
-      .concat(ops.map(([id, name]) => chip(id, name, counts.get(id) ?? 0)));
+
+    // Show the DENOMINATOR, not just the named operators.
+    //
+    // Only a small minority of AIS vessels broadcast anything we can resolve to an operator — the
+    // rest carry no usable identity at all. Listing "MSC 64" beside "All 2087" invites reading it
+    // as all MSC traffic in view, when it is 64 of the few hundred vessels we could attribute.
+    // Naming the unattributed remainder makes the coverage visible instead of implied, and it is
+    // filterable, so it can be inspected rather than taken on trust.
+    const chips = [chip(null, 'All', total)]
+      .concat(operators.map((o) => chip(o.id, o.name, o.count,
+        `${o.count} of ${attributed} vessels we can attribute to an operator (${total} tracked in total)`)));
+    if (unattributed > 0) {
+      chips.push(chip(UNATTRIBUTED, 'No operator', unattributed,
+        'Vessels broadcasting no operator we can resolve. Operator chips only cover the remainder, '
+        + 'so their counts are not fleet totals.'));
+    }
     host.innerHTML = chips.join('');
   }
 
