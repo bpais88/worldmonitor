@@ -149,6 +149,7 @@ test('due once per day, after the send hour, and never twice', () => {
 
 const withMarinesia = (over = {}) => ({
   ...healthy(),
+  uptimeSec: 7200,   // up 2h — well past any warming grace
   marinesia: {
     enabled: true, tiles: 25, lastPollAt: '2026-07-14T06:00:00Z', upserts: 12345, lastError: null,
     tileAgesSec: Array(25).fill(30), warming: false, stale: false, ageSec: 30, ...over,
@@ -213,19 +214,27 @@ test('THE SECOND OUTAGE SHAPE: polled once, then stalled — every tile age non-
 test('a relay still warming after restart is NOT called dead', () => {
   // A 52-tile sweep takes ~11 minutes at 13s/tile. If the daily report lands in that window nothing
   // has polled yet on a perfectly healthy feed — the first version would have cried wolf daily.
+  // uptimeSec is what says "this is a fresh boot" rather than "this has been broken for hours".
   const r = buildOpsReport({
-    health: withMarinesia({ warming: true, lastPollAt: null, upserts: 0, tileAgesSec: Array(25).fill(null) }),
+    health: { ...withMarinesia({ warming: true, lastPollAt: null, upserts: 0, tileAgesSec: Array(25).fill(null) }), uptimeSec: 90 },
     now: TUE, cleanSince: '2026-07-02',
   });
   assert.match(r, /Fallback · marinesia warming/);
   assert.doesNotMatch(r, /⚠️/);
 });
 
-test('warming suppresses the partial-tile alarm but NOT staleness', () => {
+test('a FRESH warming boot suppresses the partial-tile alarm but never staleness', () => {
   const ages = Array(25).fill(30); ages[4] = null;
-  const warmingPartial = buildOpsReport({ health: withMarinesia({ warming: true, tileAgesSec: ages }), now: TUE, cleanSince: '2026-07-02' });
+  const warmingPartial = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, tileAgesSec: ages }), uptimeSec: 90 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
   assert.doesNotMatch(warmingPartial, /⚠️/);
-  const warmingStale = buildOpsReport({ health: withMarinesia({ warming: true, stale: true, ageSec: 900 }), now: TUE, cleanSince: '2026-07-02' });
+  // Staleness is meaningful from the first moment — it never waits for the grace to expire.
+  const warmingStale = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, stale: true, ageSec: 900 }), uptimeSec: 90 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
   assert.match(warmingStale, /⚠️ marinesia STALE/);
 });
 
@@ -234,19 +243,49 @@ test('a tile that never polls is reported EVEN THOUGH warming stays true forever
   // has been seen, so one permanently-dark tile pins it true — and suppressing on `warming` alone
   // made this alarm unreachable in exactly the case it was written for (the landlocked tile).
   // Bound the grace by elapsed time: the oldest tile age shows the sweep has had its turn.
-  const ages = Array(25).fill(1200); ages[4] = null;   // swept for 20 min, one tile still dark
+  // Elapsed time comes from the relay's UPTIME, not from tile ages: every tileAgesSec entry is the
+  // age of that tile's most recent success, so with the poller cycling every ~13s the maximum just
+  // oscillates around one sweep and never grows. Using it as an elapsed-time proxy left this alarm
+  // permanently suppressed — the whole bug this test pins.
+  const ages = Array(25).fill(300); ages[4] = null;   // healthy tiles cycling; one never polled
   const r = buildOpsReport({
-    health: withMarinesia({ warming: true, stale: false, tileAgesSec: ages }),
+    health: { ...withMarinesia({ warming: true, stale: false, tileAgesSec: ages }), uptimeSec: 7200 },
     now: TUE, cleanSince: '2026-07-02',
   });
   assert.match(r, /⚠️ marinesia 24\/25 tiles have ever polled/);
 });
 
 test('the same partial sweep is silent while it is genuinely still warming', () => {
-  const ages = Array(25).fill(40); ages[4] = null;     // only 40s in — the sweep is mid-flight
+  const ages = Array(25).fill(40); ages[4] = null;     // sweep mid-flight
   const r = buildOpsReport({
-    health: withMarinesia({ warming: true, stale: false, tileAgesSec: ages }),
+    health: { ...withMarinesia({ warming: true, stale: false, tileAgesSec: ages }), uptimeSec: 120 },
     now: TUE, cleanSince: '2026-07-02',
   });
   assert.doesNotMatch(r, /⚠️/);
+});
+
+test('tile ages alone can never expire the grace — the trap this replaced', () => {
+  // Pins the specific failure: tileAgesSec measures time since each tile's LAST success, so with a
+  // 25-tile sweep the maximum sits around 325s forever. Any threshold derived from it stays
+  // unreached, so a dark tile would be suppressed indefinitely. Uptime is what breaks the tie.
+  const cycling = Array(25).fill(325); cycling[4] = null;
+  const dark = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, tileAgesSec: cycling }), uptimeSec: 86_400 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(dark, /⚠️ marinesia 24\/25 tiles/, 'a day of uptime must expire the grace');
+
+  const young = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, tileAgesSec: cycling }), uptimeSec: 60 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.doesNotMatch(young, /⚠️/, 'the identical tile ages must stay silent one minute after boot');
+});
+
+test('a relay with no uptimeSec falls back to trusting warming', () => {
+  // Older relays predate the field. Under-report rather than cry wolf on every restart.
+  const ages = Array(25).fill(300); ages[4] = null;
+  const h = withMarinesia({ warming: true, tileAgesSec: ages });
+  delete h.uptimeSec;
+  assert.doesNotMatch(buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' }), /⚠️/);
 });
