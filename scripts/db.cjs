@@ -572,11 +572,16 @@ async function queryPortSeries({ hours = 48, ports, fields, stepMin } = {}) {
   //
   // Dropping the row (rather than nulling a field) lets the bounded carry-forward hold the last
   // GOOD reading, which is the honest answer: the median is simply not defined yet.
+  //
+  // coalesce() is load-bearing: at_port_raw is nullable, and `NULL > 0` is NULL, so a bare
+  // `NOT (at_port = 0 AND at_port_raw > 0)` evaluates to NULL — which WHERE treats as not-true —
+  // and would silently drop every genuine zero that has no raw count recorded, showing it as a
+  // coverage hole rather than an empty port.
   const rows = await sql`SELECT extract(epoch from ts)*1000 AS ts, port_id,
                                 at_berth, at_port, at_anchor, inbound, feed_label
                          FROM port_snapshots
                          WHERE ts >= ${since}::timestamptz AND coverage_ok
-                           AND NOT (at_port = 0 AND at_port_raw > 0)
+                           AND NOT (at_port = 0 AND coalesce(at_port_raw, 0) > 0)
                            AND (${pf}::text[] IS NULL OR port_id = ANY(${pf}::text[]))
                          ORDER BY ts ASC`;
 

@@ -588,7 +588,10 @@ export class FreightPanel extends Panel {
         this.setReplayActive(btn, false);
         return;
       }
-      this.map?.startCongestionReplay(this.portSeries);
+      // Re-check after the await: the fetch takes long enough for the user to switch modes, and
+      // leaving Ports mode already turned the replay off. Without this the scrubber reappears over
+      // a map that is no longer showing ports, with the button reading inactive.
+      if (this.replayOn && this.mode === 'ports') this.map?.startCongestionReplay(this.portSeries);
     } catch {
       this.portSeries = null;
       btn.title = 'Congestion history unavailable — try again shortly';

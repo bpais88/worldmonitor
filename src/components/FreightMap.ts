@@ -840,6 +840,11 @@ export class FreightMap {
   public destroy(): void {
     this.resizeObserver?.disconnect();
     this.resizeObserver = null;
+    // Before map.remove(): the replay drives an animation frame loop that calls back into this
+    // map. Left running it would keep scheduling frames against a removed map forever.
+    this.congestionReplay?.destroy();
+    this.congestionReplay = null;
+    this.replaySeries = null;
     this.map.remove();
   }
 }

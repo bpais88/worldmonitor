@@ -101,6 +101,19 @@ test('a null column value is null, not coerced to zero', () => {
   assert.equal(ports.a.atBerth[0], null);
 });
 
+test('the warm-up filter is NULL-safe — a genuine zero with no raw count survives', () => {
+  // Review catch. at_port_raw is nullable, and `NULL > 0` is NULL, so a bare
+  // `NOT (at_port = 0 AND at_port_raw > 0)` evaluates to NULL — which WHERE treats as not-true —
+  // silently dropping such rows. This asserts the SQL keeps the coalesce() that makes it total.
+  const src = require('node:fs').readFileSync(require('node:path').join(__dirname, 'db.cjs'), 'utf-8');
+  assert.match(src, /NOT \(at_port = 0 AND/, 'the warm-up filter must still exist');
+  assert.match(
+    src,
+    /NOT \(at_port = 0 AND coalesce\(at_port_raw,\s*0\) > 0\)/,
+    'at_port_raw must be coalesced — a bare NULL comparison drops genuine zeros as coverage holes',
+  );
+});
+
 test('returns no ports when there are no rows', () => {
   const { ts, ports } = resample([]);
   assert.deepEqual(ports, {});
