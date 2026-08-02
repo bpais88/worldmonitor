@@ -339,16 +339,21 @@ export class FreightMap {
       id: 'port-labels',
       type: 'symbol',
       source: PORTS_SOURCE_ID,
+      // Only label ports that actually have something to report. A map full of "· 0" is noise, and
+      // those are exactly the labels that would crowd out the ones that matter.
+      filter: ['>', ['get', 'atPort'], 0],
       layout: {
         visibility: 'none',
         'text-field': ['get', 'label'],
         'text-size': 11,
         'text-offset': [0, 1.4],
         'text-anchor': 'top',
-        // Unlike the vessel labels, these MAY NOT overlap — there are only 43 and each one is a
-        // number a user is meant to read.
-        'text-allow-overlap': false,
-        'text-optional': true,
+        // MUST overlap. MapLibre resolves symbol collisions in style order, and the BASEMAP's own
+        // place labels (country and city names) are added long before ours — so with collision on,
+        // our port labels lost essentially every contest and only one survived, in empty sea. These
+        // numbers are the whole point of Ports mode; they are not allowed to lose to "POLAND".
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
       },
       paint: {
         'text-color': '#e8eaed',
@@ -597,10 +602,19 @@ export class FreightMap {
     if (this.map.getLayer('ferry-labels')) {
       this.map.setLayoutProperty('ferry-labels', 'visibility', visible ? 'none' : 'visible');
     }
+    if (this.map.getLayer('ferry-dots')) {
+      // The dark stroke is what gives each dot its weight; keep it only in Vessels mode.
+      this.map.setPaintProperty('ferry-dots', 'circle-stroke-width', visible ? 0 : 1);
+    }
     for (const id of ['ferry-dots', 'ferry-arrows']) {
       if (!this.map.getLayer(id)) continue;
+      // 0.18, not the 0.35 first tried: there are ~2,000 vessel marks against 43 port discs, so
+      // even at a third opacity the vessels still read as the subject. They need to become
+      // texture — enough to show WHERE the traffic is, not enough to compete with a port.
       const prop = id === 'ferry-dots' ? 'circle-opacity' : 'icon-opacity';
-      this.map.setPaintProperty(id, prop, visible ? 0.35 : 1);
+      this.map.setPaintProperty(id, prop, visible ? 0.18 : 1);
+      // Shrink the dots too — opacity alone leaves the same amount of ink on the map.
+      if (id === 'ferry-dots') this.map.setPaintProperty(id, 'circle-radius', visible ? 3 : 5);
     }
   }
 
