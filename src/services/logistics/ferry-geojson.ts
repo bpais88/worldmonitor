@@ -37,6 +37,15 @@ export interface FerryFeatureProps {
   /** Likely-cause line, e.g. "🌊 Rough conditions…", or ''. */
   whyText: string;
   /**
+   * Hull length in metres, or 0 when unknown — NUMERIC, unlike sizeText which is display copy.
+   *
+   * The map sizes vessel marks from this via a `['get', 'lengthMeters']` expression, and a style
+   * expression can only read what is actually in the property bag. Omitting it (as this did) makes
+   * the expression fall through to its default for EVERY vessel, so the encoding silently does
+   * nothing while looking correct in the source.
+   */
+  lengthMeters: number;
+  /**
    * How much this vessel deserves its name on the map. Higher wins.
    *
    * At the default European view ~3,000 vessels are on screen and only ~160 labels physically FIT.
@@ -98,6 +107,9 @@ export function ferryProps(f: TrackedFerry): FerryFeatureProps {
     etaAisText: f.etaAis ?? '',
     delayText: formatFerryDelay(f),
     labelRank: labelRankFor(f),
+    // 0 rather than undefined: MapLibre expressions have no notion of "absent", so the map's
+    // `> 0` guard is what distinguishes unknown from real.
+    lengthMeters: Number.isFinite(f.lengthMeters) ? (f.lengthMeters as number) : 0,
     whyText: formatFerryWhy(f),
   };
 }
