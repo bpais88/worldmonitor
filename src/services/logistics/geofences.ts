@@ -100,7 +100,29 @@ interface GeofenceFeatureProps {
   kind: string;
   color: string;
   fillOpacity: number;
+  /** Radius in km, or 0 for a polygon zone. Used to select circle zones for the marker layer. */
+  radiusKm: number;
+  /**
+   * The zone's on-screen radius in pixels AT ZOOM 0. Multiply by 2^zoom for the radius at any
+   * zoom — that is the whole conversion, and it is exact.
+   *
+   * Why this is precomputed here rather than derived in the style expression: the polygon ring
+   * alone cannot be drawn legibly when zoomed out. A ring is in METRES, so at the board's default
+   * European view (z3.5) the largest zone we carry, Rotterdam at 20 km, measures 4.6px across and
+   * Venezia at 2.5 km measures 0.5px — the "Port zones" toggle switched on and nothing visibly
+   * happened. So the map floors the size at low zoom, which needs a scalar.
+   *
+   * Metres-per-pixel depends on LATITUDE (Web Mercator, 512px tiles: 78271.516·cos φ / 2^zoom),
+   * and a MapLibre expression cannot read a feature's latitude. Assuming a fixed latitude instead
+   * is off by +26% at Algeciras (36.1°N) and −9% at Teesport (54.6°N) over the zones we actually
+   * carry, which would also make the ring visibly jump when the marker hands over to the true
+   * geometry. Baking cos φ in at build time removes both problems.
+   */
+  radiusPxAtZoom0: number;
 }
+
+// Web Mercator, MapLibre's 512px-tile convention: metres per pixel = MERCATOR_M_PER_PX_Z0·cos φ / 2^zoom.
+const MERCATOR_M_PER_PX_Z0 = 78271.516;
 
 /** One geofence → a GeoJSON Polygon Feature carrying its render style. */
 function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, GeofenceFeatureProps> {
@@ -112,6 +134,12 @@ function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, Geofe
     type: 'Feature',
     geometry: { type: 'Polygon', coordinates: [ring] },
     properties: {
+      radiusKm: gf.geometry.type === 'circle' ? gf.geometry.radiusKm : 0,
+      radiusPxAtZoom0:
+        gf.geometry.type === 'circle'
+          ? (gf.geometry.radiusKm * 1000)
+            / (MERCATOR_M_PER_PX_Z0 * Math.cos((gf.geometry.center.lat * Math.PI) / 180))
+          : 0,
       id: gf.id,
       name: gf.name,
       kind: gf.kind,
