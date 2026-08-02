@@ -152,6 +152,16 @@ describe('security header guardrails', () => {
     const csp = getHeaderValue('Content-Security-Policy');
     const scriptSrc = csp.match(/script-src\s+([^;]+)/)?.[1] ?? '';
     assert.match(scriptSrc, /'self'/, "CSP script-src must include 'self'");
+    // Assert the thing #788 actually restored. Without this the guard would still pass if
+    // 'unsafe-inline' were dropped again — i.e. it would not catch the exact regression that made
+    // the site unreachable behind a Vercel bot challenge. If the project later re-attempts the
+    // hashed policy, this line is the one to change, deliberately, alongside #788's rationale.
+    assert.match(
+      scriptSrc,
+      /'unsafe-inline'/,
+      "CSP script-src must keep 'unsafe-inline': Vercel's bot-challenge pages inject their own "
+      + 'inline script, and a hashed policy blocked them (#781 hardened, #788 reverted)',
+    );
     assert.ok(
       !/'unsafe-eval'/.test(scriptSrc),
       "CSP script-src must not allow bare 'unsafe-eval' ('wasm-unsafe-eval' is the narrower form we do allow)",
