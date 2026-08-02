@@ -74,7 +74,11 @@ describe('Bootstrap cache key registry', () => {
     assert.equal(unique.size, names.length, `Found duplicate names: ${names.filter((n, i) => names.indexOf(n) !== i)}`);
   });
 
-  it('every cache key maps to a handler file with a matching cache key string', () => {
+  // Not every bootstrap key is produced by a server/worldmonitor handler. The market and
+  // commodity quotes are seeded into Upstash by the Railway relay (scripts/ais-relay.cjs), which
+  // is a different producer, not a missing one. Scanning only the handler tree reported those as
+  // orphaned keys; the check that matters is that SOMETHING writes each key.
+  it('every cache key is written by some producer (handler or relay seeder)', () => {
     const block = cacheKeysSrc.match(/BOOTSTRAP_CACHE_KEYS[^{]*\{([^}]+)\}/);
     const keyRe = /:\s+'([^']+)'/g;
     let m;
@@ -95,12 +99,15 @@ describe('Bootstrap cache key registry', () => {
       }
     }
     walk(handlerDirs);
-    const allHandlerCode = handlerFiles.map(f => readFileSync(f, 'utf-8')).join('\n');
+    const producerCode = [
+      ...handlerFiles.map(f => readFileSync(f, 'utf-8')),
+      readFileSync(join(root, 'scripts', 'ais-relay.cjs'), 'utf-8'),
+    ].join('\n');
 
     for (const key of keys) {
       assert.ok(
-        allHandlerCode.includes(key),
-        `Cache key "${key}" not found in any handler file`,
+        producerCode.includes(key),
+        `Cache key "${key}" is written by no handler and no relay seeder — nothing populates it`,
       );
     }
   });

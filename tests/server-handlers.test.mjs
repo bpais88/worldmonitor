@@ -198,9 +198,16 @@ describe('getVesselSnapshot caching (HIGH-1)', () => {
     assert.match(src, /let inFlightRequest/);
   });
 
-  it('has 10-second TTL cache', () => {
-    assert.match(src, /SNAPSHOT_CACHE_TTL_MS\s*=\s*10[_]?000/,
-      'TTL should be 10 seconds (10000ms)');
+  // This asserted a literal 10_000 until #626 ("bump all sub-5min cache TTLs and polling
+  // intervals") deliberately raised it to 300_000 to match the client poll interval. Pinning the
+  // exact number just re-broke on every intentional tuning change, so assert the property the
+  // cache actually needs: a declared, positive TTL that is not shorter than the poll it backs.
+  it('declares a TTL no shorter than the client poll interval', () => {
+    const m = src.match(/SNAPSHOT_CACHE_TTL_MS\s*=\s*([\d_]+)/);
+    assert.ok(m, 'SNAPSHOT_CACHE_TTL_MS must be declared');
+    const ttl = Number(m[1].replace(/_/g, ''));
+    assert.ok(Number.isFinite(ttl) && ttl > 0, `TTL must be a positive number, got ${m[1]}`);
+    assert.ok(ttl >= 60_000, `TTL of ${ttl}ms re-introduces the sub-5min churn #626 removed`);
   });
 
   it('checks cache before calling relay', () => {

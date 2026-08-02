@@ -1,0 +1,33 @@
+name: Data tests
+
+# Runs the tests/ suite (node:test via tsx) — the front-end, config and edge-function guards:
+# bootstrap cache-key parity, deploy/CSP config, live-news channel integrity, the logistics and
+# freight-board units, and the server handler checks.
+#
+# This suite existed for months but NO workflow executed it, so nothing enforced any of it. By the
+# time it was wired up, 9 assertions had gone red unnoticed — a genuine cache-key drift plus a set
+# of expectations frozen against decisions the project had since reversed. Tests that nothing runs
+# do not merely fail to catch regressions; they rot into false findings.
+on:
+  pull_request:
+    # Ignore-list rather than include-list, matching assistant-tests.yml: these tests read across
+    # src/, api/, server/, scripts/ and vercel.json, so an enumerated include-list would silently
+    # miss a change to any of them.
+    paths-ignore:
+      - '*.md'
+      - '.planning/**'
+      - 'docs/**'
+      - 'e2e/**'
+
+jobs:
+  data-tests:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm run test:data
