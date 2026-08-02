@@ -149,7 +149,7 @@ function setTripUrlParam(id: number | null): void {
 }
 
 
-export class ItalyFerryMap {
+export class FreightMap {
   private map: maplibregl.Map;
   private ready = false;
   private pending: TrackedFerry[] | null = null;

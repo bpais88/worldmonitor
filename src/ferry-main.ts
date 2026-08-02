@@ -2,7 +2,7 @@
 // Mounts just the ferry board — isolated from the main dashboard.
 
 import 'maplibre-gl/dist/maplibre-gl.css';
-import { ItalyFerryPanel } from '@/components/ItalyFerryPanel';
+import { FreightPanel } from '@/components/FreightPanel';
 import { initI18n } from '@/services/i18n';
 
 async function main(): Promise<void> {
@@ -12,7 +12,7 @@ async function main(): Promise<void> {
 
   const app = document.getElementById('app');
   if (app) {
-    const panel = new ItalyFerryPanel();
+    const panel = new FreightPanel();
     app.appendChild(panel.getElement());
     panel.start();
   }
