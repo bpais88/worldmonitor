@@ -182,7 +182,7 @@ export function framePorts<T extends PortStatusLike>(
     const atPort = valueAt(series, p.portId, frame, 'atPort');
     // One reading covers the whole row, so `level` alone decides whether this frame is observed.
     if (!cols || level == null) {
-      return { ...p, atPort: 0, atBerth: 0, atAnchor: 0, coverageOk: false, congestion: undefined, congestionRel: undefined };
+      return { ...p, atPort: 0, atBerth: 0, atAnchor: 0, coverageOk: false, congestion: null, congestionRel: null };
     }
     return {
       ...p,
@@ -194,20 +194,26 @@ export function framePorts<T extends PortStatusLike>(
       // baseline and is not stored per snapshot, so it must be cleared — leaving a live relative
       // value on a historical frame would paint the past with the present's colour.
       congestion: level,
-      congestionRel: undefined,
+      congestionRel: null,
     };
   });
 }
 
-/** The subset of PortStatus the replay reads and overrides. */
+/**
+ * The subset of PortStatus the replay reads and overrides.
+ *
+ * Structural, not an import of PortStatus, so this module stays free of the live port-status types
+ * — and nullable to match them: PortStatus carries `congestion: PortCongestion | null`, and
+ * levelFor() reads it with `??`, so null and undefined behave identically there.
+ */
 export interface PortStatusLike {
   portId: string;
   atPort?: number;
   atBerth?: number;
   atAnchor?: number;
   coverageOk?: boolean;
-  congestion?: string;
-  congestionRel?: string;
+  congestion?: string | null;
+  congestionRel?: string | null;
 }
 
 /**

@@ -16,6 +16,8 @@ import type { PortStatus } from '@/services/logistics/port-status';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
 import { fetchTripByMmsi, fetchTripById, type TripDetail } from '@/services/logistics/trip-detail';
 import { VoyageReplay } from './VoyageReplay';
+import { CongestionReplay } from './CongestionReplay';
+import { framePorts, type PortSeries } from '@/services/logistics/port-series';
 
 // Same basemap as DeckGLMap (keyless Carto vector style).
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
@@ -255,6 +257,16 @@ export class FreightMap {
   private pending: TrackedFerry[] | null = null;
   private pendingGeofences: Geofence[] | null = null;
   private pendingPorts: PortStatus[] | null = null;
+  /**
+   * The latest LIVE port set, kept for the whole session.
+   *
+   * Distinct from pendingPorts, which is only a pre-style-load buffer and is nulled once flushed.
+   * The replay needs port identity (name, lat/lon) that the time series does not carry, and it
+   * needs it at every frame — so the live set is retained rather than re-fetched.
+   */
+  private livePorts: PortStatus[] = [];
+  private congestionReplay: CongestionReplay | null = null;
+  private replaySeries: PortSeries | null = null;
   private portsVisible = false;
   private zonesVisible = false;
   private popup: maplibregl.Popup;
@@ -487,6 +499,9 @@ export class FreightMap {
     // Voyage replay (Phase C): its route/trail/waypoints/playhead render UNDER the vessels (added first).
     this.replay = new VoyageReplay(this.map);
 
+    // Congestion replay (Ports mode). Owns only the scrubber; what a frame draws is decided here.
+    this.congestionReplay = new CongestionReplay(this.map, (frame) => this.drawReplayFrame(frame));
+
     this.map.addSource(SOURCE_ID, { type: 'geojson', data: ferriesToGeoJSON([]) });
 
     // Coloured dot for stationary vessels (and as a base for moving ones).
@@ -718,9 +733,43 @@ export class FreightMap {
   /** Replace the port congestion set (Ports mode). Safe before the style loads. */
   public setPorts(ports: PortStatus[]): void {
     this.pendingPorts = ports;
+    this.livePorts = ports;
     if (!this.ready) return;
+    // A live refresh arriving mid-replay must NOT yank the map back to the present — the user is
+    // looking at a chosen moment. The set is still recorded above, so stopping the replay shows it.
+    if (this.congestionReplay?.active) return;
+    this.writePorts(ports);
+  }
+
+  private writePorts(ports: PortStatus[]): void {
     const source = this.map.getSource(PORTS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
     source?.setData(portsToGeoJSON(ports));
+  }
+
+  /**
+   * Enter congestion replay: the port layer is driven by `series` until stopped.
+   *
+   * The replay reuses the live encoding wholesale — each frame is projected onto the same
+   * PortStatus shape the live path uses (see framePorts), so disc size, fill, the anchor queue
+   * ring and the labels all behave identically. There is no second encoding to keep in sync.
+   */
+  public startCongestionReplay(series: PortSeries): void {
+    if (!this.congestionReplay) return;
+    this.replaySeries = series;
+    this.congestionReplay.load(series);
+  }
+
+  /** Leave replay and restore the live ports. Safe to call when not replaying. */
+  public stopCongestionReplay(): void {
+    if (!this.congestionReplay?.active) return;
+    this.congestionReplay.clear();
+    this.replaySeries = null;
+    if (this.ready) this.writePorts(this.livePorts);
+  }
+
+  private drawReplayFrame(frame: number): void {
+    if (!this.ready || !this.replaySeries) return;
+    this.writePorts(framePorts(this.livePorts, this.replaySeries, frame) as PortStatus[]);
   }
 
   /**

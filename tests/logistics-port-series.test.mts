@@ -169,14 +169,14 @@ describe('framePorts', () => {
     // congestionRel is derived against a dow×hour baseline at request time and is not stored per
     // snapshot. Carrying the live value onto a historical frame would be a straight lie.
     for (const frame of [0, 1]) {
-      for (const p of framePorts(live, s, frame)) assert.equal(p.congestionRel, undefined);
+      for (const p of framePorts(live, s, frame)) assert.equal(p.congestionRel, null);
     }
   });
 
   it('marks a port with no fresh reading as NOT covered, never as empty and clear', () => {
     const [rot] = framePorts(live, s, 1);
     assert.equal(rot.coverageOk, false, 'the map draws this hollow — "cannot see it"');
-    assert.equal(rot.congestion, undefined, 'no label is honest; "clear" would be a claim');
+    assert.equal(rot.congestion, null, 'no label is honest; "clear" would be a claim');
     assert.equal(rot.atPort, 0);
   });
 
@@ -184,7 +184,7 @@ describe('framePorts', () => {
     const extra = [...live, { portId: 'nowhere', name: 'Nowhere', lat: 0, lon: 0, coverageOk: true }];
     const out = framePorts(extra, s, 0);
     assert.equal(out[2].coverageOk, false);
-    assert.equal(out[2].congestion, undefined);
+    assert.equal(out[2].congestion, null);
   });
 
   it('returns one entry per live port, in order', () => {
