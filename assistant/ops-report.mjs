@@ -162,8 +162,9 @@ export function buildOpsReport({ health, now, cleanSince }) {
   if (mar) {
     const tiles = Array.isArray(mar.tileAgesSec) ? mar.tileAgesSec : [];
     const polled = tiles.filter((a) => a !== null && a !== undefined).length;
+    const state = mar.stale ? 'STALE' : mar.warming ? 'warming' : 'ok';
     lines.push(mar.enabled
-      ? `Fallback · marinesia ${polled}/${mar.tiles ?? tiles.length} tiles polled · upserts ${mar.upserts ?? 0}${mar.lastError ? ` · lastError: ${mar.lastError}` : ''}`
+      ? `Fallback · marinesia ${state} · ${polled}/${mar.tiles ?? tiles.length} tiles polled · upserts ${mar.upserts ?? 0}${mar.ageSec != null ? ` · last poll ${mar.ageSec}s ago` : ''}${mar.lastError ? ` · lastError: ${mar.lastError}` : ''}`
       : 'Fallback · marinesia disabled (no MARINESIA_API_KEY) — aisstream has no backup');
   }
 
@@ -186,13 +187,23 @@ export function buildOpsReport({ health, now, cleanSince }) {
     const tiles = Array.isArray(mar.tileAgesSec) ? mar.tileAgesSec : [];
     const polled = tiles.filter((a) => a !== null && a !== undefined).length;
     const total = mar.tiles ?? tiles.length;
-    if (!mar.lastPollAt) {
+    // `warming` means the relay has not completed its first full sweep since boot. Right after a
+    // restart NOTHING has polled yet and the sweep takes ~11 minutes at 52 tiles, so the
+    // never-polled and partial-tile checks below would fire on a perfectly healthy feed if the
+    // report happened to run in that window. Suppress them while warming — but NOT `stale`, which
+    // stays meaningful throughout.
+    const warming = mar.warming === true;
+    if (mar.stale) {
+      // The relay derives this from its own sweep length, so it already knows what "too old" means
+      // for the current tile count. Trust it rather than reimplementing the threshold here.
+      anomalies.push(`marinesia STALE — last successful poll ${mar.ageSec ?? '?'}s ago; the fallback has stopped feeding${mar.lastError ? ` — ${mar.lastError}` : ''}`);
+    } else if (!mar.lastPollAt && !warming) {
       anomalies.push(`marinesia has NEVER polled successfully${mar.lastError ? ` — ${mar.lastError}` : ''} — the fallback is dead, not degraded`);
-    } else if (total && polled < total) {
+    } else if (total && polled < total && !warming) {
       // One permanently-dark tile is enough to hold `warming` true forever and stop the fallback
       // ever being trusted — exactly what a landlocked tile did.
       anomalies.push(`marinesia ${polled}/${total} tiles have ever polled — a tile that never succeeds keeps the fallback from engaging at all`);
-    } else if (mar.lastError) {
+    } else if (mar.lastError && !warming) {
       anomalies.push(`marinesia lastError: ${mar.lastError}`);
     }
   }

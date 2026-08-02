@@ -8,6 +8,7 @@ import {
 } from '@/services/logistics/ferry-tracker';
 import { FERRY_STATUS_LABEL, formatFerryEta, formatFerrySpeed, formatFerryDelay } from '@/services/logistics/ferry-format';
 import { getPortStatus, type PortStatus } from '@/services/logistics/port-status';
+import { levelFor, type PortLevel } from '@/services/logistics/ports-geojson';
 import { getDisruptions, bucketOf, isExpiredDisruption, type DisruptionEvent, type DisruptionKind, type DisruptionBucket } from '@/services/logistics/disruptions';
 import {
   regionOf,
@@ -60,8 +61,10 @@ const STATUS_CLASS: Record<FerryStatus, string> = {
   in_port: 'ferry-status-port',
 };
 
-const CONGESTION_LABEL: Record<PortStatus['congestion'], string> = {
-  clear: 'Clear', busy: 'Busy', congested: 'Congested',
+// Keyed by PortLevel, not PortCongestion, because the table now shows the SAME level the map draws
+// — including `unknown`, which the absolute `congestion` field cannot express.
+const CONGESTION_LABEL: Record<PortLevel, string> = {
+  clear: 'Clear', busy: 'Busy', congested: 'Congested', unknown: 'No coverage',
 };
 
 // Unicode sparkline for the arrival curve (relative bar heights).
@@ -196,6 +199,17 @@ export class FreightPanel extends Panel {
     if (mapHost) mapHost.style.display = showMap ? '' : 'none';
     if (legend) legend.style.display = showMap ? '' : 'none';
     if (showMap) this.map?.resize();
+
+    // The legend has to follow the mode. Ports mode reuses the SAME green/amber the vessel legend
+    // claims mean "under way" and "at anchor", but on a port disc they mean clear and busy — so
+    // leaving the vessel legend up actively mis-explains the most prominent marks on the map. It
+    // also says nothing about disc size or the queue ring, which carry two more variables.
+    for (const el of this.content.querySelectorAll<HTMLElement>('.legend-vessels')) {
+      el.style.display = this.mode === 'ports' ? 'none' : '';
+    }
+    for (const el of this.content.querySelectorAll<HTMLElement>('.legend-ports')) {
+      el.style.display = this.mode === 'ports' ? '' : 'none';
+    }
 
     // Ports mode makes the MAP answer the question too, not just the table underneath it. The port
     // discs carry count/congestion/queue; the vessels stay on as dimmed context. Feeding the data
@@ -335,7 +349,7 @@ export class FreightPanel extends Panel {
       <tr>
         <td class="ferry-name">${escapeHtml(p.name)}</td>
         <td>${escapeHtml(p.region ?? '—')}</td>
-        <td><span class="port-congestion port-congestion-${p.congestion}">${CONGESTION_LABEL[p.congestion]}</span></td>
+        <td><span class="port-congestion port-congestion-${levelFor(p)}">${CONGESTION_LABEL[levelFor(p)]}</span></td>
         <td>${p.atPort}</td>
         <td>${waiting}</td>
         <td class="port-arrivals">${arrivals}</td>
@@ -440,9 +454,14 @@ export class FreightPanel extends Panel {
       </div>
       <div class="ferry-map-host"></div>
       <div class="ferry-map-legend">
-        <span><i style="background:#2fbf85"></i>Under way (arrow = heading)</span>
-        <span><i style="background:#e0a032"></i>At anchor</span>
-        <span><i style="background:#9aa0a6"></i>In port</span>
+        <span class="legend-vessels"><i style="background:#2fbf85"></i>Under way (arrow = heading)</span>
+        <span class="legend-vessels"><i style="background:#e0a032"></i>At anchor</span>
+        <span class="legend-vessels"><i style="background:#9aa0a6"></i>In port</span>
+        <span class="legend-ports"><i style="background:#2fbf85"></i>Clear</span>
+        <span class="legend-ports"><i style="background:#e0a032"></i>Busy</span>
+        <span class="legend-ports"><i style="background:#f06a62"></i>Congested</span>
+        <span class="legend-ports"><i style="background:#8b9199"></i>No coverage</span>
+        <span class="legend-ports legend-note">disc size = vessels at port · ring = waiting at anchor</span>
         <button type="button" class="ferry-zones-btn" aria-pressed="false" title="Show the port geofence zones on the map">◯ Port zones</button>
       </div>
       <div class="ferry-board"></div>

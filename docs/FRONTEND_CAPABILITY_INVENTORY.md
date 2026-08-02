@@ -317,7 +317,10 @@ Stated plainly, as the input to the proposal:
 3. **No area/shape encoding** beyond one heatmap, one polygon layer and a happiness choropleth —
    no congestion choropleth, no risk surfaces, no zones, no density fields.
 4. **No 3D** — no extrusion for magnitude, no terrain, no globe.
-5. **No on-map legend or layer switcher** for 47 toggles.
+5. ~~**No on-map legend or layer switcher.**~~ **This was wrong** — see the correction in §2. The
+   running app has a docked LAYERS panel with search, a legend strip and a time selector. The real
+   question is narrower: whether a flat checkbox list suits ~47 toggles and whether a 6-category
+   legend can carry 68 layers.
 6. **The freight/analytics tier is a separate page**, not part of the main map.
 7. **Half the viewport**, competing with 27 panels.
 
