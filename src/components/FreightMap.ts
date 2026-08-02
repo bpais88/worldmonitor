@@ -35,13 +35,44 @@ const PORTS_SOURCE_ID = 'ports';
 // Chosen over clustering deliberately. Clustering is the textbook fix and would replace ~3,000
 // boats with ~20 numbered bubbles at this zoom — but seeing the actual boats move is the point of
 // this board, so the fix must not delete them. Zoom back in and the dots grow to their old size.
-const VESSEL_DOT_RADIUS = [
+// Size multiplier from hull length. A 350m box boat and a 90m coaster are not the same object and
+// should not be the same dot.
+//
+// Measured on the live feed: of the vessels the feed actually classifies, lengths run 9m to 399m
+// with quartiles at 92 / 145 / 199m — a real spread, worth encoding. Unknown length resolves to 1.0
+// (the same size it has always been), NOT to the smallest: ~43% of the feed has no length, and
+// silently drawing all of them as tiny would claim knowledge we don't have.
+//
+// The range is deliberately narrow (0.75x - 1.7x). At z3 the base dot is 2px, so a wider range
+// would push the biggest ships back into the overlap problem the zoom scaling just fixed.
+const VESSEL_SIZE_FACTOR: maplibregl.ExpressionSpecification = [
+  'case', ['>', ['coalesce', ['get', 'lengthMeters'], 0], 0],
+  ['interpolate', ['linear'], ['get', 'lengthMeters'],
+    50, 0.75,
+    120, 1.0,
+    220, 1.35,
+    350, 1.7,
+  ],
+  1.0,
+];
+
+// Vessel dot size by zoom AND hull length.
+//
+// Measured on the live feed at the default European view: 3,044 vessels on screen, and at a flat
+// r=5 **77% of the painted area is dots drawing over each other**. That overlap is what turns the
+// Channel and the North Sea into a single mass — not the number of ships. Dropping to r≈2.5 there
+// halves the ink (6.5% -> 1.9% of the canvas) while still drawing EVERY vessel.
+//
+// Chosen over clustering deliberately. Clustering would replace ~3,000 boats with ~20 numbered
+// bubbles at this zoom — but seeing the actual boats move is the point of this board, so the fix
+// must not delete them.
+const VESSEL_DOT_RADIUS: maplibregl.ExpressionSpecification = [
   'interpolate', ['linear'], ['zoom'],
-  3, 2,
-  5, 3,
-  7, 4.5,
-  10, 6,
-] as const;
+  3, ['*', 2, VESSEL_SIZE_FACTOR],
+  5, ['*', 3, VESSEL_SIZE_FACTOR],
+  7, ['*', 4.5, VESSEL_SIZE_FACTOR],
+  10, ['*', 6, VESSEL_SIZE_FACTOR],
+];
 const PORT_LAYERS = ['port-queue-ring', 'port-circles', 'port-labels'];
 // The table's congestion palette, so map and table never disagree about what "busy" looks like
 // (ferry.html .port-congestion-*). `unknown` is deliberately a desaturated grey rather than a
@@ -66,6 +97,16 @@ const PORT_RADIUS = [
   7, 16,
   10.5, 20,
 ] as const;
+
+// Ports mode: the same curve at 60%, so vessels always recede RELATIVE to their normal size at that
+// zoom rather than jumping to a constant that can exceed it.
+const VESSEL_DOT_RADIUS_DIMMED: maplibregl.ExpressionSpecification = [
+  'interpolate', ['linear'], ['zoom'],
+  3, ['*', 1.2, VESSEL_SIZE_FACTOR],
+  5, ['*', 1.8, VESSEL_SIZE_FACTOR],
+  7, ['*', 2.7, VESSEL_SIZE_FACTOR],
+  10, ['*', 3.6, VESSEL_SIZE_FACTOR],
+];
 
 const PORT_FILL = [
   'match', ['get', 'level'],
@@ -216,7 +257,7 @@ export class FreightMap {
   private voyageSeq = 0;                        // bumps on every selection/close; stale async voyage loads bail
   private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
   private resizeObserver: ResizeObserver | null = null; // see setupResizeObserver — this is load-bearing
-  private userMoved = false;                            // once true, we stop re-framing on resize
+  private framed = false;   // the initial fit has happened; never re-frame again (see the observer)
 
   constructor(container: HTMLElement) {
     this.map = new maplibregl.Map({
@@ -234,11 +275,6 @@ export class FreightMap {
     this.popup.on('close', () => { this.selectedMmsi = null; this.voyageSeq++; this.replay?.clear(); setTripUrlParam(null); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
-    // Any drag/zoom/rotate the USER starts hands the viewport over to them for good. `originalEvent`
-    // is what distinguishes a real gesture from our own flyTo/fitBounds calls, which also fire these.
-    for (const ev of ['dragstart', 'zoomstart', 'rotatestart'] as const) {
-      this.map.on(ev, (e: { originalEvent?: unknown }) => { if (e?.originalEvent) this.userMoved = true; });
-    }
     this.setupResizeObserver(container);
   }
 
@@ -269,11 +305,17 @@ export class FreightMap {
       // simply reveals more geography, so a map that fitted EUROPE_BBOX into a small container at
       // construction stays at that low zoom when the container grows — showing Greenland to India
       // with the vessels crammed into a corner. Observed exactly that once the host became
-      // viewport-relative. Re-fitting keeps the framing correct at every container size.
+      // viewport-relative.
       //
-      // Guarded on `userMoved` so this only ever corrects the INITIAL framing: the moment someone
-      // pans or zooms, the view is theirs and a stray resize must not yank it back.
-      if (!this.userMoved) this.map.fitBounds(BOUNDS, { padding: 24, duration: 0 });
+      // ONLY the very first sizing pass. `userMoved` alone was not enough (review catch): a region
+      // filter, focusFerry or an opened trip all move the camera PROGRAMMATICALLY without setting
+      // it, so any later resize would snap the view back to all of Europe — and a plain
+      // Disruptions -> Vessels round trip resizes, because the host is hidden and shown. Re-framing
+      // is a fix for construction-time sizing, so it should happen once and never again.
+      if (!this.framed) {
+        this.framed = true;
+        this.map.fitBounds(BOUNDS, { padding: 24, duration: 0 });
+      }
     });
     this.resizeObserver.observe(container);
   }
@@ -411,7 +453,7 @@ export class FreightMap {
       source: SOURCE_ID,
       filter: ['!', ['get', 'moving']],
       paint: {
-        'circle-radius': VESSEL_DOT_RADIUS as unknown as number,
+        'circle-radius': VESSEL_DOT_RADIUS,
         'circle-color': STATUS_MATCH as unknown as maplibregl.ExpressionSpecification,
         'circle-stroke-color': '#0b0d0f',
         'circle-stroke-width': 1,
@@ -429,8 +471,14 @@ export class FreightMap {
         'icon-rotate': ['get', 'courseDeg'],
         'icon-rotation-alignment': 'map',
         'icon-allow-overlap': true,
-        // Same reasoning as the dots — the arrows are the densest thing on the map at low zoom.
-        'icon-size': ['interpolate', ['linear'], ['zoom'], 3, 0.45, 5, 0.65, 7, 0.9, 10, 1.1],
+        // Same reasoning as the dots — the arrows are the densest thing on the map at low zoom —
+        // and the same length multiplier, so a moving ULCV reads bigger than a moving coaster.
+        'icon-size': ['interpolate', ['linear'], ['zoom'],
+          3, ['*', 0.45, VESSEL_SIZE_FACTOR],
+          5, ['*', 0.65, VESSEL_SIZE_FACTOR],
+          7, ['*', 0.9, VESSEL_SIZE_FACTOR],
+          10, ['*', 1.1, VESSEL_SIZE_FACTOR],
+        ] as maplibregl.ExpressionSpecification,
       },
       paint: {
         'icon-color': STATUS_MATCH as unknown as maplibregl.ExpressionSpecification,
@@ -658,12 +706,18 @@ export class FreightMap {
       // texture — enough to show WHERE the traffic is, not enough to compete with a port.
       const prop = id === 'ferry-dots' ? 'circle-opacity' : 'icon-opacity';
       this.map.setPaintProperty(id, prop, visible ? 0.18 : 1);
-      // Shrink the dots too — opacity alone leaves the same amount of ink on the map. Restoring
-      // must put the ZOOM EXPRESSION back, not a flat number, or leaving Ports mode would silently
-      // strip the zoom scaling for the rest of the session.
+      // Shrink the dots too — opacity alone leaves the same amount of ink on the map.
+      //
+      // A FIXED 3px here was wrong (review catch): at the default European view the normal radius
+      // is only 2px, so "shrinking" for Ports mode actually made stationary vessels BIGGER —
+      // reversing the low-zoom decluttering exactly where port markers most need priority. It has
+      // to be a fraction of the real radius, not a constant.
+      //
+      // Restoring must also put the ZOOM EXPRESSION back, not a flat number, or leaving Ports mode
+      // would silently strip zoom scaling for the rest of the session.
       if (id === 'ferry-dots') {
         this.map.setPaintProperty(id, 'circle-radius',
-          visible ? 3 : (VESSEL_DOT_RADIUS as unknown as number));
+          visible ? VESSEL_DOT_RADIUS_DIMMED : VESSEL_DOT_RADIUS);
       }
     }
   }

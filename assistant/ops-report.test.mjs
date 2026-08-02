@@ -149,12 +149,15 @@ test('due once per day, after the send hour, and never twice', () => {
 
 const withMarinesia = (over = {}) => ({
   ...healthy(),
-  marinesia: { enabled: true, tiles: 25, lastPollAt: '2026-07-14T06:00:00Z', upserts: 12345, lastError: null, tileAgesSec: Array(25).fill(30), ...over },
+  marinesia: {
+    enabled: true, tiles: 25, lastPollAt: '2026-07-14T06:00:00Z', upserts: 12345, lastError: null,
+    tileAgesSec: Array(25).fill(30), warming: false, stale: false, ageSec: 30, ...over,
+  },
 });
 
 test('a healthy fallback is reported and raises nothing', () => {
   const r = buildOpsReport({ health: withMarinesia(), now: TUE, cleanSince: '2026-07-02' });
-  assert.match(r, /Fallback · marinesia 25\/25 tiles polled/);
+  assert.match(r, /Fallback · marinesia ok · 25\/25 tiles polled/);
   assert.doesNotMatch(r, /⚠️/);
 });
 
@@ -191,4 +194,37 @@ test('a relay predating the field says nothing at all about the fallback', () =>
   const r = buildOpsReport({ health: healthy(), now: TUE, cleanSince: '2026-07-02' });
   assert.doesNotMatch(r, /Fallback ·/);
   assert.doesNotMatch(r, /⚠️/);
+});
+
+test('THE SECOND OUTAGE SHAPE: polled once, then stalled — every tile age non-null', () => {
+  // The failure the first version could not see. After a successful sweep the tile ages stay
+  // non-null and lastPollAt stays truthy, and a later success on any tile can clear lastError — so
+  // counting non-null entries reports "25/25 polled" and raises nothing while the feed is dead.
+  // The relay computes `stale` from its own sweep length, so trust that.
+  const r = buildOpsReport({
+    health: withMarinesia({ stale: true, ageSec: 3600, tileAgesSec: Array(25).fill(3600), lastError: null }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /⚠️ marinesia STALE/);
+  assert.match(r, /3600s ago/);
+  assert.match(r, /has stopped feeding/);
+});
+
+test('a relay still warming after restart is NOT called dead', () => {
+  // A 52-tile sweep takes ~11 minutes at 13s/tile. If the daily report lands in that window nothing
+  // has polled yet on a perfectly healthy feed — the first version would have cried wolf daily.
+  const r = buildOpsReport({
+    health: withMarinesia({ warming: true, lastPollAt: null, upserts: 0, tileAgesSec: Array(25).fill(null) }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /Fallback · marinesia warming/);
+  assert.doesNotMatch(r, /⚠️/);
+});
+
+test('warming suppresses the partial-tile alarm but NOT staleness', () => {
+  const ages = Array(25).fill(30); ages[4] = null;
+  const warmingPartial = buildOpsReport({ health: withMarinesia({ warming: true, tileAgesSec: ages }), now: TUE, cleanSince: '2026-07-02' });
+  assert.doesNotMatch(warmingPartial, /⚠️/);
+  const warmingStale = buildOpsReport({ health: withMarinesia({ warming: true, stale: true, ageSec: 900 }), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(warmingStale, /⚠️ marinesia STALE/);
 });
