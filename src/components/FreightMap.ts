@@ -421,6 +421,11 @@ export class FreightMap {
     });
 
     // Vessel name labels.
+    //
+    // Collision is ON and stays on — at the default view ~3,000 vessels are on screen and only ~160
+    // names physically fit. The problem was never that they overlapped; it was that MapLibre broke
+    // the tie by FEATURE ORDER, so the 160 that got named were arbitrary. Same ink, no information.
+    // symbol-sort-key fixes which ones survive (see labelRankFor: stalled > slipping > big > moving).
     this.map.addLayer({
       id: 'ferry-labels',
       type: 'symbol',
@@ -431,6 +436,8 @@ export class FreightMap {
         'text-offset': [0.9, 0],
         'text-anchor': 'left',
         'text-allow-overlap': false,
+        // Lower sorts first, and first means placed first means kept — so negate the rank.
+        'symbol-sort-key': ['-', 0, ['get', 'labelRank']],
       },
       paint: {
         'text-color': '#e8eaed',
