@@ -198,6 +198,7 @@ export class FreightMap {
   private voyageSeq = 0;                        // bumps on every selection/close; stale async voyage loads bail
   private selectedMmsi: string | null = null; // the vessel whose voyage is loading/shown (drops stale fetches)
   private resizeObserver: ResizeObserver | null = null; // see setupResizeObserver — this is load-bearing
+  private userMoved = false;                            // once true, we stop re-framing on resize
 
   constructor(container: HTMLElement) {
     this.map = new maplibregl.Map({
@@ -215,6 +216,11 @@ export class FreightMap {
     this.popup.on('close', () => { this.selectedMmsi = null; this.voyageSeq++; this.replay?.clear(); setTripUrlParam(null); });
     this.map.addControl(new maplibregl.NavigationControl({ showCompass: false }), 'top-right');
     this.map.on('load', () => this.onLoad());
+    // Any drag/zoom/rotate the USER starts hands the viewport over to them for good. `originalEvent`
+    // is what distinguishes a real gesture from our own flyTo/fitBounds calls, which also fire these.
+    for (const ev of ['dragstart', 'zoomstart', 'rotatestart'] as const) {
+      this.map.on(ev, (e: { originalEvent?: unknown }) => { if (e?.originalEvent) this.userMoved = true; });
+    }
     this.setupResizeObserver(container);
   }
 
@@ -239,7 +245,17 @@ export class FreightMap {
       // Only meaningful once the host actually occupies space; resizing to 0x0 is a no-op that
       // would just re-latch the empty viewport.
       const { width, height } = container.getBoundingClientRect();
-      if (width > 0 && height > 0) this.map.resize();
+      if (width <= 0 || height <= 0) return;
+      this.map.resize();
+      // ...and RE-FRAME, which resize() alone does not do. resize() keeps centre and zoom and
+      // simply reveals more geography, so a map that fitted EUROPE_BBOX into a small container at
+      // construction stays at that low zoom when the container grows — showing Greenland to India
+      // with the vessels crammed into a corner. Observed exactly that once the host became
+      // viewport-relative. Re-fitting keeps the framing correct at every container size.
+      //
+      // Guarded on `userMoved` so this only ever corrects the INITIAL framing: the moment someone
+      // pans or zooms, the view is theirs and a stray resize must not yank it back.
+      if (!this.userMoved) this.map.fitBounds(BOUNDS, { padding: 24, duration: 0 });
     });
     this.resizeObserver.observe(container);
   }
