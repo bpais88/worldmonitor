@@ -7,10 +7,14 @@
     <title>European Freight Tracker — World Monitor</title>
     <script>(function(){try{var t=localStorage.getItem('worldmonitor-theme');if(t==='light')document.documentElement.dataset.theme='light';}catch(e){}})()</script>
     <style>
-      .ferry-demo-wrap { max-width: 1100px; margin: 0 auto; padding: 24px 16px; }
-      .ferry-demo-head { margin-bottom: 16px; }
-      .ferry-demo-head h1 { font-size: 20px; margin: 0 0 4px; }
-      .ferry-demo-head p { margin: 0; opacity: 0.7; font-size: 13px; }
+      /* The map IS the product here — watching freight move in real time. The board used to be
+         capped at 1100px with a fixed 420px map, so on any large display the map was a small
+         window that got proportionally smaller as the screen grew. Widen the shell and let the
+         header cost less vertical space so the map can have it instead. */
+      .ferry-demo-wrap { max-width: 1600px; margin: 0 auto; padding: 12px 16px 24px; }
+      .ferry-demo-head { margin-bottom: 8px; }
+      .ferry-demo-head h1 { font-size: 17px; margin: 0; }
+      .ferry-demo-head p { margin: 2px 0 0; opacity: 0.62; font-size: 12px; max-width: 110ch; }
       .ferry-group-count { opacity: 0.6; font-weight: 400; }
       table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
       .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px;
@@ -80,8 +84,13 @@
       .economic-empty, .error-message { padding: 24px; text-align: center; opacity: 0.7; }
       .economic-footer { margin-top: 12px; font-size: 11px; opacity: 0.5; }
       /* Ferry map (MapLibre) */
-      .ferry-map-host { height: 420px; width: 100%; border-radius: 8px; overflow: hidden;
-        border: 1px solid rgba(127,127,127,0.18); }
+      /* Viewport-relative instead of a fixed 420px: the map grows with the display, which is the
+         whole point of a live vessel view. clamp() keeps it from ever being SMALLER than the old
+         fixed height, and caps it so it stays a map rather than a wallpaper on very tall screens.
+         dvh (not vh) so mobile browser chrome doesn't push the bottom off-screen.
+         FreightMap's ResizeObserver re-measures MapLibre whenever this lands on a new size. */
+      .ferry-map-host { height: clamp(420px, calc(100dvh - 230px), 1100px); width: 100%;
+        border-radius: 8px; overflow: hidden; border: 1px solid rgba(127,127,127,0.18); }
       .ferry-map-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 18px;
         font-size: 11px; opacity: 0.75; }
       .ferry-map-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
@@ -129,7 +138,11 @@
       .ferry-search { flex: 0 0 240px; max-width: 100%; font: inherit; font-size: 12px; padding: 6px 10px;
         border: 1px solid rgba(127,127,127,0.28); border-radius: 8px; background: transparent; color: inherit; }
       .ferry-search::placeholder { color: rgba(127,127,127,0.8); }
-      .ferry-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+      /* One scrollable row rather than wrapping to two or three — operator chips were costing the
+         map ~60px of height on a normal screen. */
+      .ferry-chips { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
+        padding-bottom: 2px; scrollbar-width: thin; }
+      .ferry-chips > * { flex: 0 0 auto; }
       .ferry-chip { appearance: none; font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
         border: 1px solid rgba(127,127,127,0.28); border-radius: 999px; background: transparent; color: inherit; opacity: 0.7; }
       .ferry-chip:hover { background: rgba(127,127,127,0.10); }
