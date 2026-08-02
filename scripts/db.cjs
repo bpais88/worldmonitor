@@ -508,7 +508,16 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
 // client can index by frame without searching. The existing endpoint is left alone.
 // ---------------------------------------------------------------------------
 
-const PORT_SERIES_FIELDS = { atBerth: 'at_berth', atPort: 'at_port', atAnchor: 'at_anchor', inbound: 'inbound' };
+// `level` is the stored ABSOLUTE congestion label (clear/busy/congested), not congestionRel.
+// congestionRel is derived live against a dow×hour baseline and is not stored per snapshot, so it
+// cannot be replayed; the live map already falls back to this same absolute label whenever
+// congestionRel is null (see levelFor), which is exactly the state the recently-purged ports are in.
+// Replaying it therefore matches what the live map shows rather than inventing a second encoding.
+const PORT_SERIES_FIELDS = {
+  atBerth: 'at_berth', atPort: 'at_port', atAnchor: 'at_anchor', inbound: 'inbound', level: 'feed_label',
+};
+/** Fields that carry text, not counts — never coerced through Number(). */
+const PORT_SERIES_TEXT_FIELDS = new Set(['level']);
 const PORT_SERIES_MAX_HOURS = 168; // 7 days — beyond this, callers want queryPortHistory + downsampling
 const PORT_SERIES_DEFAULT_STEP_MIN = 15;
 /** Carry a port's last reading forward at most this long before calling the frame unknown. */
@@ -533,7 +542,9 @@ const PORT_SERIES_MAX_CARRY_MIN = 30;
  * animate as the port emptying.
  */
 async function queryPortSeries({ hours = 48, ports, fields, stepMin } = {}) {
-  const want = (Array.isArray(fields) && fields.length ? fields : ['atBerth', 'atPort'])
+  // Default = exactly what the replay draws: disc size (atPort), queue ring (atAnchor), colour
+  // (level), plus atBerth, the quantity congestion is actually derived from.
+  const want = (Array.isArray(fields) && fields.length ? fields : ['atPort', 'atBerth', 'atAnchor', 'level'])
     .filter((f) => Object.prototype.hasOwnProperty.call(PORT_SERIES_FIELDS, f));
   const h = Math.min(Math.max(Number(hours) || 48, 1), PORT_SERIES_MAX_HOURS);
   const step = Math.min(Math.max(Number(stepMin) || PORT_SERIES_DEFAULT_STEP_MIN, 5), 60);
@@ -550,10 +561,22 @@ async function queryPortSeries({ hours = 48, ports, fields, stepMin } = {}) {
   // Reach back one carry window before the grid so the FIRST frame can inherit a prior reading.
   const since = new Date(startTs - PORT_SERIES_MAX_CARRY_MIN * 60_000).toISOString();
   const pf = Array.isArray(ports) && ports.length ? ports : null;
+  // Exclude rows where the SMOOTHED count has not warmed up.
+  //
+  // at_port is a rolling 5-sample median (smoothPortStatus), so after any coverage gap the window
+  // is still full of zeros and the port reads as empty for a few polls while at_port_raw already
+  // shows vessels. feed_label is derived from the same smoothed count, so such a row is wrong in
+  // BOTH size and colour — Rotterdam appears as "0 · clear" with 13 ships actually alongside.
+  // Live this self-corrects in ~25s and nobody sees it; in a replay it is a frame you can scrub to
+  // and read. It is 6.2% of rows over the measured window, so it is not negligible.
+  //
+  // Dropping the row (rather than nulling a field) lets the bounded carry-forward hold the last
+  // GOOD reading, which is the honest answer: the median is simply not defined yet.
   const rows = await sql`SELECT extract(epoch from ts)*1000 AS ts, port_id,
-                                at_berth, at_port, at_anchor, inbound
+                                at_berth, at_port, at_anchor, inbound, feed_label
                          FROM port_snapshots
                          WHERE ts >= ${since}::timestamptz AND coverage_ok
+                           AND NOT (at_port = 0 AND at_port_raw > 0)
                            AND (${pf}::text[] IS NULL OR port_id = ANY(${pf}::text[]))
                          ORDER BY ts ASC`;
 
@@ -590,7 +613,8 @@ function resamplePortRows(rows, { startTs, endTs, stepMs, fields, maxCarryMs = P
       if (!last || ts[i] - Number(last.ts) > maxCarryMs) continue; // stays null: no fresh reading
       for (const f of fields) {
         const v = last[PORT_SERIES_FIELDS[f]];
-        port[f][i] = v == null ? null : Number(v);
+        if (v == null) continue; // leave null — absent is not zero, and not 'clear'
+        port[f][i] = PORT_SERIES_TEXT_FIELDS.has(f) ? String(v) : Number(v);
       }
     }
     ports[portId] = port;

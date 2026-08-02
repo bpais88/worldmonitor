@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 
 import {
   buildPortSeriesQuery,
+  framePorts,
   parsePortSeries,
   valueAt,
   rangeFor,
@@ -131,6 +132,77 @@ describe('valueAt', () => {
     assert.equal(valueAt(s, 'p', 0), 0);
     assert.equal(valueAt(s, 'p', 1), null);
     assert.notEqual(valueAt(s, 'p', 0), valueAt(s, 'p', 1));
+  });
+});
+
+describe('framePorts', () => {
+  const live = [
+    { portId: 'rotterdam', name: 'Rotterdam', lat: 51.95, lon: 4.13, atPort: 99, atBerth: 50, atAnchor: 7, coverageOk: true, congestionRel: 'busy', congestion: 'busy' },
+    { portId: 'savona', name: 'Savona', lat: 44.3, lon: 8.5, atPort: 3, coverageOk: true },
+  ];
+  const s = series({
+    ts: [1000, 2000],
+    ports: {
+      rotterdam: { atPort: [80, null], atBerth: [40, null], atAnchor: [5, null], level: ['congested', null] },
+      savona: { atPort: [1, 2], atBerth: [1, 1], atAnchor: [0, 0], level: ['clear', 'clear'] },
+    },
+    fields: ['atPort', 'atBerth', 'atAnchor', 'level'],
+  });
+
+  it('overrides the time-varying fields from the frame', () => {
+    const [rot] = framePorts(live, s, 0);
+    assert.equal(rot.atPort, 80);
+    assert.equal(rot.atBerth, 40);
+    assert.equal(rot.atAnchor, 5);
+    assert.equal(rot.congestion, 'congested');
+    assert.equal(rot.coverageOk, true);
+  });
+
+  it('preserves identity the series does not carry', () => {
+    const [rot] = framePorts(live, s, 0) as (typeof live[0])[];
+    assert.equal(rot.name, 'Rotterdam');
+    assert.equal(rot.lat, 51.95);
+    assert.equal(rot.lon, 4.13);
+  });
+
+  it('CLEARS congestionRel — it is live-only and would paint the past with the present', () => {
+    // congestionRel is derived against a dow×hour baseline at request time and is not stored per
+    // snapshot. Carrying the live value onto a historical frame would be a straight lie.
+    for (const frame of [0, 1]) {
+      for (const p of framePorts(live, s, frame)) assert.equal(p.congestionRel, undefined);
+    }
+  });
+
+  it('marks a port with no fresh reading as NOT covered, never as empty and clear', () => {
+    const [rot] = framePorts(live, s, 1);
+    assert.equal(rot.coverageOk, false, 'the map draws this hollow — "cannot see it"');
+    assert.equal(rot.congestion, undefined, 'no label is honest; "clear" would be a claim');
+    assert.equal(rot.atPort, 0);
+  });
+
+  it('marks a port absent from the series entirely as not covered', () => {
+    const extra = [...live, { portId: 'nowhere', name: 'Nowhere', lat: 0, lon: 0, coverageOk: true }];
+    const out = framePorts(extra, s, 0);
+    assert.equal(out[2].coverageOk, false);
+    assert.equal(out[2].congestion, undefined);
+  });
+
+  it('returns one entry per live port, in order', () => {
+    const out = framePorts(live, s, 0);
+    assert.equal(out.length, 2);
+    assert.deepEqual(out.map((p) => p.portId), ['rotterdam', 'savona']);
+  });
+
+  it('does not mutate the live ports', () => {
+    framePorts(live, s, 0);
+    assert.equal(live[0].atPort, 99, 'the live list must survive a replay untouched');
+    assert.equal(live[0].congestionRel, 'busy');
+  });
+
+  it('is out-of-range safe — a bad frame index yields uncovered ports, not a throw', () => {
+    for (const frame of [-1, 99]) {
+      for (const p of framePorts(live, s, frame)) assert.equal(p.coverageOk, false);
+    }
   });
 });
 
