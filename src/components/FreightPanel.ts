@@ -134,6 +134,7 @@ export class FreightPanel extends Panel {
   private async refreshPorts(): Promise<void> {
     try {
       this.ports = await getPortStatus();
+      if (this.mode === 'ports') this.map?.setPorts(this.regionPorts());
     } catch {
       /* keep the last-known port list */
     }
@@ -195,6 +196,13 @@ export class FreightPanel extends Panel {
     if (mapHost) mapHost.style.display = showMap ? '' : 'none';
     if (legend) legend.style.display = showMap ? '' : 'none';
     if (showMap) this.map?.resize();
+
+    // Ports mode makes the MAP answer the question too, not just the table underneath it. The port
+    // discs carry count/congestion/queue; the vessels stay on as dimmed context. Feeding the data
+    // here (rather than only in refreshPorts) means a mode switch redraws immediately from cache
+    // instead of waiting on the next poll.
+    this.map?.setPortsVisible(this.mode === 'ports');
+    if (this.mode === 'ports') this.map?.setPorts(this.regionPorts());
 
     if (this.mode === 'ports') { board.innerHTML = this.portsTableHtml(); return; }
     if (this.mode === 'disruptions') {
@@ -296,10 +304,15 @@ export class FreightPanel extends Panel {
     </table>`;
   }
 
-  private portsTableHtml(): string {
-    const ports = this.region === 'all'
+  /** Ports scoped to the active region — the SAME filter the table uses, so the two can't disagree. */
+  private regionPorts(): PortStatus[] {
+    return this.region === 'all'
       ? this.ports
       : this.ports.filter((p) => regionOf(p.lat, p.lon) === this.region);
+  }
+
+  private portsTableHtml(): string {
+    const ports = this.regionPorts();
     if (ports.length === 0) {
       return '<div class="economic-empty">Port status unavailable.</div>';
     }
@@ -411,6 +424,7 @@ export class FreightPanel extends Panel {
   private ensureScaffold(): void {
     if (this.mapMounted) return;
     this.content.innerHTML = `
+      <div class="ferry-controls">
       <div class="ferry-regions" role="tablist">
         ${REGION_ORDER.map((r) => `<button type="button" class="ferry-region-btn" data-region="${r}">${escapeHtml(REGION_LABELS[r])}</button>`).join('')}
       </div>
@@ -418,6 +432,7 @@ export class FreightPanel extends Panel {
         <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
         <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
         <button type="button" class="ferry-toggle-btn" data-mode="disruptions">Disruptions</button>
+      </div>
       </div>
       <div class="ferry-filter">
         <input type="search" class="ferry-search" placeholder="Search vessel or operator…" aria-label="Search vessel or operator" />

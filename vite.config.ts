@@ -797,6 +797,38 @@ export default defineConfig({
       ],
     },
     proxy: {
+      // AIS relay (freight board). In production these are Vercel edge functions under api/ais-*.js
+      // that forward to the relay and attach the shared secret; `vite dev` does not execute those,
+      // so without this the dev server hands back the function's own SOURCE and the board shows
+      // "Ferry feed unavailable — is the AIS relay running?" while the relay is perfectly healthy.
+      //
+      // Point WS_RELAY_URL (+ RELAY_SHARED_SECRET if the relay requires auth) at a relay and the
+      // freight board works locally. Without WS_RELAY_URL this proxy is not registered at all, so
+      // behaviour is unchanged for anyone who hasn't configured one.
+      ...(process.env.WS_RELAY_URL
+        ? Object.fromEntries(
+          [
+            ['/api/ais-ports', '/ais/ports'],
+            ['/api/ais-vessels', '/ais/vessels'],
+            ['/api/ais-disruptions', '/ais/disruptions'],
+            ['/api/ais-geofences', '/ais/geofences'],
+            ['/api/ais-trip', '/ais/trip'],
+            ['/api/ais-port-profile', '/ais/port-profile'],
+            ['/api/ais-vessel-profile', '/ais/vessel-profile'],
+          ].map(([route, relayPath]) => [route, {
+            target: process.env.WS_RELAY_URL
+              .replace('wss://', 'https://').replace('ws://', 'http://').replace(/\/$/, ''),
+            changeOrigin: true,
+            rewrite: (path: string) => path.replace(route, relayPath),
+            headers: process.env.RELAY_SHARED_SECRET
+              ? { Authorization: `Bearer ${process.env.RELAY_SHARED_SECRET}` }
+              : undefined,
+            configure: (proxy: { on: (e: string, cb: (err: Error) => void) => void }) => {
+              proxy.on('error', (err) => console.log(`[ais-relay proxy] ${route}:`, err.message));
+            },
+          }]),
+        )
+        : {}),
       // Yahoo Finance API
       '/api/yahoo': {
         target: 'https://query1.finance.yahoo.com',
