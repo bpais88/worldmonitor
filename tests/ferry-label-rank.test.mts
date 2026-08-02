@@ -45,3 +45,22 @@ describe('labelRank — which vessels get named when only ~5% of labels fit', ()
     assert.ok(rank({ status: 'under_way' }) > rank({ status: 'in_port' }));
   });
 });
+
+describe('lengthMeters must reach the GeoJSON properties', () => {
+  it('is present and numeric, because the map sizes marks from it', () => {
+    // The map reads ['get','lengthMeters']. A style expression can only see what is IN the property
+    // bag — omitting it made the size encoding fall through to its default for every vessel and do
+    // nothing at all, while the source code still looked correct.
+    const p = ferryProps(ferry({ lengthMeters: 366 }));
+    assert.equal(p.lengthMeters, 366);
+  });
+
+  it('is 0, not undefined, when the length is unknown', () => {
+    // MapLibre expressions have no concept of "absent"; the map's `> 0` guard is what separates
+    // unknown from real, so this must be a number.
+    for (const missing of [undefined, NaN, null]) {
+      const p = ferryProps(ferry({ lengthMeters: missing as never }));
+      assert.equal(p.lengthMeters, 0, String(missing));
+    }
+  });
+});

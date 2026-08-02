@@ -228,3 +228,25 @@ test('warming suppresses the partial-tile alarm but NOT staleness', () => {
   const warmingStale = buildOpsReport({ health: withMarinesia({ warming: true, stale: true, ageSec: 900 }), now: TUE, cleanSince: '2026-07-02' });
   assert.match(warmingStale, /⚠️ marinesia STALE/);
 });
+
+test('a tile that never polls is reported EVEN THOUGH warming stays true forever', () => {
+  // The trap in the first version. relayFreshness keeps `warming` true until every distinct tile
+  // has been seen, so one permanently-dark tile pins it true — and suppressing on `warming` alone
+  // made this alarm unreachable in exactly the case it was written for (the landlocked tile).
+  // Bound the grace by elapsed time: the oldest tile age shows the sweep has had its turn.
+  const ages = Array(25).fill(1200); ages[4] = null;   // swept for 20 min, one tile still dark
+  const r = buildOpsReport({
+    health: withMarinesia({ warming: true, stale: false, tileAgesSec: ages }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /⚠️ marinesia 24\/25 tiles have ever polled/);
+});
+
+test('the same partial sweep is silent while it is genuinely still warming', () => {
+  const ages = Array(25).fill(40); ages[4] = null;     // only 40s in — the sweep is mid-flight
+  const r = buildOpsReport({
+    health: withMarinesia({ warming: true, stale: false, tileAgesSec: ages }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.doesNotMatch(r, /⚠️/);
+});

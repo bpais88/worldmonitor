@@ -204,12 +204,12 @@ export class FreightPanel extends Panel {
     // claims mean "under way" and "at anchor", but on a port disc they mean clear and busy — so
     // leaving the vessel legend up actively mis-explains the most prominent marks on the map. It
     // also says nothing about disc size or the queue ring, which carry two more variables.
-    for (const el of this.content.querySelectorAll<HTMLElement>('.legend-vessels')) {
-      el.style.display = this.mode === 'ports' ? 'none' : '';
-    }
-    for (const el of this.content.querySelectorAll<HTMLElement>('.legend-ports')) {
-      el.style.display = this.mode === 'ports' ? '' : 'none';
-    }
+    //
+    // Toggled with a CLASS on the container, not per-element inline styles (review catch): setting
+    // `el.style.display = ''` REMOVES the inline declaration rather than overriding anything, so
+    // the stylesheet's `.legend-ports { display: none }` won and Ports mode ended up hiding BOTH
+    // legends — leaving the port discs with no explanation at all.
+    if (legend) legend.classList.toggle('is-ports', this.mode === 'ports');
 
     // Ports mode makes the MAP answer the question too, not just the table underneath it. The port
     // discs carry count/congestion/queue; the vessels stay on as dimmed context. Feeding the data

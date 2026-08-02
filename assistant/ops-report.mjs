@@ -187,23 +187,32 @@ export function buildOpsReport({ health, now, cleanSince }) {
     const tiles = Array.isArray(mar.tileAgesSec) ? mar.tileAgesSec : [];
     const polled = tiles.filter((a) => a !== null && a !== undefined).length;
     const total = mar.tiles ?? tiles.length;
-    // `warming` means the relay has not completed its first full sweep since boot. Right after a
-    // restart NOTHING has polled yet and the sweep takes ~11 minutes at 52 tiles, so the
-    // never-polled and partial-tile checks below would fire on a perfectly healthy feed if the
-    // report happened to run in that window. Suppress them while warming — but NOT `stale`, which
-    // stays meaningful throughout.
-    const warming = mar.warming === true;
+    // `warming` means the relay has not completed its first full sweep since boot, so right after a
+    // restart nothing has polled yet and the checks below would fire on a healthy feed.
+    //
+    // But suppressing on `warming` ALONE is a trap (review catch): a tile that never succeeds keeps
+    // warming true FOREVER — that is precisely the landlocked-tile bug this alarm exists to catch —
+    // so `!warming` would make it unreachable in exactly the case it was written for.
+    //
+    // So bound the grace period by elapsed time instead. The oldest non-null tile age tells us how
+    // long ago the FIRST tile was polled, i.e. how long the sweep has had to run. Once that exceeds
+    // one generous sweep, every tile has had its turn and anything still unpolled is genuinely dark
+    // — warming or not. 20s/tile against a 13s poll interval leaves room for rate-limit backoff.
+    const ages = tiles.filter((a) => a !== null && a !== undefined);
+    const sweptForSec = ages.length ? Math.max(...ages) : 0;
+    const graceSec = Math.max(900, (total || tiles.length) * 20);
+    const stillWarmingUp = mar.warming === true && sweptForSec < graceSec;
     if (mar.stale) {
       // The relay derives this from its own sweep length, so it already knows what "too old" means
       // for the current tile count. Trust it rather than reimplementing the threshold here.
       anomalies.push(`marinesia STALE — last successful poll ${mar.ageSec ?? '?'}s ago; the fallback has stopped feeding${mar.lastError ? ` — ${mar.lastError}` : ''}`);
-    } else if (!mar.lastPollAt && !warming) {
+    } else if (!mar.lastPollAt && !stillWarmingUp) {
       anomalies.push(`marinesia has NEVER polled successfully${mar.lastError ? ` — ${mar.lastError}` : ''} — the fallback is dead, not degraded`);
-    } else if (total && polled < total && !warming) {
+    } else if (total && polled < total && !stillWarmingUp) {
       // One permanently-dark tile is enough to hold `warming` true forever and stop the fallback
       // ever being trusted — exactly what a landlocked tile did.
       anomalies.push(`marinesia ${polled}/${total} tiles have ever polled — a tile that never succeeds keeps the fallback from engaging at all`);
-    } else if (mar.lastError && !warming) {
+    } else if (mar.lastError && !stillWarmingUp) {
       anomalies.push(`marinesia lastError: ${mar.lastError}`);
     }
   }
