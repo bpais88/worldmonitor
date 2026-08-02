@@ -140,3 +140,55 @@ test('due once per day, after the send hour, and never twice', () => {
   assert.equal(isReportDue({ now: at('09:30:00'), lastSent: '2026-07-13' }), true);  // late boot, inside catch-up
   assert.equal(isReportDue({ now: at('23:00:00'), lastSent: '2026-07-13' }), false); // past catch-up — skip to tomorrow
 });
+
+// --- fallback-feed monitoring ---------------------------------------------------------------
+// These exist because the Marinesia fallback 403'd from 2026-07-22 and went unnoticed for TEN
+// DAYS. Nothing watched it: portHistory.degraded covers the durable store, not the feed. A dead
+// fallback is invisible exactly while the primary is healthy, so it surfaces on the one day you
+// needed it. The shapes below are taken from the real /health during the outage.
+
+const withMarinesia = (over = {}) => ({
+  ...healthy(),
+  marinesia: { enabled: true, tiles: 25, lastPollAt: '2026-07-14T06:00:00Z', upserts: 12345, lastError: null, tileAgesSec: Array(25).fill(30), ...over },
+});
+
+test('a healthy fallback is reported and raises nothing', () => {
+  const r = buildOpsReport({ health: withMarinesia(), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /Fallback · marinesia 25\/25 tiles polled/);
+  assert.doesNotMatch(r, /⚠️/);
+});
+
+test('THE OUTAGE: enabled but never once polled is flagged as dead, not degraded', () => {
+  const r = buildOpsReport({
+    health: withMarinesia({ lastPollAt: null, upserts: 0, tileAgesSec: Array(25).fill(null), lastError: 'Marinesia non-JSON response (HTTP 403)' }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /⚠️ marinesia has NEVER polled successfully/);
+  assert.match(r, /HTTP 403/);
+  assert.match(r, /the fallback is dead, not degraded/);
+});
+
+test('one permanently-dark tile is flagged — it alone stops the fallback engaging', () => {
+  // The landlocked-tile bug: a tile that always 404s keeps tilesSeen below tileCount, which keeps
+  // `warming` true forever, which means no port is ever granted fallback coverage.
+  const ages = Array(25).fill(30); ages[4] = null;
+  const r = buildOpsReport({ health: withMarinesia({ tileAgesSec: ages }), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /⚠️ marinesia 24\/25 tiles have ever polled/);
+});
+
+test('a transient lastError still surfaces once the sweep is otherwise complete', () => {
+  const r = buildOpsReport({ health: withMarinesia({ lastError: 'Marinesia error (HTTP 429): Too Many Requests' }), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /⚠️ marinesia lastError: .*429/);
+});
+
+test('a deliberately disabled fallback is stated but NOT nagged about daily', () => {
+  const r = buildOpsReport({ health: { ...healthy(), marinesia: { enabled: false } }, now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /Fallback · marinesia disabled/);
+  assert.doesNotMatch(r, /⚠️/); // a config choice, not an anomaly
+});
+
+test('a relay predating the field says nothing at all about the fallback', () => {
+  const r = buildOpsReport({ health: healthy(), now: TUE, cleanSince: '2026-07-02' });
+  assert.doesNotMatch(r, /Fallback ·/);
+  assert.doesNotMatch(r, /⚠️/);
+});

@@ -154,6 +154,19 @@ export function buildOpsReport({ health, now, cleanSince }) {
   }
   lines.push(`PortHistory · degraded=${ph.degraded} · lastWriteOk=${ph.lastWriteOk} · snapshots ${ph.snapshotRows} · events ${ph.eventRows}`);
 
+  // Fallback feed. This block exists because the Marinesia fallback died on 2026-07-22 and nobody
+  // noticed for TEN DAYS — every request 403ing while aisstream quietly carried the whole load. A
+  // dead fallback is invisible precisely when things are fine, and by definition you find out on
+  // the day you needed it. Nothing here watched it; portHistory.degraded only covers the DB.
+  const mar = health?.marinesia;
+  if (mar) {
+    const tiles = Array.isArray(mar.tileAgesSec) ? mar.tileAgesSec : [];
+    const polled = tiles.filter((a) => a !== null && a !== undefined).length;
+    lines.push(mar.enabled
+      ? `Fallback · marinesia ${polled}/${mar.tiles ?? tiles.length} tiles polled · upserts ${mar.upserts ?? 0}${mar.lastError ? ` · lastError: ${mar.lastError}` : ''}`
+      : 'Fallback · marinesia disabled (no MARINESIA_API_KEY) — aisstream has no backup');
+  }
+
   // 4. Anomalies the routines were told to flag explicitly — silence here means "nothing odd".
   const anomalies = [];
   if (health?.status !== 'ok') anomalies.push(`relay status=${health?.status}`);
@@ -162,6 +175,27 @@ export function buildOpsReport({ health, now, cleanSince }) {
   if (t.tripPointsDropped > 0) anomalies.push(`tripPointsDropped=${t.tripPointsDropped} (should be 0)`);
   if (ph.lastError) anomalies.push(`portHistory.lastError: ${ph.lastError}`);
   if (ph.degraded) anomalies.push('portHistory degraded — durable store unavailable, running on fallback');
+  // --- fallback-feed anomalies -----------------------------------------------------------------
+  // Ordered so the LOUDEST case is the one that actually happened: a configured fallback that has
+  // never once succeeded. That is a credential/account problem, not a blip, and it will not fix
+  // itself.
+  // Absent block => this relay predates the field; silence, same as baselineMaturity above.
+  // Explicitly disabled => a deployment choice, already stated in the status line; warning about it
+  // daily would be noise. Only an ENABLED fallback that isn't working is an anomaly.
+  if (mar?.enabled) {
+    const tiles = Array.isArray(mar.tileAgesSec) ? mar.tileAgesSec : [];
+    const polled = tiles.filter((a) => a !== null && a !== undefined).length;
+    const total = mar.tiles ?? tiles.length;
+    if (!mar.lastPollAt) {
+      anomalies.push(`marinesia has NEVER polled successfully${mar.lastError ? ` — ${mar.lastError}` : ''} — the fallback is dead, not degraded`);
+    } else if (total && polled < total) {
+      // One permanently-dark tile is enough to hold `warming` true forever and stop the fallback
+      // ever being trusted — exactly what a landlocked tile did.
+      anomalies.push(`marinesia ${polled}/${total} tiles have ever polled — a tile that never succeeds keeps the fallback from engaging at all`);
+    } else if (mar.lastError) {
+      anomalies.push(`marinesia lastError: ${mar.lastError}`);
+    }
+  }
   // Not yet degraded, but the abandon sweep is running close to the 120h cap that would trip it.
   if (t.oldestOpenTripAgeMin != null && t.oldestOpenTripAgeMin > capMin(t) * 0.95 && !t.degraded) {
     anomalies.push(`oldestOpenTripAgeMin ${t.oldestOpenTripAgeMin} is within 5% of the ${capMin(t)} cap — the daily abandon sweep is close to the line`);
