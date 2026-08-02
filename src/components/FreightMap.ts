@@ -335,9 +335,6 @@ export class FreightMap {
       } as unknown as maplibregl.CircleLayerSpecification['paint'],
     });
 
-    // Port labels are inserted BEFORE the basemap's first symbol layer — see below for why that one
-    // detail decides whether this mode is readable at all.
-    const firstBasemapSymbol = this.map.getStyle().layers?.find((l) => l.type === 'symbol')?.id;
     this.map.addLayer({
       id: 'port-labels',
       type: 'symbol',
@@ -347,32 +344,42 @@ export class FreightMap {
       filter: ['>', ['get', 'atPort'], 0],
       layout: {
         visibility: 'none',
-        'text-field': ['get', 'label'],
+        // Draw ALWAYS, and control clutter by labelling FEWER ports when zoomed out instead.
+        //
+        // Three approaches were tried before this one. Collision on, layer after the basemap: every
+        // label overlapping a country name lost, and one survived across all of Europe. Collision
+        // off: they beat the basemap but stacked on each other in the Dutch cluster. Collision on,
+        // layer inserted before the basemap's first symbol layer (waterway_label): they won
+        // PLACEMENT — but style order sets draw order too, so they rendered underneath, and the
+        // basemap's city labels ignore collision and painted straight over them. Rotterdam and
+        // Amsterdam, the two that matter most, were invisible while Moerdijk and Felixstowe showed.
+        //
+        // Placement priority and draw order cannot be separated, so stop fighting it: draw on top
+        // unconditionally, and keep the map readable by thinning the SET of labels by zoom.
+        'text-allow-overlap': true,
+        'text-ignore-placement': true,
+        // Zoomed out, only ports with real activity are named — that alone empties the Dutch
+        // pile-up, since Moerdijk/Vlissingen fall away while Rotterdam/Amsterdam stay. From z6 the
+        // ports are far enough apart on screen that everything can be labelled.
+        // (A `step` on zoom at the top level is the form MapLibre allows for a layout property that
+        // also reads feature data.)
+        'text-field': [
+          'step', ['zoom'],
+          ['case', ['>', ['get', 'atPort'], 8], ['get', 'label'], ''],
+          6, ['get', 'label'],
+        ],
         'text-size': 11,
         'text-offset': [0, 1.4],
         'text-anchor': 'top',
-        // Collision stays ON — but this layer sits ahead of the basemap's labels in the style, and
-        // MapLibre places symbols in style order with earlier layers winning. That ordering is the
-        // whole trick:
-        //   - added AFTER the basemap (the obvious place): every port label that overlapped a
-        //     country name lost, and exactly ONE survived across all of Europe.
-        //   - collision disabled to force them through: they won against the basemap but then
-        //     printed straight over EACH OTHER — Rotterdam/Amsterdam/Moerdijk/Vlissingen became an
-        //     illegible stack, which is worse, because that cluster is the most important on the map.
-        //   - added BEFORE the basemap with collision on (this): ports beat country names AND
-        //     de-conflict among themselves.
-        'text-allow-overlap': false,
-        'text-optional': false,
-        // When two ports do collide, the busier one must be the one that survives. Negative so that
-        // a HIGHER atPort sorts first, and first means placed first means kept.
-        'symbol-sort-key': ['-', 0, ['get', 'atPort']],
+        // Busier ports draw last => on top, so if two labels do overlap the important one is legible.
+        'symbol-sort-key': ['get', 'atPort'],
       },
       paint: {
         'text-color': '#e8eaed',
         'text-halo-color': '#0b0d0f',
         'text-halo-width': 1.4,
       },
-    }, firstBasemapSymbol);
+    });
 
     // Voyage replay (Phase C): its route/trail/waypoints/playhead render UNDER the vessels (added first).
     this.replay = new VoyageReplay(this.map);

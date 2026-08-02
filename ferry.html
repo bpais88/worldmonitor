@@ -126,8 +126,14 @@
          fixed height, and caps it so it stays a map rather than a wallpaper on very tall screens.
          dvh (not vh) so mobile browser chrome doesn't push the bottom off-screen.
          FreightMap's ResizeObserver re-measures MapLibre whenever this lands on a new size. */
-      .ferry-map-host { height: clamp(420px, calc(100dvh - 230px), 1100px); width: 100%;
+      .ferry-map-host { height: 420px; width: 100%;
         border-radius: 8px; overflow: hidden; border: 1px solid rgba(127,127,127,0.18); }
+      /* Separate declaration ON PURPOSE, not merged into the rule above. `dvh` is unknown to Safari
+         < 15.4 and Chrome < 108, and a declaration containing an unparseable unit is dropped
+         WHOLE — taking the height with it. The host has no intrinsic height, so the map would
+         collapse to 0 and, because the ResizeObserver deliberately ignores zero-sized boxes, never
+         recover. Older browsers keep the 420px above; newer ones override it here. */
+      .ferry-map-host { height: clamp(420px, calc(100dvh - 230px), 1100px); }
       .ferry-map-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 18px;
         font-size: 11px; opacity: 0.75; }
       .ferry-map-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
