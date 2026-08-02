@@ -335,6 +335,9 @@ export class FreightMap {
       } as unknown as maplibregl.CircleLayerSpecification['paint'],
     });
 
+    // Port labels are inserted BEFORE the basemap's first symbol layer — see below for why that one
+    // detail decides whether this mode is readable at all.
+    const firstBasemapSymbol = this.map.getStyle().layers?.find((l) => l.type === 'symbol')?.id;
     this.map.addLayer({
       id: 'port-labels',
       type: 'symbol',
@@ -348,19 +351,28 @@ export class FreightMap {
         'text-size': 11,
         'text-offset': [0, 1.4],
         'text-anchor': 'top',
-        // MUST overlap. MapLibre resolves symbol collisions in style order, and the BASEMAP's own
-        // place labels (country and city names) are added long before ours — so with collision on,
-        // our port labels lost essentially every contest and only one survived, in empty sea. These
-        // numbers are the whole point of Ports mode; they are not allowed to lose to "POLAND".
-        'text-allow-overlap': true,
-        'text-ignore-placement': true,
+        // Collision stays ON — but this layer sits ahead of the basemap's labels in the style, and
+        // MapLibre places symbols in style order with earlier layers winning. That ordering is the
+        // whole trick:
+        //   - added AFTER the basemap (the obvious place): every port label that overlapped a
+        //     country name lost, and exactly ONE survived across all of Europe.
+        //   - collision disabled to force them through: they won against the basemap but then
+        //     printed straight over EACH OTHER — Rotterdam/Amsterdam/Moerdijk/Vlissingen became an
+        //     illegible stack, which is worse, because that cluster is the most important on the map.
+        //   - added BEFORE the basemap with collision on (this): ports beat country names AND
+        //     de-conflict among themselves.
+        'text-allow-overlap': false,
+        'text-optional': false,
+        // When two ports do collide, the busier one must be the one that survives. Negative so that
+        // a HIGHER atPort sorts first, and first means placed first means kept.
+        'symbol-sort-key': ['-', 0, ['get', 'atPort']],
       },
       paint: {
         'text-color': '#e8eaed',
         'text-halo-color': '#0b0d0f',
         'text-halo-width': 1.4,
       },
-    });
+    }, firstBasemapSymbol);
 
     // Voyage replay (Phase C): its route/trail/waypoints/playhead render UNDER the vessels (added first).
     this.replay = new VoyageReplay(this.map);
