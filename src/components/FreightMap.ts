@@ -11,6 +11,8 @@ import { escapeHtml } from '@/utils/sanitize';
 import { EUROPE_BBOX, type Bbox } from '@/config/maritime-ports';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
 import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
+import { portsToGeoJSON } from '@/services/logistics/ports-geojson';
+import type { PortStatus } from '@/services/logistics/port-status';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
 import { fetchTripByMmsi, fetchTripById, type TripDetail } from '@/services/logistics/trip-detail';
 import { VoyageReplay } from './VoyageReplay';
@@ -21,6 +23,39 @@ const SOURCE_ID = 'ferries';
 const GEOFENCE_SOURCE_ID = 'geofences';
 const GEOFENCE_LAYERS = ['geofence-fill', 'geofence-line'];
 const ARROW_ICON = 'ferry-arrow';
+const PORTS_SOURCE_ID = 'ports';
+const PORT_LAYERS = ['port-queue-ring', 'port-circles', 'port-labels'];
+// The table's congestion palette, so map and table never disagree about what "busy" looks like
+// (ferry.html .port-congestion-*). `unknown` is deliberately a desaturated grey rather than a
+// fourth hue: it must read as ABSENCE of information, not as a fourth severity.
+// Radius by sqrt(atPort) so the DISC AREA tracks the count — the eye reads area, and a linear
+// radius would make a 25-vessel port look 25x a 1-vessel one.
+//
+// The domain runs to sqrt(110) ~ 10.5, not to sqrt(49) as first drafted. Rotterdam currently sits
+// at 104 vessels and Amsterdam at 67; a shorter domain clamped BOTH to the maximum, so the two
+// busiest ports in Europe rendered identically. Caught by previewing the encoding against live data
+// before shipping it.
+//
+// The top is also held to 20px rather than 24: Rotterdam, Amsterdam, Moerdijk and Vlissingen sit
+// within ~50px of each other at European zoom, so an over-large maximum turns the single most
+// important cluster on the map into one unreadable blob. Floor of 4px keeps an empty port visible
+// and clickable.
+const PORT_RADIUS = [
+  'interpolate', ['linear'], ['sqrt', ['max', ['get', 'atPort'], 0]],
+  0, 4,
+  2, 7,
+  4, 11,
+  7, 16,
+  10.5, 20,
+] as const;
+
+const PORT_FILL = [
+  'match', ['get', 'level'],
+  'congested', '#f06a62',
+  'busy', '#e0a032',
+  'clear', '#2fbf85',
+  '#8b9199',
+] as const;
 
 // bbox is [latMin, lonMin, latMax, lonMax]; MapLibre wants [[w,s],[e,n]].
 const toMapBounds = (b: Bbox): [[number, number], [number, number]] => [
@@ -154,6 +189,8 @@ export class FreightMap {
   private ready = false;
   private pending: TrackedFerry[] | null = null;
   private pendingGeofences: Geofence[] | null = null;
+  private pendingPorts: PortStatus[] | null = null;
+  private portsVisible = false;
   private zonesVisible = false;
   private popup: maplibregl.Popup;
   private replay: VoyageReplay | null = null;   // voyage replay overlay (route + trail + waypoints + playhead)
@@ -235,6 +272,75 @@ export class FreightMap {
       paint: { 'line-color': ['get', 'color'], 'line-width': 1.2, 'line-opacity': 0.7 },
     });
 
+    // --- Ports (congestion) -------------------------------------------------------------------
+    // Added BEFORE the vessels so ships always draw on top of the port discs. Hidden until the
+    // board is in Ports mode.
+    //
+    // Three encodings, because a port has three things to say at once and one coloured dot can only
+    // say one of them:
+    //   radius -> HOW MANY are at the port      (sqrt so AREA tracks the count, not radius: a
+    //                                            25-vessel port must not look 25x a 1-vessel port)
+    //   fill   -> HOW BUSY that is FOR THIS PORT (congestionRel where available; see levelFor)
+    //   ring   -> HOW MANY ARE QUEUED at anchor  (the leading indicator — a queue forms before a
+    //                                            port reads congested)
+    this.map.addSource(PORTS_SOURCE_ID, { type: 'geojson', data: portsToGeoJSON([]) });
+
+    // Anchor queue: a wide, soft ring OUTSIDE the disc. Drawn first so the disc sits on top of it.
+    this.map.addLayer({
+      id: 'port-queue-ring',
+      type: 'circle',
+      source: PORTS_SOURCE_ID,
+      layout: { visibility: 'none' },
+      filter: ['>', ['get', 'atAnchor'], 0],
+      paint: {
+        'circle-radius': ['+', PORT_RADIUS as unknown as number, 5],
+        'circle-color': 'transparent',
+        'circle-stroke-color': '#e0a032',
+        // Ring thickness grows with the queue, capped so a huge queue can't swamp its neighbours.
+        'circle-stroke-width': ['interpolate', ['linear'], ['get', 'atAnchor'], 1, 1.5, 10, 4.5],
+        'circle-stroke-opacity': 0.85,
+      } as unknown as maplibregl.CircleLayerSpecification['paint'],
+    });
+
+    this.map.addLayer({
+      id: 'port-circles',
+      type: 'circle',
+      source: PORTS_SOURCE_ID,
+      layout: { visibility: 'none' },
+      paint: {
+        'circle-radius': PORT_RADIUS as unknown as number,
+        'circle-color': PORT_FILL as unknown as string,
+        // Uncovered ports are drawn hollow: the outline says "there is a port here", the missing
+        // fill says "we cannot currently see it". Never let that read as clear (#125).
+        'circle-opacity': ['case', ['get', 'coverageOk'], 0.55, 0.12],
+        'circle-stroke-color': PORT_FILL as unknown as string,
+        'circle-stroke-width': ['case', ['get', 'coverageOk'], 1.5, 1.5],
+        'circle-stroke-opacity': 0.95,
+      } as unknown as maplibregl.CircleLayerSpecification['paint'],
+    });
+
+    this.map.addLayer({
+      id: 'port-labels',
+      type: 'symbol',
+      source: PORTS_SOURCE_ID,
+      layout: {
+        visibility: 'none',
+        'text-field': ['get', 'label'],
+        'text-size': 11,
+        'text-offset': [0, 1.4],
+        'text-anchor': 'top',
+        // Unlike the vessel labels, these MAY NOT overlap — there are only 43 and each one is a
+        // number a user is meant to read.
+        'text-allow-overlap': false,
+        'text-optional': true,
+      },
+      paint: {
+        'text-color': '#e8eaed',
+        'text-halo-color': '#0b0d0f',
+        'text-halo-width': 1.4,
+      },
+    });
+
     // Voyage replay (Phase C): its route/trail/waypoints/playhead render UNDER the vessels (added first).
     this.replay = new VoyageReplay(this.map);
 
@@ -304,6 +410,12 @@ export class FreightMap {
       this.setGeofences(this.pendingGeofences);
       this.pendingGeofences = null;
     }
+    if (this.pendingPorts) {
+      this.setPorts(this.pendingPorts);
+      this.pendingPorts = null;
+    }
+    // Re-apply the mode the panel already chose, in case it switched before the style was ready.
+    this.setPortsVisible(this.portsVisible);
     if (this.pendingTripId != null) {
       void this.openTripById(this.pendingTripId);
       this.pendingTripId = null;
@@ -444,6 +556,38 @@ export class FreightMap {
   }
 
   /** Show/hide the geofence zone overlay. */
+  /** Replace the port congestion set (Ports mode). Safe before the style loads. */
+  public setPorts(ports: PortStatus[]): void {
+    this.pendingPorts = ports;
+    if (!this.ready) return;
+    const source = this.map.getSource(PORTS_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    source?.setData(portsToGeoJSON(ports));
+  }
+
+  /**
+   * Show/hide the port layer, and step the vessels back when it's on.
+   *
+   * The vessels aren't hidden in Ports mode — where the ships are is still the context that makes
+   * a congested port meaningful — but they are dimmed and their labels dropped, so ~2,000 vessel
+   * names don't compete with the 43 numbers the user switched modes to read.
+   */
+  public setPortsVisible(visible: boolean): void {
+    this.portsVisible = visible;
+    if (!this.ready) return;
+    const visibility = visible ? 'visible' : 'none';
+    for (const id of PORT_LAYERS) {
+      if (this.map.getLayer(id)) this.map.setLayoutProperty(id, 'visibility', visibility);
+    }
+    if (this.map.getLayer('ferry-labels')) {
+      this.map.setLayoutProperty('ferry-labels', 'visibility', visible ? 'none' : 'visible');
+    }
+    for (const id of ['ferry-dots', 'ferry-arrows']) {
+      if (!this.map.getLayer(id)) continue;
+      const prop = id === 'ferry-dots' ? 'circle-opacity' : 'icon-opacity';
+      this.map.setPaintProperty(id, prop, visible ? 0.35 : 1);
+    }
+  }
+
   public setZonesVisible(visible: boolean): void {
     this.zonesVisible = visible;
     this.applyZonesVisibility();
