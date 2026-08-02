@@ -4952,6 +4952,35 @@ const handleRequest = async (req, res) => {
       eventCount: portHistoryState.events.length,
       generatedAt: Date.now(),
     }));
+  } else if (pathname === '/ais/port-series') {
+    // Columnar per-port series for the congestion REPLAY. Same rows as /ais/port-history, shaped for
+    // playback instead of analysis: a shared ts axis + one array per field per port. Measured on the
+    // real 48h window that is 0.010 MB gz against 0.29 MB for the full history payload, because the
+    // replay reads neither port_events nor the eta_h* columns. ?hours= (default 48, max 168),
+    // ?ports=a,b, ?fields=atBerth,atPort. PRIVATE (inherits the x-relay-key guard). Moves with the
+    // 5-min snapshot cadence → short cache.
+    const psHeaders = { 'Content-Type': 'application/json', 'Cache-Control': 'public, max-age=60, s-maxage=120' };
+    if (!db.enabled) {
+      return sendCompressed(req, res, 200, psHeaders, JSON.stringify({
+        ts: [], ports: {}, fields: [], hours: 0, tickCount: 0, portCount: 0, generatedAt: Date.now(), db: false,
+      }));
+    }
+    try {
+      const q = new URL(req.url, `http://localhost:${PORT}`).searchParams;
+      const csv = (v) => (v ? v.split(',').map((s) => s.trim()).filter(Boolean) : undefined);
+      const payload = await db.queryPortSeries({
+        hours: Number(q.get('hours')) || undefined,
+        ports: csv(q.get('ports')),
+        fields: csv(q.get('fields')),
+      });
+      return sendCompressed(req, res, 200, psHeaders, JSON.stringify(payload));
+    } catch (e) {
+      console.warn('[Relay] port-series query failed:', e.message);
+      return sendCompressed(req, res, 200, psHeaders, JSON.stringify({
+        ts: [], ports: {}, fields: [], hours: 0, tickCount: 0, portCount: 0,
+        generatedAt: Date.now(), db: true, error: 'query failed',
+      }));
+    }
   } else if (pathname === '/ais/voyages/daily') {
     // Trips Marco registered per day (durable counters). ?days=N (default 14, max 120).
     const now = Date.now();

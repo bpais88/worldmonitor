@@ -2,9 +2,30 @@
 
 **Scope: `ferry.html` only** — the European Freight Tracker. Not the main dashboard.
 
-> **Status 2026-08-02: P1 and P5 are SHIPPED** (PR #132), along with four bugs found while building
-> them. P2/P3/P4/P6 remain open. Part 1 below is preserved as the audit that motivated the work —
-> several of its findings are now historical, and are marked inline.
+> **Status 2026-08-02 (end of day): P1, P2, P3 and P5 are SHIPPED. P4 is HALF shipped and its
+> remaining half is NOT BUILDABLE as written. P6 is in progress.**
+>
+> | | state |
+> |---|---|
+> | P1 ports-on-map | shipped #132 |
+> | P5 reclaim screen space | shipped #132 |
+> | P3 labels + density | shipped — collision-aware labels via `text-allow-overlap: false` + `symbol-sort-key`; density solved by scaling marks with zoom rather than the proposed clustering |
+> | P2 zone legibility | shipped #140 |
+> | P4 vessel encoding | **half** — size by hull length shipped; category is not derivable, see below |
+> | P6 congestion replay | in progress — history endpoint + scrubber landed |
+>
+> **P4's second half cannot be built from AIS.** The proposal asks to distinguish container / RoPax
+> / tanker / general cargo. AIS ShipType does not carry that distinction: codes 70–79 subdivide
+> cargo by HAZARD CLASS, not cargo type. Measured against the board's own query
+> (`types=cargo,passenger&freight=1`), the displayed population is **98.7% cargo / 1.3% passenger**
+> (2017 vs 27 of 2044), and **91.6% of vessels are ShipType 70 or 79 — both meaning "cargo,
+> unspecified"**. A colour encoding on that paints one hue on 2017 marks and another on 27. Real
+> type data needs a vessel registry (IMO → type), which is a data-sourcing project, not a map
+> change. The one encodable signal found instead: **133 vessels (6.5%) broadcast hazardous-cargo
+> classes A–D** and currently render identically to everything else.
+>
+> Part 1 below is preserved as the audit that motivated the work — several of its findings are now
+> historical, and are marked inline.
 
 Audited 2026-08-01 against production (`worldmonitor-x5wwiqfbn`) **after** the basemap fix
 (#128 + #129), so every observation below is of a map that actually renders. Companion to
@@ -142,10 +163,10 @@ the one feature no competitor has, and the UI for it is already on screen.
 |---|---|---|---|
 | ~~1~~ | ~~P1 ports-on-map~~ | — | **SHIPPED #132** |
 | ~~3~~ | ~~P5 reclaim screen space~~ | — | **SHIPPED #132** — 270px → 134px |
-| **1** | **P3 collision + clustering** | M | **Next.** Makes dense water readable |
-| 2 | P4 vessel encoding | M | Depth once the basics read well |
-| 3 | P2 zone legibility | S | Removes a dead control |
-| 4 | P6 congestion replay | L | Differentiator, build last |
+| ~~1~~ | ~~P3 collision + clustering~~ | — | **SHIPPED** — collision-aware labels; zoom-scaled marks instead of clustering |
+| ~~2~~ | ~~P4 vessel encoding~~ | — | **HALF SHIPPED** — size done; category not derivable from AIS (see status above) |
+| ~~3~~ | ~~P2 zone legibility~~ | — | **SHIPPED #140** |
+| **1** | **P6 congestion replay** | L | **Next.** The differentiator — data and scrubber now exist |
 
 ~~Plus two trivial fixes worth doing immediately~~ — both shipped in #132.
 

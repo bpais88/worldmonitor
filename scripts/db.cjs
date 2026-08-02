@@ -495,6 +495,139 @@ async function queryPortHistory({ sinceMs, limitSnap = 4032, limitEvt = 20000, p
 }
 
 // ---------------------------------------------------------------------------
+// Port series — the congestion REPLAY's data shape.
+//
+// queryPortHistory above serves the same rows, but its row-oriented contract
+// ({ts, ports:[{portId, atPort, atBerth, inboundEta:{…}, …}]}) is built for baseline/backtest
+// consumers that want every field. For a 48h scrubber that is almost all waste: measured over the
+// real window, the full payload is 0.29 MB gzipped, of which HALF is port_events the replay never
+// reads, while the two series it actually animates are 0.010 MB — a 29× difference.
+//
+// So this returns columns, not rows: one shared `ts` axis plus a per-port array per field. Ports
+// missing from a tick get null at that index, so every array is the same length as `ts` and the
+// client can index by frame without searching. The existing endpoint is left alone.
+// ---------------------------------------------------------------------------
+
+// `level` is the stored ABSOLUTE congestion label (clear/busy/congested), not congestionRel.
+// congestionRel is derived live against a dow×hour baseline and is not stored per snapshot, so it
+// cannot be replayed; the live map already falls back to this same absolute label whenever
+// congestionRel is null (see levelFor), which is exactly the state the recently-purged ports are in.
+// Replaying it therefore matches what the live map shows rather than inventing a second encoding.
+const PORT_SERIES_FIELDS = {
+  atBerth: 'at_berth', atPort: 'at_port', atAnchor: 'at_anchor', inbound: 'inbound', level: 'feed_label',
+};
+/** Fields that carry text, not counts — never coerced through Number(). */
+const PORT_SERIES_TEXT_FIELDS = new Set(['level']);
+const PORT_SERIES_MAX_HOURS = 168; // 7 days — beyond this, callers want queryPortHistory + downsampling
+const PORT_SERIES_DEFAULT_STEP_MIN = 15;
+/** Carry a port's last reading forward at most this long before calling the frame unknown. */
+const PORT_SERIES_MAX_CARRY_MIN = 30;
+
+/**
+ * Per-port time series over the last `hours`, resampled onto a regular grid for playback.
+ *
+ * Returns { ts:[…], ports:{ [portId]: { atBerth:[…], … } }, fields, hours, stepMin, tickCount,
+ * portCount, generatedAt, db }. Every field array is index-aligned to `ts`.
+ *
+ * WHY A GRID, not the raw tick axis: ports are not sampled on a shared clock. Measured over a real
+ * 48h window, of 572 raw ticks Rotterdam had 426 readings, 9 dark, and was simply ABSENT from 137
+ * — a quarter of them. Keyed on the union of raw timestamps, the busiest port in Europe blinks out
+ * of the replay every fourth frame. Resampling to a fixed step and carrying the last reading
+ * forward (bounded, see below) gives continuous playback and a much smaller payload.
+ *
+ * The carry is bounded at PORT_SERIES_MAX_CARRY_MIN so a genuinely dark feed still reads as a hole
+ * rather than a port frozen at its last value forever. `null` means "no fresh reading", which is
+ * NOT the same as 0 — the client must render it as unknown, never as an empty port. Rows with
+ * coverage_ok = false are excluded for the same reason: they record zeros that would otherwise
+ * animate as the port emptying.
+ */
+async function queryPortSeries({ hours = 48, ports, fields, stepMin } = {}) {
+  // Default = exactly what the replay draws: disc size (atPort), queue ring (atAnchor), colour
+  // (level), plus atBerth, the quantity congestion is actually derived from.
+  const want = (Array.isArray(fields) && fields.length ? fields : ['atPort', 'atBerth', 'atAnchor', 'level'])
+    .filter((f) => Object.prototype.hasOwnProperty.call(PORT_SERIES_FIELDS, f));
+  const h = Math.min(Math.max(Number(hours) || 48, 1), PORT_SERIES_MAX_HOURS);
+  const step = Math.min(Math.max(Number(stepMin) || PORT_SERIES_DEFAULT_STEP_MIN, 5), 60);
+  const base = {
+    ts: [], ports: {}, fields: want, hours: h, stepMin: step, tickCount: 0, portCount: 0,
+    generatedAt: Date.now(),
+  };
+  if (!enabled || !want.length) return { ...base, db: false };
+
+  const stepMs = step * 60_000;
+  const now = Date.now();
+  const endTs = Math.floor(now / stepMs) * stepMs;          // align the grid to the step
+  const startTs = endTs - Math.round(h * 3600_000 / stepMs) * stepMs;
+  // Reach back one carry window before the grid so the FIRST frame can inherit a prior reading.
+  const since = new Date(startTs - PORT_SERIES_MAX_CARRY_MIN * 60_000).toISOString();
+  const pf = Array.isArray(ports) && ports.length ? ports : null;
+  // Exclude rows where the SMOOTHED count has not warmed up.
+  //
+  // at_port is a rolling 5-sample median (smoothPortStatus), so after any coverage gap the window
+  // is still full of zeros and the port reads as empty for a few polls while at_port_raw already
+  // shows vessels. feed_label is derived from the same smoothed count, so such a row is wrong in
+  // BOTH size and colour — Rotterdam appears as "0 · clear" with 13 ships actually alongside.
+  // Live this self-corrects in ~25s and nobody sees it; in a replay it is a frame you can scrub to
+  // and read. It is 6.2% of rows over the measured window, so it is not negligible.
+  //
+  // Dropping the row (rather than nulling a field) lets the bounded carry-forward hold the last
+  // GOOD reading, which is the honest answer: the median is simply not defined yet.
+  //
+  // coalesce() is load-bearing: at_port_raw is nullable, and `NULL > 0` is NULL, so a bare
+  // `NOT (at_port = 0 AND at_port_raw > 0)` evaluates to NULL — which WHERE treats as not-true —
+  // and would silently drop every genuine zero that has no raw count recorded, showing it as a
+  // coverage hole rather than an empty port.
+  const rows = await sql`SELECT extract(epoch from ts)*1000 AS ts, port_id,
+                                at_berth, at_port, at_anchor, inbound, feed_label
+                         FROM port_snapshots
+                         WHERE ts >= ${since}::timestamptz AND coverage_ok
+                           AND NOT (at_port = 0 AND coalesce(at_port_raw, 0) > 0)
+                           AND (${pf}::text[] IS NULL OR port_id = ANY(${pf}::text[]))
+                         ORDER BY ts ASC`;
+
+  const { ts, ports: out } = resamplePortRows(rows, { startTs, endTs, stepMs, fields: want });
+  return { ...base, ts, ports: out, tickCount: ts.length, portCount: Object.keys(out).length, db: true };
+}
+
+/**
+ * Resample raw snapshot rows onto a regular grid — the pure half of {@link queryPortSeries}.
+ *
+ * Separated so the part with the actual logic (grid alignment, bounded carry-forward, null-vs-zero)
+ * is testable without a database. `rows` must be ordered by ts ASC — the walk keeps one cursor per
+ * port rather than re-scanning, so out-of-order input would silently drop readings.
+ */
+function resamplePortRows(rows, { startTs, endTs, stepMs, fields, maxCarryMs = PORT_SERIES_MAX_CARRY_MIN * 60_000 }) {
+  const ts = [];
+  for (let t = startTs; t <= endTs; t += stepMs) ts.push(t);
+
+  const byPort = new Map();
+  for (const r of rows) {
+    let list = byPort.get(r.port_id);
+    if (!list) byPort.set(r.port_id, (list = []));
+    list.push(r);
+  }
+  const ports = {};
+  for (const [portId, list] of byPort) {
+    const port = {};
+    for (const f of fields) port[f] = new Array(ts.length).fill(null);
+    let cursor = 0;
+    let last = null;
+    for (let i = 0; i < ts.length; i++) {
+      // Advance to the most recent reading at or before this frame.
+      while (cursor < list.length && Number(list[cursor].ts) <= ts[i]) last = list[cursor++];
+      if (!last || ts[i] - Number(last.ts) > maxCarryMs) continue; // stays null: no fresh reading
+      for (const f of fields) {
+        const v = last[PORT_SERIES_FIELDS[f]];
+        if (v == null) continue; // leave null — absent is not zero, and not 'clear'
+        port[f][i] = PORT_SERIES_TEXT_FIELDS.has(f) ? String(v) : Number(v);
+      }
+    }
+    ports[portId] = port;
+  }
+  return { ts, ports };
+}
+
+// ---------------------------------------------------------------------------
 // Phase C serving — get_trip. A trip is a RECORD, not a sample, so it is fully showable the moment it
 // exists; immature fields degrade with an honest note ('computing' / 'origin not observed' / 'sparse'
 // / 'track expired') rather than min-N suppression. THE GATE (field flags) IS COMPUTED HERE so every
@@ -1015,7 +1148,8 @@ module.exports = {
   markStalled, patchTripEta, bumpTripEtaSlip, backfillTripOrigin, backfillDestDwell,
   finalizeArrivedGeo, pruneTripPoints,
   // Phase C serving
-  queryTrip, queryVesselProfile, queryPortProfile,
+  queryTrip, queryVesselProfile, queryPortProfile, queryPortSeries, resamplePortRows,
+  PORT_SERIES_MAX_CARRY_MIN,
   logDisruptionsFirstSeen,
   stats, COUNTRY_TZ, tzForCountry,
 };

@@ -814,6 +814,7 @@ export default defineConfig({
             ['/api/ais-geofences', '/ais/geofences'],
             ['/api/ais-trip', '/ais/trip'],
             ['/api/ais-port-profile', '/ais/port-profile'],
+            ['/api/ais-port-series', '/ais/port-series'],
             ['/api/ais-vessel-profile', '/ais/vessel-profile'],
           ].map(([route, relayPath]) => [route, {
             target: process.env.WS_RELAY_URL

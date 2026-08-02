@@ -18,6 +18,7 @@ import {
   type FreightRegion,
 } from '@/config/maritime-ports';
 import { getGeofences, type Geofence } from '@/services/logistics/geofences';
+import { getPortSeries, type PortSeries } from '@/services/logistics/port-series';
 import { aisStreamProvider } from '@/services/logistics/providers/aisstream';
 import { describeFreshness } from '@/services/logistics/freshness';
 import { UNATTRIBUTED, tallyOperators, matchesOperatorFilter } from '@/services/logistics/operator-filter';
@@ -91,6 +92,8 @@ export class FreightPanel extends Panel {
   private mode: BoardMode = 'vessels';
   private region: FreightRegion = 'all'; // country filter, or 'all' = Europe-wide
   private operatorFilter: string | null = null; // operatorId, or null = all
+  private replayOn = false;
+  private portSeries: PortSeries | null = null;
   private zonesOn = false; // geofence overlay visible?
   private geofences: Geofence[] | null = null; // lazy-loaded on first toggle
   private searchText = '';
@@ -216,6 +219,13 @@ export class FreightPanel extends Panel {
     // discs carry count/congestion/queue; the vessels stay on as dimmed context. Feeding the data
     // here (rather than only in refreshPorts) means a mode switch redraws immediately from cache
     // instead of waiting on the next poll.
+    // Leaving Ports mode ends the replay: the scrubber belongs to the port layer, and leaving it
+    // running would strand a control over a map that no longer answers to it.
+    if (this.mode !== 'ports' && this.replayOn) {
+      const btn = this.content.querySelector<HTMLButtonElement>('.ferry-replay-btn');
+      if (btn) this.setReplayActive(btn, false);
+      this.map?.stopCongestionReplay();
+    }
     this.map?.setPortsVisible(this.mode === 'ports');
     if (this.mode === 'ports') this.map?.setPorts(this.regionPorts());
 
@@ -470,6 +480,7 @@ export class FreightPanel extends Panel {
         <span class="legend-ports"><i style="background:#f06a62"></i>Congested</span>
         <span class="legend-ports"><i style="background:#8b9199"></i>No coverage</span>
         <span class="legend-ports legend-note">disc size = vessels at port · ring = waiting at anchor</span>
+        <button type="button" class="ferry-replay-btn legend-ports" aria-pressed="false" title="Replay the last 48 hours of port congestion">⏱ Replay 48h</button>
         <button type="button" class="ferry-zones-btn" aria-pressed="false" title="Show the port geofence zones on the map">◯ Port zones</button>
       </div>
       <div class="ferry-board"></div>
@@ -548,7 +559,52 @@ export class FreightPanel extends Panel {
     const zonesBtn = this.content.querySelector<HTMLButtonElement>('.ferry-zones-btn');
     zonesBtn?.addEventListener('click', () => void this.toggleZones(zonesBtn));
 
+    // Congestion replay (Ports mode): lazy-loads 48h of history on first show.
+    const replayBtn = this.content.querySelector<HTMLButtonElement>('.ferry-replay-btn');
+    replayBtn?.addEventListener('click', () => void this.toggleReplay(replayBtn));
+
     this.mapMounted = true;
+  }
+
+  /**
+   * Toggle the 48h congestion replay; fetch the series once on first show.
+   *
+   * The series is cached for the session — it is ~10 KB and only grows a frame every 15 minutes,
+   * so re-fetching on every toggle would buy nothing.
+   */
+  private async toggleReplay(btn: HTMLButtonElement): Promise<void> {
+    if (this.replayOn) {
+      this.setReplayActive(btn, false);
+      this.map?.stopCongestionReplay();
+      return;
+    }
+    this.setReplayActive(btn, true);
+    btn.disabled = true;
+    try {
+      if (!this.portSeries) this.portSeries = await getPortSeries({ hours: 48 });
+      if (!this.portSeries.tickCount) {
+        // No history is a real answer (a relay with no database, or a fresh deploy), not an error.
+        btn.title = 'No congestion history available yet';
+        this.setReplayActive(btn, false);
+        return;
+      }
+      // Re-check after the await: the fetch takes long enough for the user to switch modes, and
+      // leaving Ports mode already turned the replay off. Without this the scrubber reappears over
+      // a map that is no longer showing ports, with the button reading inactive.
+      if (this.replayOn && this.mode === 'ports') this.map?.startCongestionReplay(this.portSeries);
+    } catch {
+      this.portSeries = null;
+      btn.title = 'Congestion history unavailable — try again shortly';
+      this.setReplayActive(btn, false);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  private setReplayActive(btn: HTMLButtonElement, on: boolean): void {
+    this.replayOn = on;
+    btn.classList.toggle('is-active', on);
+    btn.setAttribute('aria-pressed', String(on));
   }
 
   /** Toggle the geofence zone overlay; fetch the shapes once on first show. */
