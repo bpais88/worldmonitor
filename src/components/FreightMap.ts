@@ -10,7 +10,7 @@ import maplibregl from 'maplibre-gl';
 import { escapeHtml } from '@/utils/sanitize';
 import { EUROPE_BBOX, type Bbox } from '@/config/maritime-ports';
 import { ferriesToGeoJSON, ferryProps, type FerryFeatureProps } from '@/services/logistics/ferry-geojson';
-import { geofencesToGeoJSON, type Geofence } from '@/services/logistics/geofences';
+import { geofencesToGeoJSON, geofenceMarkersToGeoJSON, type Geofence } from '@/services/logistics/geofences';
 import { portsToGeoJSON } from '@/services/logistics/ports-geojson';
 import type { PortStatus } from '@/services/logistics/port-status';
 import type { TrackedFerry } from '@/services/logistics/ferry-tracker';
@@ -21,6 +21,9 @@ import { VoyageReplay } from './VoyageReplay';
 const DARK_STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
 const SOURCE_ID = 'ferries';
 const GEOFENCE_SOURCE_ID = 'geofences';
+// The marker layer needs its OWN source: a MapLibre circle layer must be fed point geometry, and
+// handing it the zone polygons draws a circle at every ring vertex. See geofenceMarkersToGeoJSON.
+const GEOFENCE_MARKER_SOURCE_ID = 'geofence-markers';
 const GEOFENCE_LAYERS = ['geofence-fill', 'geofence-line', 'geofence-marker'];
 // Smallest on-screen radius a zone marker may shrink to before the floor holds it. Below this a
 // 1.2px stroke ring stops reading as a circle at all.
@@ -364,18 +367,21 @@ export class FreightMap {
     // per-zone latitude baked in (see geofences.ts), so `× 2^zoom` is the exact on-screen radius and
     // the handover at z7 is seamless rather than a visible jump in size.
     //
+    // It reads from its own POINT source, not the zone polygons: a circle layer draws a mark at
+    // every vertex it is given, so feeding it the rings would stamp 64 blobs around each zone.
+    //
     // The floor does flatten the zones into one size at the default view — every zone we carry is
     // under MIN_PX there, so they all clamp. That is the honest limit of the scale, not a lost
     // encoding: differentiation returns as soon as it is meaningful (Rotterdam leaves the floor at
     // z3.6, Venezia at z6.8), and size is not what this layer is communicating. It says only
     // "a zone is here", which is exactly what the toggle promised and previously failed to deliver.
+    this.map.addSource(GEOFENCE_MARKER_SOURCE_ID, { type: 'geojson', data: geofenceMarkersToGeoJSON([]) });
     this.map.addLayer({
       id: 'geofence-marker',
       type: 'circle',
-      source: GEOFENCE_SOURCE_ID,
+      source: GEOFENCE_MARKER_SOURCE_ID,
       layout: { visibility: 'none' },
       maxzoom: 7,
-      filter: ['>', ['get', 'radiusKm'], 0],
       paint: {
         'circle-radius': ['max', GEOFENCE_MARKER_MIN_PX, ['*', ['get', 'radiusPxAtZoom0'], ['^', 2, ['zoom']]]],
         'circle-color': 'transparent',
@@ -704,6 +710,8 @@ export class FreightMap {
     }
     const source = this.map.getSource(GEOFENCE_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
     source?.setData(geofencesToGeoJSON(geofences) as unknown as GeoJSON.FeatureCollection);
+    const markers = this.map.getSource(GEOFENCE_MARKER_SOURCE_ID) as maplibregl.GeoJSONSource | undefined;
+    markers?.setData(geofenceMarkersToGeoJSON(geofences) as unknown as GeoJSON.FeatureCollection);
   }
 
   /** Show/hide the geofence zone overlay. */

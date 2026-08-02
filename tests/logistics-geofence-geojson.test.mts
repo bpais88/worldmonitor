@@ -1,7 +1,7 @@
 import { describe, it } from 'node:test';
 import assert from 'node:assert/strict';
 
-import { geofencesToGeoJSON, type Geofence } from '../src/services/logistics/geofences.ts';
+import { geofencesToGeoJSON, geofenceMarkersToGeoJSON, type Geofence } from '../src/services/logistics/geofences.ts';
 
 function circleZone(overrides: Partial<Geofence> = {}, radiusKm = 8, lat = 51.95, lon = 4.13): Geofence {
   return {
@@ -43,7 +43,45 @@ describe('geofencesToGeoJSON', () => {
     const fc = geofencesToGeoJSON([circleZone({}, 12), polygonZone()]);
     assert.equal(fc.features[0].properties.radiusKm, 12);
     assert.equal(fc.features[1].properties.radiusKm, 0);
-    assert.equal(fc.features[1].properties.radiusPxAtZoom0, 0);
+  });
+});
+
+describe('geofenceMarkersToGeoJSON (feeds the circle layer)', () => {
+  // A MapLibre circle layer draws a mark at EVERY VERTEX of whatever geometry it is given:
+  // CircleBucket does `for (const ring of geometry) for (const point of ring)`. Feeding it the
+  // zone polygons stamped 64 marks around each zone's perimeter, which at low zoom collapse into
+  // a filled blob instead of the thin outline intended. The marker source must be Points.
+  it('emits Point geometry, never Polygon', () => {
+    const fc = geofenceMarkersToGeoJSON([circleZone(), circleZone({ id: 'b' }, 12, 45.44, 12.28)]);
+    assert.equal(fc.features.length, 2);
+    for (const f of fc.features) {
+      assert.equal(f.geometry.type, 'Point', 'a circle layer must be fed points, not rings');
+      assert.equal(f.geometry.coordinates.length, 2, 'one vertex per zone, not a ring of them');
+      assert.equal(typeof f.geometry.coordinates[0], 'number');
+    }
+  });
+
+  it('places the point at the zone centre in [lon, lat] order', () => {
+    const [f] = geofenceMarkersToGeoJSON([circleZone({}, 20, 51.95, 4.13)]).features;
+    assert.deepEqual(f.geometry.coordinates, [4.13, 51.95]);
+  });
+
+  it('omits polygon zones, which have no single radius to floor', () => {
+    const fc = geofenceMarkersToGeoJSON([circleZone(), polygonZone()]);
+    assert.equal(fc.features.length, 1);
+    assert.equal(fc.features[0].properties.id, 'rotterdam');
+  });
+
+  it('carries the colour and radius the marker layer paints with', () => {
+    const [f] = geofenceMarkersToGeoJSON([circleZone({ style: { color: '#ff0000' } }, 12)]).features;
+    assert.equal(f.properties.color, '#ff0000');
+    assert.equal(f.properties.radiusKm, 12);
+    assert.ok(f.properties.radiusPxAtZoom0 > 0);
+  });
+
+  it('emits exactly one mark per zone — not one per ring vertex', () => {
+    const zones = Array.from({ length: 5 }, (_, i) => circleZone({ id: `z${i}` }, 8, 40 + i, 5 + i));
+    assert.equal(geofenceMarkersToGeoJSON(zones).features.length, 5);
   });
 });
 
@@ -55,7 +93,7 @@ describe('radiusPxAtZoom0 (the min-size zone marker)', () => {
   it('scales to the exact on-screen radius at every zoom', () => {
     const lat = 51.95;
     const radiusKm = 20;
-    const [f] = geofencesToGeoJSON([circleZone({}, radiusKm, lat)]).features;
+    const [f] = geofenceMarkersToGeoJSON([circleZone({}, radiusKm, lat)]).features;
     for (const zoom of [0, 3, 3.473, 5, 7, 10, 14]) {
       const actual = f.properties.radiusPxAtZoom0 * 2 ** zoom;
       const expected = expectedRadiusPx(radiusKm, lat, zoom);
@@ -69,7 +107,7 @@ describe('radiusPxAtZoom0 (the min-size zone marker)', () => {
   it('is exact across the latitude span the relay actually serves (Algeciras → Teesport)', () => {
     // A fixed-latitude divisor is off by +26% at the south end and -9% at the north end.
     for (const lat of [36.13, 41.0, 45.44, 51.95, 54.6]) {
-      const [f] = geofencesToGeoJSON([circleZone({}, 8, lat)]).features;
+      const [f] = geofenceMarkersToGeoJSON([circleZone({}, 8, lat)]).features;
       const actual = f.properties.radiusPxAtZoom0 * 2 ** 7;
       const expected = expectedRadiusPx(8, lat, 7);
       const errPct = Math.abs(actual - expected) / expected * 100;
@@ -79,7 +117,7 @@ describe('radiusPxAtZoom0 (the min-size zone marker)', () => {
 
   it('grows with radius and with latitude', () => {
     const px = (rk: number, lat: number) =>
-      geofencesToGeoJSON([circleZone({}, rk, lat)]).features[0].properties.radiusPxAtZoom0;
+      geofenceMarkersToGeoJSON([circleZone({}, rk, lat)]).features[0].properties.radiusPxAtZoom0;
     assert.ok(px(20, 51.95) > px(2.5, 51.95), 'a bigger zone must be a bigger mark');
     // Mercator stretches toward the poles, so the same radius covers more pixels further north.
     assert.ok(px(8, 54.6) > px(8, 36.13), 'same radius, higher latitude -> more pixels');
@@ -89,7 +127,7 @@ describe('radiusPxAtZoom0 (the min-size zone marker)', () => {
     // At the board's fitted Europe default (z3.473) even the largest zone we carry is ~4.6px,
     // and the smallest ~0.5px — which is why the toggle looked like it did nothing.
     const at = (rk: number, lat: number) =>
-      geofencesToGeoJSON([circleZone({}, rk, lat)]).features[0].properties.radiusPxAtZoom0 * 2 ** 3.473;
+      geofenceMarkersToGeoJSON([circleZone({}, rk, lat)]).features[0].properties.radiusPxAtZoom0 * 2 ** 3.473;
     assert.ok(Math.abs(at(20, 51.95) - 4.6) < 0.1, `Rotterdam ~4.6px, got ${at(20, 51.95).toFixed(2)}`);
     assert.ok(Math.abs(at(2.5, 45.44) - 0.51) < 0.05, `Venezia ~0.51px, got ${at(2.5, 45.44).toFixed(2)}`);
     assert.ok(at(20, 51.95) < 5, 'every real zone sits under the 5px floor at the default view');

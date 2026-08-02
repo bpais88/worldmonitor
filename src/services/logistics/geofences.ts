@@ -100,29 +100,37 @@ interface GeofenceFeatureProps {
   kind: string;
   color: string;
   fillOpacity: number;
-  /** Radius in km, or 0 for a polygon zone. Used to select circle zones for the marker layer. */
+  /** Radius in km, or 0 for a polygon zone. */
+  radiusKm: number;
+}
+
+/** Properties for the low-zoom marker features — see {@link geofenceMarkersToGeoJSON}. */
+interface GeofenceMarkerProps {
+  id: string;
+  name: string;
+  color: string;
   radiusKm: number;
   /**
    * The zone's on-screen radius in pixels AT ZOOM 0. Multiply by 2^zoom for the radius at any
    * zoom — that is the whole conversion, and it is exact.
    *
-   * Why this is precomputed here rather than derived in the style expression: the polygon ring
-   * alone cannot be drawn legibly when zoomed out. A ring is in METRES, so at the board's default
-   * European view (z3.5) the largest zone we carry, Rotterdam at 20 km, measures 4.6px across and
-   * Venezia at 2.5 km measures 0.5px — the "Port zones" toggle switched on and nothing visibly
-   * happened. So the map floors the size at low zoom, which needs a scalar.
-   *
-   * Metres-per-pixel depends on LATITUDE (Web Mercator, 512px tiles: 78271.516·cos φ / 2^zoom),
-   * and a MapLibre expression cannot read a feature's latitude. Assuming a fixed latitude instead
-   * is off by +26% at Algeciras (36.1°N) and −9% at Teesport (54.6°N) over the zones we actually
-   * carry, which would also make the ring visibly jump when the marker hands over to the true
-   * geometry. Baking cos φ in at build time removes both problems.
+   * Why this is precomputed here rather than derived in the style expression: metres-per-pixel
+   * depends on LATITUDE (Web Mercator, 512px tiles: 78271.516·cos φ / 2^zoom), and a MapLibre
+   * expression cannot read a feature's latitude. Assuming a fixed latitude instead is off by +26%
+   * at Algeciras (36.1°N) and −9% at Teesport (54.6°N) over the zones we actually carry, which
+   * would also make the ring visibly jump when the marker hands over to the true geometry at z7.
+   * Baking cos φ in at build time removes both problems.
    */
   radiusPxAtZoom0: number;
 }
 
 // Web Mercator, MapLibre's 512px-tile convention: metres per pixel = MERCATOR_M_PER_PX_Z0·cos φ / 2^zoom.
 const MERCATOR_M_PER_PX_Z0 = 78271.516;
+
+/** A zone's on-screen radius in pixels at zoom 0, at its own latitude. */
+function radiusPxAtZoom0(radiusKm: number, lat: number): number {
+  return (radiusKm * 1000) / (MERCATOR_M_PER_PX_Z0 * Math.cos((lat * Math.PI) / 180));
+}
 
 /** One geofence → a GeoJSON Polygon Feature carrying its render style. */
 function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, GeofenceFeatureProps> {
@@ -135,11 +143,6 @@ function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, Geofe
     geometry: { type: 'Polygon', coordinates: [ring] },
     properties: {
       radiusKm: gf.geometry.type === 'circle' ? gf.geometry.radiusKm : 0,
-      radiusPxAtZoom0:
-        gf.geometry.type === 'circle'
-          ? (gf.geometry.radiusKm * 1000)
-            / (MERCATOR_M_PER_PX_Z0 * Math.cos((gf.geometry.center.lat * Math.PI) / 180))
-          : 0,
       id: gf.id,
       name: gf.name,
       kind: gf.kind,
@@ -147,6 +150,39 @@ function geofenceToFeature(gf: Geofence): GeoJSON.Feature<GeoJSON.Polygon, Geofe
       fillOpacity: gf.style?.fillOpacity ?? DEFAULT_FILL_OPACITY,
     },
   };
+}
+
+/**
+ * Circle zones → POINT features at their centres, for the low-zoom minimum-size marker.
+ *
+ * This is a separate collection because a MapLibre `circle` layer must be fed point geometry.
+ * Handing it the polygon ring above does NOT draw one circle per zone and does NOT draw nothing:
+ * CircleBucket iterates `for (const ring of geometry) for (const point of ring)`, so it renders a
+ * circle at EVERY VERTEX — 64 per zone with circleRing's default step count. At low zoom those
+ * collapse into a filled blob instead of the thin outline the marker is supposed to be, and
+ * neighbouring ports merge into one lump.
+ *
+ * Polygon zones are omitted: they have no single radius to floor, and their ring is what carries
+ * their shape.
+ */
+export function geofenceMarkersToGeoJSON(geofences: Geofence[]): GeoJSON.FeatureCollection<GeoJSON.Point, GeofenceMarkerProps> {
+  const features: GeoJSON.Feature<GeoJSON.Point, GeofenceMarkerProps>[] = [];
+  for (const gf of geofences) {
+    if (gf.geometry.type !== 'circle') continue;
+    const { center, radiusKm } = gf.geometry;
+    features.push({
+      type: 'Feature',
+      geometry: { type: 'Point', coordinates: [center.lon, center.lat] },
+      properties: {
+        id: gf.id,
+        name: gf.name,
+        color: gf.style?.color ?? DEFAULT_COLOR,
+        radiusKm,
+        radiusPxAtZoom0: radiusPxAtZoom0(radiusKm, center.lat),
+      },
+    });
+  }
+  return { type: 'FeatureCollection', features };
 }
 
 export function geofencesToGeoJSON(geofences: Geofence[]): GeoJSON.FeatureCollection<GeoJSON.Polygon, GeofenceFeatureProps> {
