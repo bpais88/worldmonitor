@@ -12,9 +12,40 @@
          window that got proportionally smaller as the screen grew. Widen the shell and let the
          header cost less vertical space so the map can have it instead. */
       .ferry-demo-wrap { max-width: 1600px; margin: 0 auto; padding: 12px 16px 24px; }
-      .ferry-demo-head { margin-bottom: 8px; }
-      .ferry-demo-head h1 { font-size: 17px; margin: 0; }
+      .ferry-demo-head { margin-bottom: 6px; }
+      .ferry-demo-head h1 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
       .ferry-demo-head p { margin: 2px 0 0; opacity: 0.62; font-size: 12px; max-width: 110ch; }
+      /* Collapsed by default AFTER the first visit — see ferry-main.ts. The copy does real work for
+         someone arriving cold (it says what Vessels/Ports/Disruptions actually contain), so it is
+         shown expanded the first time and only then folds away behind the (i). */
+      .ferry-demo-head p[hidden] { display: none; }
+      .ferry-about-btn { appearance: none; width: 16px; height: 16px; flex: 0 0 auto; line-height: 15px;
+        font: inherit; font-size: 10px; font-style: italic; font-weight: 700; text-align: center;
+        border: 1px solid rgba(127,127,127,0.45); border-radius: 50%; background: transparent;
+        color: inherit; opacity: 0.55; cursor: pointer; padding: 0; }
+      .ferry-about-btn:hover { opacity: 1; background: rgba(127,127,127,0.14); }
+
+      /* Region filter and the Vessels/Ports/Disruptions toggle share ONE row: they were two stacked
+         rows costing ~50px plus gaps, and together they are just "which country / which view". */
+      .ferry-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+        margin: 0 0 8px; }
+      .ferry-controls .ferry-regions,
+      .ferry-controls .ferry-toggle { margin: 0; }
+      /* Divider between the two groups so they don't read as one long strip of buttons. */
+      .ferry-controls .ferry-toggle { position: relative; padding-left: 14px; }
+      .ferry-controls .ferry-toggle::before { content: ''; position: absolute; left: 0; top: 50%;
+        transform: translateY(-50%); width: 1px; height: 18px; background: rgba(127,127,127,0.28); }
+
+      /* The panel's own title duplicates the <h1> directly above it ("European Freight" under
+         "European Freight Tracker"), so it's hidden — but the data badge beside it is the LIVE /
+         CACHED / as-of indicator and must stay. Collapse the header to just that badge. */
+      #app .panel-header { min-height: 0; padding: 0 0 4px; border: 0; }
+      #app .panel-title { display: none; }
+      /* The vessel count is its own element next to the data badge. main.css styles it (and already
+         carries a comment about this exact bug — "UTC171"), but this standalone page never loads
+         main.css, so it rendered flush against the badge: "LIVE · as of 05:45 CEST2087". */
+      #app .panel-count { font-size: 10px; opacity: 0.65; margin-inline-start: 8px;
+        padding: 2px 6px; border-radius: 3px; background: rgba(127,127,127,0.16); }
       .ferry-group-count { opacity: 0.6; font-weight: 400; }
       table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
       .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px;
@@ -58,7 +89,13 @@
         font-size: 10px; font-weight: 600; letter-spacing: 0.2px; }
       .ferry-share-btn:hover { background: rgba(77,163,255,0.22); }
       .ferry-share-btn:disabled { color: #2fbf85; border-color: rgba(47,191,133,0.4); background: rgba(47,191,133,0.1); cursor: default; }
-      /* Phase C voyage replay — play/scrub control bar over the map + waypoint hover tooltip. */
+      /* Phase C voyage replay — play/scrub control bar over the map + waypoint hover tooltip.
+         The bar is CONTEXTUAL: VoyageReplay sets bar.hidden = true on construction and only clears
+         it once a voyage is loaded (i.e. a vessel is selected). But `display: flex` below is an
+         AUTHOR rule, and it beats the user-agent's `[hidden] { display: none }` — so the attribute
+         did nothing and the control sat over the middle of the map permanently, doing nothing when
+         clicked because there was no voyage behind it. Restore the intent explicitly. */
+      .voyage-replay[hidden] { display: none; }
       .voyage-replay { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5;
         display: flex; align-items: center; gap: 10px; max-width: 92%;
         background: rgba(20,22,24,0.92); border: 1px solid rgba(255,255,255,0.12); border-radius: 999px;
@@ -134,14 +171,15 @@
       .port-congestion-busy { background: rgba(245,179,66,0.18); color: #e0a032; }
       .port-congestion-congested { background: rgba(232,90,82,0.20); color: #f06a62; font-weight: 600; }
       /* Operator filter (search + chips) */
-      .ferry-filter { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 12px; }
+      /* nowrap: the search box is only 240px, so the chips sat on a second line for no reason. */
+      .ferry-filter { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; margin: 0 0 8px; }
       .ferry-search { flex: 0 0 240px; max-width: 100%; font: inherit; font-size: 12px; padding: 6px 10px;
         border: 1px solid rgba(127,127,127,0.28); border-radius: 8px; background: transparent; color: inherit; }
       .ferry-search::placeholder { color: rgba(127,127,127,0.8); }
       /* One scrollable row rather than wrapping to two or three — operator chips were costing the
          map ~60px of height on a normal screen. */
       .ferry-chips { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
-        padding-bottom: 2px; scrollbar-width: thin; }
+        padding-bottom: 2px; scrollbar-width: thin; flex: 1 1 auto; min-width: 0; }
       .ferry-chips > * { flex: 0 0 auto; }
       .ferry-chip { appearance: none; font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
         border: 1px solid rgba(127,127,127,0.28); border-radius: 999px; background: transparent; color: inherit; opacity: 0.7; }
@@ -182,8 +220,8 @@
   <body style="margin:0;background:var(--bg,#1a1c1e);color:var(--text,#e8eaed);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
     <div class="ferry-demo-wrap">
       <div class="ferry-demo-head">
-        <h1>🇮🇹 🇬🇧 🇪🇸 🇵🇹 🇳🇱 European Freight Tracker</h1>
-        <p>Live commercial freight vessels (container, cargo &amp; RoPax) across Italy, the UK, Spain, Portugal &amp; the Netherlands from AIS — with delay detection, likely cause, and per-port congestion. Toggle <strong>Vessels</strong> / <strong>Ports</strong> / <strong>Disruptions</strong> — scheduled strikes, Rhine &amp; Panama water levels, and the Strait of Hormuz chokepoint signal.</p>
+        <h1>🇮🇹 🇬🇧 🇪🇸 🇵🇹 🇳🇱 European Freight Tracker<button type="button" class="ferry-about-btn" id="ferry-about-btn" aria-expanded="true" aria-controls="ferry-about" title="What this board shows">i</button></h1>
+        <p id="ferry-about">Live commercial freight vessels (container, cargo &amp; RoPax) across Italy, the UK, Spain, Portugal &amp; the Netherlands from AIS — with delay detection, likely cause, and per-port congestion. Toggle <strong>Vessels</strong> / <strong>Ports</strong> / <strong>Disruptions</strong> — scheduled strikes, Rhine &amp; Panama water levels, and the Strait of Hormuz chokepoint signal.</p>
       </div>
       <div id="app"></div>
     </div>

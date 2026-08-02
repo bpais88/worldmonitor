@@ -424,6 +424,7 @@ export class FreightPanel extends Panel {
   private ensureScaffold(): void {
     if (this.mapMounted) return;
     this.content.innerHTML = `
+      <div class="ferry-controls">
       <div class="ferry-regions" role="tablist">
         ${REGION_ORDER.map((r) => `<button type="button" class="ferry-region-btn" data-region="${r}">${escapeHtml(REGION_LABELS[r])}</button>`).join('')}
       </div>
@@ -431,6 +432,7 @@ export class FreightPanel extends Panel {
         <button type="button" class="ferry-toggle-btn" data-mode="vessels">Vessels</button>
         <button type="button" class="ferry-toggle-btn" data-mode="ports">Ports</button>
         <button type="button" class="ferry-toggle-btn" data-mode="disruptions">Disruptions</button>
+      </div>
       </div>
       <div class="ferry-filter">
         <input type="search" class="ferry-search" placeholder="Search vessel or operator…" aria-label="Search vessel or operator" />
