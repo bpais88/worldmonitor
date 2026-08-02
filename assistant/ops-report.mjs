@@ -194,14 +194,24 @@ export function buildOpsReport({ health, now, cleanSince }) {
     // warming true FOREVER — that is precisely the landlocked-tile bug this alarm exists to catch —
     // so `!warming` would make it unreachable in exactly the case it was written for.
     //
-    // So bound the grace period by elapsed time instead. The oldest non-null tile age tells us how
-    // long ago the FIRST tile was polled, i.e. how long the sweep has had to run. Once that exceeds
-    // one generous sweep, every tile has had its turn and anything still unpolled is genuinely dark
-    // — warming or not. 20s/tile against a 13s poll interval leaves room for rate-limit backoff.
-    const ages = tiles.filter((a) => a !== null && a !== undefined);
-    const sweptForSec = ages.length ? Math.max(...ages) : 0;
-    const graceSec = Math.max(900, (total || tiles.length) * 20);
-    const stillWarmingUp = mar.warming === true && sweptForSec < graceSec;
+    // So bound the grace period by elapsed time — using the RELAY'S UPTIME, which is the only
+    // monotonic signal available.
+    //
+    // The previous attempt used max(tileAgesSec) as a proxy for "how long the sweep has run". That
+    // was wrong (review catch): each entry is the age of that tile's most RECENT success, and the
+    // poller refreshes them every ~13s, so the maximum simply oscillates around one sweep length
+    // (total x 13s) forever. It can never exceed a total x 20s threshold, so the grace never
+    // expired and the alarm stayed suppressed in precisely the dark-tile case — the same bug as the
+    // `!warming` version it replaced, one layer down.
+    //
+    // uptimeSec only ever increases. Once the relay has been up for several sweeps, any tile still
+    // never-polled is dark, whatever `warming` says. 3 sweeps at 20s/tile (floor 15 min) leaves
+    // room for rate-limit backoff without waiting long.
+    const graceSec = Math.max(900, (total || tiles.length) * 20 * 3);
+    const uptimeSec = Number.isFinite(health?.uptimeSec) ? health.uptimeSec : null;
+    // No uptime (relay predates the field) => fall back to trusting `warming`, which is the old
+    // behaviour: better to under-report than to cry wolf on every restart.
+    const stillWarmingUp = mar.warming === true && (uptimeSec === null || uptimeSec < graceSec);
     if (mar.stale) {
       // The relay derives this from its own sweep length, so it already knows what "too old" means
       // for the current tile count. Trust it rather than reimplementing the threshold here.

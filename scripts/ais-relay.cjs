@@ -4673,6 +4673,12 @@ const handleRequest = async (req, res) => {
     const mem = process.memoryUsage();
     sendCompressed(req, res, 200, { 'Content-Type': 'application/json' }, JSON.stringify({
       status: 'ok',
+      // Seconds since this process started. Monotonic, and the ONLY honest "how long has the relay
+      // had to do something" signal here: marinesia.tileAgesSec measures time since each tile's
+      // most RECENT success, so in steady state the maximum just oscillates around one sweep and
+      // never grows — it cannot distinguish "still starting up" from "one tile has been dark for a
+      // week". The daily ops report needs that distinction to bound its warming grace period.
+      uptimeSec: Math.round(process.uptime()),
       clients: clients.size,
       messages: messageCount,
       droppedMessages,
