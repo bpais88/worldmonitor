@@ -44,3 +44,8 @@
 {"aoi":"hormuz_tss_north","scene":"S1C_IW_GRDH_1SDV_20260723T021408_20260723T021437_008664_0112BB","datetime":"2026-07-23T02:14:22.896798Z","coverage":1,"targets":1,"medianAmp":89}
 {"aoi":"jebel_ali_anchorage","scene":"S1C_IW_GRDH_1SDV_20260723T021437_20260723T021502_008664_0112BB","datetime":"2026-07-23T02:14:50.042515Z","coverage":1,"targets":6,"medianAmp":53}
 {"aoi":"hormuz_tss_north","scene":"S1D_IW_GRDH_1SDV_20260724T020613_20260724T020638_003809_006DA6","datetime":"2026-07-24T02:06:26.395750Z","coverage":1,"targets":0,"medianAmp":59}
+{"aoi":"jebel_ali_anchorage","scene":"S1D_IW_GRDH_1SDV_20260726T142414_20260726T142439_003846_006EE7","datetime":"2026-07-26T14:24:26.792835Z","coverage":1,"targets":7,"medianAmp":54}
+{"aoi":"hormuz_tss_north","scene":"S1C_IW_GRDH_1SDV_20260727T141613_20260727T141633_008730_0114CB","datetime":"2026-07-27T14:16:23.492500Z","coverage":1,"targets":0,"medianAmp":69}
+{"aoi":"hormuz_tss_north","scene":"S1D_IW_GRDH_1SDV_20260729T021428_20260729T021453_003882_007024","datetime":"2026-07-29T02:14:40.862357Z","coverage":1,"targets":0,"medianAmp":67}
+{"aoi":"jebel_ali_anchorage","scene":"S1D_IW_GRDH_1SDV_20260729T021453_20260729T021518_003882_007024","datetime":"2026-07-29T02:15:05.861992Z","coverage":1,"targets":6,"medianAmp":55}
+{"aoi":"hormuz_tss_north","scene":"S1C_IW_GRDH_1SDV_20260730T020559_20260730T020629_008766_0115F6","datetime":"2026-07-30T02:06:14.549568Z","coverage":1,"targets":0,"medianAmp":34}
