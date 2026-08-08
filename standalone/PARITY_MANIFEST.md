@@ -85,9 +85,12 @@ observable behaviour captured into `relay-http.test.cjs` (16 tests).
 
 ## 6. Ops / periphery
 
-- [x] (S) Workflows written: `.github/workflows/ci.yml` (test + typecheck/build + e2e) and
-      `freight-monitor.yml` (10-min Slack alerts). Still to port: sar-occupancy,
-      assistant-eval, voice-drift.
+- [x] (S) All workflows in place: `ci.yml` (test + typecheck/build + e2e), `freight-monitor.yml`
+      (10-min Slack alerts), plus sar-occupancy (weekly, with its committed log), assistant-eval
+      and voice-drift ported with paths rewritten. npm scripts they invoke all resolve and skip
+      cleanly without keys.
+- [x] **CUTOVER.md** — ordered runbook: cut repo, migrations + radius-history purge, relay, Upstash,
+      **parity gate**, web + Marco, switch over, rollback. Each step states how you know it worked.
 - [x] `.env.example` written — all three deployables, every var, with what breaks if absent
 - [ ] (S) Env populated in the new infra
 - [ ] (S) Upstash: new ferry database; keys start fresh (voyage counts reset — accepted) or migrated

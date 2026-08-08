@@ -1,0 +1,35 @@
+name: SAR occupancy (weekly)
+
+# Weekly Sentinel-1 ship-occupancy sweep of the Gulf AOIs (scripts/sar-occupancy.cjs, M6
+# prototype #117) — appends new scenes to the committed log so the validation baseline
+# accumulates without anyone remembering to run it. Free + keyless (Planetary Computer,
+# anonymous); the script has zero npm dependencies, so no install step. The 45-day search
+# window vs weekly cadence means a missed run can never lose scenes. Manual dispatch any time.
+on:
+  schedule:
+    - cron: '0 5 * * 1' # 05:00 UTC Mondays
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node scripts/sar-occupancy.cjs --days 45 --append scripts/data/sar-occupancy-log.jsonl
+      - name: Commit new scenes
+        run: |
+          if git diff --quiet scripts/data/sar-occupancy-log.jsonl; then
+            echo "no new scenes"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add scripts/data/sar-occupancy-log.jsonl
+          git commit -m "data(sar): weekly occupancy sweep — $(date -u +%Y-%m-%d)"
+          git push

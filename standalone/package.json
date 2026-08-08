@@ -16,7 +16,12 @@
     "assistant:serve": "node assistant/server.mjs",
     "test:api": "node --test api/*.test.mjs",
     "test:e2e": "playwright test",
-    "parity": "node scripts/parity-diff.cjs"
+    "parity": "node scripts/parity-diff.cjs",
+    "drift:voice": "node assistant/voice/drift-check.mjs",
+    "eval:assistant": "node assistant/eval/tool-grounding.mjs",
+    "report:corridor": "node --env-file-if-exists=.env scripts/corridor-report.cjs",
+    "sar:sweep": "node scripts/sar-occupancy.cjs --days 45 --append scripts/data/sar-occupancy-log.jsonl",
+    "relay": "node scripts/relay.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

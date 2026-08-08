@@ -23,9 +23,9 @@ repository.
 | e2e | 4 Playwright smoke tests against the real relay + a production build |
 | CI | `.github/workflows/ci.yml` (test, typecheck+build, e2e) |
 
-Everything runs standalone: `node scripts/relay.cjs` serves live data with no dependency
-on the fork. What remains before cutover is infrastructure and a live parity diff against
-the deployed relay — see PARITY_MANIFEST.md.
+Everything runs standalone: `npm run relay` serves live data with no dependency on the fork.
+What remains is infrastructure — **[CUTOVER.md](CUTOVER.md)** is the step-by-step runbook,
+and PARITY_MANIFEST.md tracks how every feature is verified.
 
 ## Layout
 
@@ -33,6 +33,7 @@ the deployed relay — see PARITY_MANIFEST.md.
 - `scripts/` — relay-side domain modules, tests, DB migrations
 - `assistant/` — Marco (its own deployable; `assistant/railway.json`)
 - `api/` — Vercel edge proxies (`/api/ais-*` → relay)
+- `.github/workflows/` — CI (test/typecheck/e2e), freight monitor, SAR sweep, assistant eval, voice drift
 
 ## Commands
 
