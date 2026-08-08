@@ -16,6 +16,24 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type, x-api-key',
 };
 
+/**
+ * Constant-time key check for the edge runtime (WebCrypto, no node:crypto). Hashing first makes
+ * both operands a fixed 32 bytes, so neither the key's length nor its prefix leaks through timing;
+ * the XOR accumulation then compares every byte instead of returning at the first difference.
+ */
+async function matchesAnyKey(provided, validKeys) {
+  const digest = async (v) => new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(String(v))));
+  const given = await digest(provided);
+  let matched = false;
+  for (const key of validKeys) {
+    const want = await digest(key);
+    let diff = 0;
+    for (let i = 0; i < want.length; i++) diff |= given[i] ^ want[i];
+    if (diff === 0) matched = true; // no early break — every candidate costs the same
+  }
+  return matched;
+}
+
 function json(status, body, extra = {}) {
   return new Response(JSON.stringify(body), {
     status,
@@ -55,9 +73,14 @@ export function createRelayHandler({
     if (request.method !== 'GET') return json(405, { error: 'method not allowed' });
 
     if (requireApiKey) {
+      // FAIL CLOSED: an unset API_VALID_KEYS must deny, not wave everything through. This proxy
+      // holds RELAY_SHARED_SECRET, so waving through would turn it into an open, credentialed
+      // gateway to the relay — worse than having no proxy at all.
       const valid = (process.env.API_VALID_KEYS || '').split(',').map((s) => s.trim()).filter(Boolean);
-      const provided = request.headers.get('x-api-key') || new URL(request.url).searchParams.get('key') || '';
-      if (valid.length && !valid.includes(provided)) return json(401, { error: 'invalid api key' });
+      // Header only — a key in the query string leaks into browser history, Referer and proxy logs.
+      const provided = request.headers.get('x-api-key') || '';
+      if (!valid.length) return json(503, { error: 'API_VALID_KEYS not configured' });
+      if (!(await matchesAnyKey(provided, valid))) return json(401, { error: 'invalid api key' });
     }
     if (requireRateLimit && (await overRateLimit(request))) {
       return json(429, { error: 'rate limited' }, { 'Retry-After': '60' });

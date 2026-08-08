@@ -165,3 +165,24 @@ test('delayTick + /ais/ports: a stopped freight vessel at Genoa is counted at th
   genoa = (await (await fetch(`${base}/ais/ports`, { headers: KEY })).json()).ports.find((p) => p.portId === 'genoa');
   assert.ok(genoa.atPort >= 1, 'a persistent vessel survives the smoothing median');
 });
+
+// ---- fail-closed auth (security review, 2026-08-08) ----
+
+test('SECURITY: a missing shared secret refuses to boot instead of serving publicly', () => {
+  const { assertAuthConfigured } = require('./relay.cjs');
+  // The regression: `allowUnauthenticated: CONFIG.allowUnauthenticated || !CONFIG.secret` meant an
+  // unset RELAY_SHARED_SECRET silently made every endpoint public on a fresh deploy.
+  assert.throws(() => assertAuthConfigured({ secret: '', allowUnauthenticated: false }), /RELAY_SHARED_SECRET is not set/);
+  // Explicit opt-in is still honored — public mode must be a decision, never an accident.
+  assert.doesNotThrow(() => assertAuthConfigured({ secret: '', allowUnauthenticated: true }));
+  assert.doesNotThrow(() => assertAuthConfigured({ secret: 'shhh', allowUnauthenticated: false }));
+});
+
+test('SECURITY: a wrong or absent key is rejected on every protected route', async () => {
+  for (const p of ['/ais/ports', '/ais/vessels', '/ais/trip?id=1', '/metrics']) {
+    assert.equal((await fetch(`${base}${p}`, { headers: { 'x-relay-key': 'wrong' } })).status, 401, `${p} wrong key`);
+    assert.equal((await fetch(`${base}${p}`, { headers: { 'x-relay-key': '' } })).status, 401, `${p} empty key`);
+    // A prefix of the real secret must not pass — the comparison is digest-based, not prefix-wise.
+    assert.equal((await fetch(`${base}${p}`, { headers: { 'x-relay-key': 'test-secr' } })).status, 401, `${p} prefix`);
+  }
+});

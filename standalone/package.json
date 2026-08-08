@@ -3,7 +3,7 @@
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "European maritime freight monitoring — live AIS port congestion, vessel delays, disruptions, and the Marco assistant.",
+  "description": "European maritime freight monitoring \u2014 live AIS port congestion, vessel delays, disruptions, and the Marco assistant.",
   "scripts": {
     "dev": "vite",
     "build": "vite build",
@@ -11,9 +11,10 @@
     "typecheck": "tsc --noEmit",
     "test:relay": "node --test scripts/*.test.cjs",
     "test:assistant": "node --test assistant/*.test.mjs assistant/*/*.test.mjs",
-    "test": "npm run test:relay && npm run test:assistant",
+    "test": "npm run test:relay && npm run test:assistant && npm run test:api",
     "assistant:cli": "node assistant/cli.mjs",
-    "assistant:serve": "node assistant/server.mjs"
+    "assistant:serve": "node assistant/server.mjs",
+    "test:api": "node --test api/*.test.mjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

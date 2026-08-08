@@ -576,7 +576,10 @@ function createRelay({ startIngest = true, startJobs = true } = {}) {
     routes: buildRoutes(state),
     secret: CONFIG.secret,
     authHeader: CONFIG.authHeader,
-    allowUnauthenticated: CONFIG.allowUnauthenticated || !CONFIG.secret,
+    // FAIL CLOSED. An absent secret must never mean "serve everything publicly" — only the
+    // explicit ALLOW_UNAUTHENTICATED_RELAY=1 opt-in does. assertAuthConfigured() refuses to
+    // boot in the misconfigured case, so this flag is exactly the operator's stated intent.
+    allowUnauthenticated: CONFIG.allowUnauthenticated,
     rateLimit: { windowMs: Number(process.env.RELAY_RATE_LIMIT_WINDOW_MS) || 60_000, max: Number(process.env.RELAY_RATE_LIMIT_MAX) || 300 },
   });
   const server = http.createServer(handler);
@@ -609,13 +612,28 @@ function createRelay({ startIngest = true, startJobs = true } = {}) {
   return { server, handler, state, stop };
 }
 
+/**
+ * Refuse to start unauthenticated by accident. The whole tracked fleet, trip history and port
+ * analytics sit behind this one header, and a fresh deploy is exactly where an env var goes
+ * missing — so a missing secret is a startup error, not a silent "public mode".
+ */
+function assertAuthConfigured(config = CONFIG) {
+  if (config.secret || config.allowUnauthenticated) return;
+  throw new Error(
+    'RELAY_SHARED_SECRET is not set. Set it, or set ALLOW_UNAUTHENTICATED_RELAY=1 to deliberately '
+    + 'serve this relay with no authentication.',
+  );
+}
+
 function main() {
+  assertAuthConfigured();
   const relay = createRelay();
   relay.server.listen(CONFIG.port, () => {
-    console.log(`[relay] freight relay listening on :${CONFIG.port} (db=${db.enabled ? 'on' : 'off'}, auth=${CONFIG.secret ? 'on' : 'OFF'})`);
+    const auth = CONFIG.secret ? 'on' : 'OFF (ALLOW_UNAUTHENTICATED_RELAY=1)';
+    console.log(`[relay] freight relay listening on :${CONFIG.port} (db=${db.enabled ? 'on' : 'off'}, auth=${auth})`);
   });
 }
 
 if (require.main === module) main();
 
-module.exports = { createRelay, CONFIG, portFeed, portLocalDowHour };
+module.exports = { createRelay, CONFIG, portFeed, portLocalDowHour, assertAuthConfigured };
