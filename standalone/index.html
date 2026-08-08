@@ -1,0 +1,256 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self' 'unsafe-inline'; worker-src 'self' blob:; child-src 'self' blob:; connect-src 'self' http://localhost:3004 http://127.0.0.1:* ws://localhost:* ws://127.0.0.1:* https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com; font-src 'self' data: https:; img-src 'self' data: blob: https://basemaps.cartocdn.com https://*.basemaps.cartocdn.com;" />
+    <title>European Freight Tracker — World Monitor</title>
+    <script>(function(){try{var t=localStorage.getItem('worldmonitor-theme');if(t==='light')document.documentElement.dataset.theme='light';}catch(e){}})()</script>
+    <style>
+      /* The map IS the product here — watching freight move in real time. The board used to be
+         capped at 1100px with a fixed 420px map, so on any large display the map was a small
+         window that got proportionally smaller as the screen grew. Widen the shell and let the
+         header cost less vertical space so the map can have it instead. */
+      .ferry-demo-wrap { max-width: 1600px; margin: 0 auto; padding: 12px 16px 24px; }
+      .ferry-demo-head { margin-bottom: 6px; }
+      .ferry-demo-head h1 { font-size: 17px; margin: 0; display: flex; align-items: center; gap: 8px; }
+      .ferry-demo-head p { margin: 2px 0 0; opacity: 0.62; font-size: 12px; max-width: 110ch; }
+      /* Collapsed by default AFTER the first visit — see ferry-main.ts. The copy does real work for
+         someone arriving cold (it says what Vessels/Ports/Disruptions actually contain), so it is
+         shown expanded the first time and only then folds away behind the (i). */
+      .ferry-demo-head p[hidden] { display: none; }
+      .ferry-about-btn { appearance: none; width: 16px; height: 16px; flex: 0 0 auto; line-height: 15px;
+        font: inherit; font-size: 10px; font-style: italic; font-weight: 700; text-align: center;
+        border: 1px solid rgba(127,127,127,0.45); border-radius: 50%; background: transparent;
+        color: inherit; opacity: 0.55; cursor: pointer; padding: 0; }
+      .ferry-about-btn:hover { opacity: 1; background: rgba(127,127,127,0.14); }
+
+      /* Region filter and the Vessels/Ports/Disruptions toggle share ONE row: they were two stacked
+         rows costing ~50px plus gaps, and together they are just "which country / which view". */
+      .ferry-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px;
+        margin: 0 0 8px; }
+      .ferry-controls .ferry-regions,
+      .ferry-controls .ferry-toggle { margin: 0; }
+      /* Divider between the two groups so they don't read as one long strip of buttons. */
+      .ferry-controls .ferry-toggle { position: relative; padding-left: 14px; }
+      .ferry-controls .ferry-toggle::before { content: ''; position: absolute; left: 0; top: 50%;
+        transform: translateY(-50%); width: 1px; height: 18px; background: rgba(127,127,127,0.28); }
+
+      /* The panel's own title duplicates the <h1> directly above it ("European Freight" under
+         "European Freight Tracker"), so it's hidden — but the data badge beside it is the LIVE /
+         CACHED / as-of indicator and must stay. Collapse the header to just that badge. */
+      #app .panel-header { min-height: 0; padding: 0 0 4px; border: 0; }
+      #app .panel-title { display: none; }
+      /* The vessel count is its own element next to the data badge. main.css styles it (and already
+         carries a comment about this exact bug — "UTC171"), but this standalone page never loads
+         main.css, so it rendered flush against the badge: "LIVE · as of 05:45 CEST2087". */
+      #app .panel-count { font-size: 10px; opacity: 0.65; margin-inline-start: 8px;
+        padding: 2px 6px; border-radius: 3px; background: rgba(127,127,127,0.16); }
+      .ferry-group-count { opacity: 0.6; font-weight: 400; }
+      table.ferry-table { width: 100%; border-collapse: collapse; font-size: 13px; table-layout: fixed; }
+      .ferry-table th, .ferry-table td { text-align: left; padding: 6px 8px;
+        border-bottom: 1px solid rgba(127,127,127,0.18);
+        overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+      .ferry-table th { opacity: 0.6; font-weight: 500; }
+      /* Stable column widths so every group lines up */
+      .ferry-table th:nth-child(1), .ferry-table td:nth-child(1) { width: 26%; }
+      .ferry-table th:nth-child(2), .ferry-table td:nth-child(2) { width: 16%; }
+      .ferry-table th:nth-child(3), .ferry-table td:nth-child(3) { width: 14%; }
+      .ferry-table th:nth-child(4), .ferry-table td:nth-child(4) { width: 20%; }
+      .ferry-table th:nth-child(5), .ferry-table td:nth-child(5) { width: 11%; }
+      .ferry-table th:nth-child(6), .ferry-table td:nth-child(6) { width: 13%; }
+      .ferry-group-row td { font-weight: 600; font-size: 13px; padding-top: 18px;
+        border-bottom: 1px solid rgba(127,127,127,0.28); width: auto !important; }
+      .ferry-name { font-weight: 600; }
+      .ferry-table tbody tr { cursor: pointer; }
+      .ferry-table tbody tr:hover { background: rgba(127,127,127,0.10); }
+      /* Map popup (override MapLibre's default white style) */
+      .maplibregl-popup-content { background: #1f2224 !important; color: #f1f3f4 !important;
+        border-radius: 8px; padding: 9px 13px; font-size: 12px; line-height: 1.45;
+        box-shadow: 0 4px 18px rgba(0,0,0,0.55); }
+      .maplibregl-popup-tip { border-top-color: #1f2224 !important; border-bottom-color: #1f2224 !important;
+        border-left-color: #1f2224 !important; border-right-color: #1f2224 !important; }
+      .maplibregl-popup-close-button { color: #cfd3d6 !important; font-size: 18px; padding: 0 6px; line-height: 1; }
+      .maplibregl-popup-close-button:hover { background: rgba(255,255,255,0.08) !important; }
+      .ferry-popup-name { font-weight: 700; font-size: 13px; color: #ffffff; }
+      .ferry-popup-op { color: #b9bdc1; margin-bottom: 2px; }
+      .ferry-popup-row { display: flex; align-items: center; gap: 6px; }
+      .ferry-popup-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex: 0 0 auto; }
+      .ferry-popup-dim { color: #9aa0a6; font-size: 11px; margin-top: 2px; }
+      .ferry-popup-delay { color: #f0a23b; font-weight: 600; }
+      .ferry-popup-why { color: #cdd2d6; font-size: 11px; }
+      /* Phase C voyage (get_trip) block appended to the vessel popup. */
+      .ferry-popup-voyage { margin-top: 6px; padding-top: 6px; border-top: 1px solid rgba(255,255,255,0.12); }
+      .ferry-popup-voyage-title { font-size: 10px; font-weight: 700; color: #4da3ff; text-transform: uppercase; letter-spacing: 0.4px; margin-bottom: 3px; }
+      .ferry-popup-chip { display: inline-block; margin: 3px 4px 0 0; padding: 1px 6px; border-radius: 8px;
+        background: rgba(255,255,255,0.08); color: #cdd2d6; font-size: 10px; }
+      .ferry-share-btn { display: block; margin-top: 6px; padding: 3px 10px; border-radius: 999px; cursor: pointer;
+        background: rgba(77,163,255,0.12); border: 1px solid rgba(77,163,255,0.35); color: #4da3ff;
+        font-size: 10px; font-weight: 600; letter-spacing: 0.2px; }
+      .ferry-share-btn:hover { background: rgba(77,163,255,0.22); }
+      .ferry-share-btn:disabled { color: #2fbf85; border-color: rgba(47,191,133,0.4); background: rgba(47,191,133,0.1); cursor: default; }
+      /* Phase C voyage replay — play/scrub control bar over the map + waypoint hover tooltip.
+         The bar is CONTEXTUAL: VoyageReplay sets bar.hidden = true on construction and only clears
+         it once a voyage is loaded (i.e. a vessel is selected). But `display: flex` below is an
+         AUTHOR rule, and it beats the user-agent's `[hidden] { display: none }` — so the attribute
+         did nothing and the control sat over the middle of the map permanently, doing nothing when
+         clicked because there was no voyage behind it. Restore the intent explicitly. */
+      /* The congestion replay (Ports mode) wears the same bar as the voyage replay (Vessels mode).
+         They never show together — the mode that owns each one is exclusive — so they share the
+         styling rather than carrying two near-identical blocks that can drift apart. */
+      .voyage-replay[hidden], .congestion-replay[hidden] { display: none; }
+      .voyage-replay, .congestion-replay { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); z-index: 5;
+        display: flex; align-items: center; gap: 10px; max-width: 92%;
+        background: rgba(20,22,24,0.92); border: 1px solid rgba(255,255,255,0.12); border-radius: 999px;
+        padding: 6px 14px; box-shadow: 0 4px 18px rgba(0,0,0,0.5); -webkit-backdrop-filter: blur(6px); backdrop-filter: blur(6px);
+        font-size: 12px; color: #e8eaed; }
+      .vr-play, .cr-play { appearance: none; border: 0; background: #4da3ff; color: #08111f; width: 26px; height: 26px;
+        border-radius: 50%; font-size: 12px; line-height: 1; cursor: pointer; flex: 0 0 auto;
+        display: flex; align-items: center; justify-content: center; }
+      .vr-play:hover, .cr-play:hover { background: #6fb6ff; }
+      .vr-scrub, .cr-scrub { flex: 1 1 160px; min-width: 120px; accent-color: #4da3ff; cursor: pointer; }
+      .vr-readout, .cr-readout { flex: 0 0 auto; font-variant-numeric: tabular-nums; color: #cdd2d6; white-space: nowrap; font-size: 11px; }
+      .maplibregl-popup.vr-hover .maplibregl-popup-content { padding: 5px 9px; font-size: 11px; }
+      .vr-hover-row { white-space: nowrap; }
+      .vr-hover-dim { color: #9aa0a6; font-size: 10px; }
+      .ferry-delay-badge { margin-left: 6px; padding: 1px 6px; border-radius: 9px; font-size: 10px;
+        background: rgba(240,162,59,0.18); color: #f0a23b; white-space: nowrap; }
+      .ferry-status { padding: 1px 7px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+      .ferry-status-underway { background: rgba(56,189,138,0.18); color: #2fbf85; }
+      .ferry-status-anchor { background: rgba(245,179,66,0.18); color: #e0a032; }
+      .ferry-status-port { background: rgba(127,127,127,0.18); }
+      .ferry-route-ok { color: #2fbf85; }
+      .ferry-route-warn { color: #e0a032; font-weight: 700; }
+      .economic-empty, .error-message { padding: 24px; text-align: center; opacity: 0.7; }
+      .economic-footer { margin-top: 12px; font-size: 11px; opacity: 0.5; }
+      /* Ferry map (MapLibre) */
+      /* Viewport-relative instead of a fixed 420px: the map grows with the display, which is the
+         whole point of a live vessel view. clamp() keeps it from ever being SMALLER than the old
+         fixed height, and caps it so it stays a map rather than a wallpaper on very tall screens.
+         dvh (not vh) so mobile browser chrome doesn't push the bottom off-screen.
+         FreightMap's ResizeObserver re-measures MapLibre whenever this lands on a new size. */
+      .ferry-map-host { height: 420px; width: 100%;
+        border-radius: 8px; overflow: hidden; border: 1px solid rgba(127,127,127,0.18); }
+      /* Separate declaration ON PURPOSE, not merged into the rule above. `dvh` is unknown to Safari
+         < 15.4 and Chrome < 108, and a declaration containing an unparseable unit is dropped
+         WHOLE — taking the height with it. The host has no intrinsic height, so the map would
+         collapse to 0 and, because the ResizeObserver deliberately ignores zero-sized boxes, never
+         recover. Older browsers keep the 420px above; newer ones override it here. */
+      .ferry-map-host { height: clamp(420px, calc(100dvh - 230px), 1100px); }
+      .ferry-map-legend { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0 18px;
+        font-size: 11px; opacity: 0.75; }
+      .ferry-map-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+        margin-right: 5px; vertical-align: middle; }
+      /* The two legends swap on `.is-ports`, set by FreightPanel. Doing it in CSS rather than with
+         inline styles matters: clearing an inline display falls BACK to these rules, it does not
+         override them, so a JS-only toggle hid both sets at once. */
+      .ferry-map-legend .legend-ports { display: none; }
+      .ferry-map-legend.is-ports .legend-ports { display: inline; }
+      .ferry-map-legend.is-ports .legend-vessels { display: none; }
+      .ferry-map-legend .legend-note { opacity: 0.7; font-style: italic; }
+      .ferry-replay-btn { appearance: none; font: inherit; font-size: 11px;
+        border: 1px solid rgba(127,127,127,0.35); border-radius: 999px; padding: 2px 10px;
+        background: transparent; color: inherit; opacity: 0.8; cursor: pointer; }
+      .ferry-replay-btn:hover { background: rgba(127,127,127,0.10); opacity: 1; }
+      .ferry-replay-btn:disabled { opacity: 0.45; cursor: default; }
+      .ferry-replay-btn.is-active { background: rgba(77,163,255,0.16); color: #4da3ff;
+        border-color: rgba(77,163,255,0.45); opacity: 1; }
+      .ferry-zones-btn { margin-left: auto; appearance: none; font: inherit; font-size: 11px;
+        padding: 3px 10px; cursor: pointer; border: 1px solid rgba(127,127,127,0.28);
+        border-radius: 999px; background: transparent; color: inherit; opacity: 0.85; }
+      .ferry-zones-btn:hover { background: rgba(127,127,127,0.10); }
+      .ferry-zones-btn.is-active { background: rgba(56,189,138,0.16); color: #2fbf85;
+        border-color: rgba(56,189,138,0.5); opacity: 1; font-weight: 600; }
+      /* Region filter (Italy / UK / Spain / Portugal / Netherlands / All) */
+      .ferry-regions { display: flex; flex-wrap: wrap; gap: 6px; margin: 0 0 12px; }
+      .ferry-region-btn { appearance: none; font: inherit; font-size: 12px; padding: 4px 12px; cursor: pointer;
+        border: 1px solid rgba(127,127,127,0.28); border-radius: 999px; background: transparent; color: inherit; opacity: 0.7; }
+      .ferry-region-btn:hover { background: rgba(127,127,127,0.10); }
+      .ferry-region-btn.is-active { background: rgba(56,189,138,0.16); color: #2fbf85; border-color: rgba(56,189,138,0.5); opacity: 1; font-weight: 600; }
+      /* Vessels / Ports toggle */
+      .ferry-toggle { display: inline-flex; gap: 0; margin: 0 0 12px; border: 1px solid rgba(127,127,127,0.28);
+        border-radius: 8px; overflow: hidden; }
+      .ferry-toggle-btn { appearance: none; border: 0; background: transparent; color: inherit;
+        font: inherit; font-size: 12px; padding: 5px 14px; cursor: pointer; opacity: 0.65; }
+      .ferry-toggle-btn + .ferry-toggle-btn { border-left: 1px solid rgba(127,127,127,0.28); }
+      .ferry-toggle-btn:hover { background: rgba(127,127,127,0.10); }
+      .ferry-toggle-btn.is-active { background: rgba(56,189,138,0.16); color: #2fbf85; opacity: 1; font-weight: 600; }
+      /* Port congestion badges */
+      .port-table th:nth-child(1), .port-table td:nth-child(1) { width: 22%; }  /* Port */
+      .port-table th:nth-child(2), .port-table td:nth-child(2) { width: 19%; }  /* Region */
+      .port-table th:nth-child(3), .port-table td:nth-child(3) { width: 14%; }  /* Status */
+      .port-table th:nth-child(4), .port-table td:nth-child(4) { width: 11%; }  /* At port */
+      .port-table th:nth-child(5), .port-table td:nth-child(5) { width: 13%; }  /* Waiting */
+      .port-table th:nth-child(6), .port-table td:nth-child(6) { width: 21%; }  /* Arrivals 24h */
+      /* Waiting (at anchor) + arrivals columns */
+      .port-dim { opacity: 0.4; }
+      .port-waiting.is-high { color: #e0a032; font-weight: 600; }
+      .port-spark { font-family: ui-monospace, Menlo, monospace; letter-spacing: -1px; color: #6ea8fe; }
+      .port-arr-soon { font-size: 10px; padding: 0 5px; border-radius: 8px;
+        background: rgba(110,168,254,0.16); color: #6ea8fe; white-space: nowrap; }
+      .port-arrivals { white-space: nowrap; }
+      .port-congestion { padding: 1px 8px; border-radius: 10px; font-size: 11px; white-space: nowrap; }
+      .port-congestion-clear { background: rgba(56,189,138,0.16); color: #2fbf85; }
+      .port-congestion-busy { background: rgba(245,179,66,0.18); color: #e0a032; }
+      .port-congestion-congested { background: rgba(232,90,82,0.20); color: #f06a62; font-weight: 600; }
+      /* Matches the map's `unknown` fill (#8b9199). Deliberately a desaturated grey and NOT a fourth
+         severity colour: it means we cannot see the port, not that the port is at some level. */
+      .port-congestion-unknown { background: rgba(139,145,153,0.16); color: #8b9199; }
+      /* Operator filter (search + chips) */
+      /* nowrap: the search box is only 240px, so the chips sat on a second line for no reason. */
+      .ferry-filter { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; margin: 0 0 8px; }
+      .ferry-search { flex: 0 0 240px; max-width: 100%; font: inherit; font-size: 12px; padding: 6px 10px;
+        border: 1px solid rgba(127,127,127,0.28); border-radius: 8px; background: transparent; color: inherit; }
+      .ferry-search::placeholder { color: rgba(127,127,127,0.8); }
+      /* One scrollable row rather than wrapping to two or three — operator chips were costing the
+         map ~60px of height on a normal screen. */
+      .ferry-chips { display: flex; flex-wrap: nowrap; gap: 6px; overflow-x: auto;
+        padding-bottom: 2px; scrollbar-width: thin; flex: 1 1 auto; min-width: 0; }
+      .ferry-chips > * { flex: 0 0 auto; }
+      .ferry-chip { appearance: none; font: inherit; font-size: 11px; padding: 3px 10px; cursor: pointer;
+        border: 1px solid rgba(127,127,127,0.28); border-radius: 999px; background: transparent; color: inherit; opacity: 0.7; }
+      .ferry-chip:hover { background: rgba(127,127,127,0.10); }
+      .ferry-chip.is-active { background: rgba(56,189,138,0.16); color: #2fbf85; border-color: rgba(56,189,138,0.5); opacity: 1; font-weight: 600; }
+      .ferry-chip-n { opacity: 0.55; margin-left: 2px; }
+      /* Disruptions view — grouped cards (strikes · water levels · chokepoint) */
+      .disr-list { display: flex; flex-direction: column; gap: 22px; }
+      .disr-group { display: flex; flex-direction: column; gap: 8px; }
+      .disr-group-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap;
+        padding-bottom: 2px; border-bottom: 1px solid rgba(127,127,127,0.18); }
+      .disr-group-title { font-size: 13px; font-weight: 600; }
+      .disr-group-note { font-size: 11px; opacity: 0.5; }
+      .disr-card { border: 1px solid rgba(127,127,127,0.18); border-radius: 10px; padding: 11px 13px;
+        display: flex; flex-direction: column; gap: 6px; background: rgba(127,127,127,0.04); }
+      .disr-sev-high { border-color: rgba(232,90,82,0.35); background: rgba(232,90,82,0.06); }
+      .disr-sev-warn { border-color: rgba(224,160,50,0.30); background: rgba(224,160,50,0.05); }
+      .disr-sev-muted { opacity: 0.82; }
+      .disr-card-top { display: flex; align-items: baseline; gap: 9px; flex-wrap: wrap; }
+      .disr-badge { flex: 0 0 auto; padding: 2px 9px; border-radius: 999px; font-size: 10.5px;
+        font-weight: 600; letter-spacing: 0.2px; text-transform: uppercase; white-space: nowrap; }
+      .disr-badge-high { background: rgba(232,90,82,0.18); color: #f06a62; }
+      .disr-badge-warn { background: rgba(224,160,50,0.18); color: #e0a032; }
+      .disr-badge-muted { background: rgba(127,127,127,0.16); color: #b7bcc0; }
+      .disr-flag { flex: 0 0 auto; padding: 1px 7px; border-radius: 6px; font-size: 10px; font-weight: 600;
+        letter-spacing: 0.4px; background: rgba(110,168,254,0.14); color: #6ea8fe; }
+      .disr-summary { flex: 1 1 260px; font-size: 13px; line-height: 1.5; min-width: 0; }
+      .disr-meta { font-size: 11px; opacity: 0.55; }
+      .disr-link { color: #6ea8fe; text-decoration: none; }
+      .disr-link:hover { text-decoration: underline; }
+      .disr-empty { padding: 44px 24px; text-align: center; display: flex; flex-direction: column;
+        align-items: center; gap: 8px; }
+      .disr-empty-mark { width: 46px; height: 46px; border-radius: 50%; display: flex; align-items: center;
+        justify-content: center; font-size: 22px; background: rgba(56,189,138,0.14); color: #2fbf85; }
+      .disr-empty-sub { font-size: 12px; opacity: 0.55; max-width: 42ch; line-height: 1.5; }
+    </style>
+  </head>
+  <body style="margin:0;background:var(--bg,#1a1c1e);color:var(--text,#e8eaed);font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif">
+    <div class="ferry-demo-wrap">
+      <div class="ferry-demo-head">
+        <h1>🇮🇹 🇬🇧 🇪🇸 🇵🇹 🇳🇱 European Freight Tracker<button type="button" class="ferry-about-btn" id="ferry-about-btn" aria-expanded="true" aria-controls="ferry-about" title="What this board shows">i</button></h1>
+        <p id="ferry-about">Live commercial freight vessels (container, cargo &amp; RoPax) across Italy, the UK, Spain, Portugal &amp; the Netherlands from AIS — with delay detection, likely cause, and per-port congestion. Toggle <strong>Vessels</strong> / <strong>Ports</strong> / <strong>Disruptions</strong> — scheduled strikes, Rhine &amp; Panama water levels, and the Strait of Hormuz chokepoint signal.</p>
+      </div>
+      <div id="app"></div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

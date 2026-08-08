@@ -1,0 +1,1383 @@
+{
+  "ports": [
+    {
+      "id": "genoa",
+      "name": "Genoa",
+      "lat": 44.41,
+      "lon": 8.9,
+      "side": "mainland",
+      "aisNames": [
+        "GENOA",
+        "GENOVA"
+      ],
+      "region": "Liguria",
+      "country": "IT",
+      "commercial": true
+    },
+    {
+      "id": "civitavecchia",
+      "name": "Civitavecchia",
+      "lat": 42.09,
+      "lon": 11.79,
+      "side": "mainland",
+      "aisNames": [
+        "CIVITAVECCHIA"
+      ],
+      "region": "Lazio",
+      "country": "IT"
+    },
+    {
+      "id": "livorno",
+      "name": "Livorno",
+      "lat": 43.55,
+      "lon": 10.3,
+      "side": "mainland",
+      "aisNames": [
+        "LIVORNO"
+      ],
+      "region": "Toscana",
+      "country": "IT",
+      "commercial": true
+    },
+    {
+      "id": "piombino",
+      "name": "Piombino",
+      "lat": 42.93,
+      "lon": 10.52,
+      "side": "mainland",
+      "aisNames": [
+        "PIOMBINO"
+      ],
+      "region": "Toscana",
+      "country": "IT"
+    },
+    {
+      "id": "naples",
+      "name": "Naples",
+      "lat": 40.84,
+      "lon": 14.26,
+      "side": "mainland",
+      "aisNames": [
+        "NAPLES",
+        "NAPOLI"
+      ],
+      "region": "Campania",
+      "country": "IT",
+      "commercial": true
+    },
+    {
+      "id": "salerno",
+      "name": "Salerno",
+      "lat": 40.67,
+      "lon": 14.75,
+      "side": "mainland",
+      "aisNames": [
+        "SALERNO"
+      ],
+      "region": "Campania",
+      "country": "IT"
+    },
+    {
+      "id": "villa_san_giovanni",
+      "name": "Villa San Giovanni",
+      "lat": 38.22,
+      "lon": 15.64,
+      "side": "mainland",
+      "aisNames": [
+        "VILLA S GIOVANNI",
+        "VILLA SAN GIOVANNI",
+        "VILLA S.G."
+      ],
+      "region": "Calabria",
+      "country": "IT"
+    },
+    {
+      "id": "reggio_calabria",
+      "name": "Reggio Calabria",
+      "lat": 38.12,
+      "lon": 15.64,
+      "side": "mainland",
+      "aisNames": [
+        "REGGIO CALABRIA",
+        "REGGIO"
+      ],
+      "region": "Calabria",
+      "country": "IT"
+    },
+    {
+      "id": "milazzo",
+      "name": "Milazzo",
+      "lat": 38.22,
+      "lon": 15.24,
+      "side": "mainland",
+      "group": "Sicily",
+      "aisNames": [
+        "MILAZZO"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "trapani",
+      "name": "Trapani",
+      "lat": 38.02,
+      "lon": 12.51,
+      "side": "mainland",
+      "group": "Sicily",
+      "aisNames": [
+        "TRAPANI"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "porto_empedocle",
+      "name": "Porto Empedocle",
+      "lat": 37.29,
+      "lon": 13.53,
+      "side": "mainland",
+      "group": "Sicily",
+      "aisNames": [
+        "PORTO EMPEDOCLE",
+        "EMPEDOCLE"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "termoli",
+      "name": "Termoli",
+      "lat": 42,
+      "lon": 14.99,
+      "side": "mainland",
+      "aisNames": [
+        "TERMOLI"
+      ],
+      "region": "Molise",
+      "country": "IT"
+    },
+    {
+      "id": "olbia",
+      "name": "Olbia",
+      "lat": 40.92,
+      "lon": 9.51,
+      "side": "island",
+      "group": "Sardinia",
+      "aisNames": [
+        "OLBIA"
+      ],
+      "region": "Sardegna",
+      "country": "IT",
+      "commercial": true
+    },
+    {
+      "id": "golfo_aranci",
+      "name": "Golfo Aranci",
+      "lat": 41,
+      "lon": 9.62,
+      "side": "island",
+      "group": "Sardinia",
+      "aisNames": [
+        "GOLFO ARANCI",
+        "ARANCI"
+      ],
+      "region": "Sardegna",
+      "country": "IT"
+    },
+    {
+      "id": "porto_torres",
+      "name": "Porto Torres",
+      "lat": 40.84,
+      "lon": 8.4,
+      "side": "island",
+      "group": "Sardinia",
+      "aisNames": [
+        "PORTO TORRES",
+        "P TORRES",
+        "TORRES"
+      ],
+      "region": "Sardegna",
+      "country": "IT"
+    },
+    {
+      "id": "cagliari",
+      "name": "Cagliari",
+      "lat": 39.21,
+      "lon": 9.11,
+      "side": "island",
+      "group": "Sardinia",
+      "aisNames": [
+        "CAGLIARI"
+      ],
+      "region": "Sardegna",
+      "country": "IT",
+      "commercial": true
+    },
+    {
+      "id": "arbatax",
+      "name": "Arbatax",
+      "lat": 39.94,
+      "lon": 9.7,
+      "side": "island",
+      "group": "Sardinia",
+      "aisNames": [
+        "ARBATAX"
+      ],
+      "region": "Sardegna",
+      "country": "IT"
+    },
+    {
+      "id": "palermo",
+      "name": "Palermo",
+      "lat": 38.14,
+      "lon": 13.37,
+      "side": "island",
+      "group": "Sicily",
+      "aisNames": [
+        "PALERMO"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "catania",
+      "name": "Catania",
+      "lat": 37.5,
+      "lon": 15.09,
+      "side": "island",
+      "group": "Sicily",
+      "aisNames": [
+        "CATANIA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "messina",
+      "name": "Messina",
+      "lat": 38.19,
+      "lon": 15.57,
+      "side": "island",
+      "group": "Sicily",
+      "aisNames": [
+        "MESSINA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "portoferraio",
+      "name": "Portoferraio (Elba)",
+      "lat": 42.81,
+      "lon": 10.31,
+      "side": "island",
+      "group": "Tuscan Archipelago",
+      "aisNames": [
+        "PORTOFERRAIO",
+        "P FERRAIO"
+      ],
+      "region": "Toscana",
+      "country": "IT"
+    },
+    {
+      "id": "rio_marina",
+      "name": "Rio Marina (Elba)",
+      "lat": 42.81,
+      "lon": 10.43,
+      "side": "island",
+      "group": "Tuscan Archipelago",
+      "aisNames": [
+        "RIO MARINA"
+      ],
+      "region": "Toscana",
+      "country": "IT"
+    },
+    {
+      "id": "cavo",
+      "name": "Cavo (Elba)",
+      "lat": 42.86,
+      "lon": 10.42,
+      "side": "island",
+      "group": "Tuscan Archipelago",
+      "aisNames": [
+        "CAVO"
+      ],
+      "region": "Toscana",
+      "country": "IT"
+    },
+    {
+      "id": "lipari",
+      "name": "Lipari",
+      "lat": 38.47,
+      "lon": 14.95,
+      "side": "island",
+      "group": "Aeolian",
+      "aisNames": [
+        "LIPARI"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "vulcano",
+      "name": "Vulcano",
+      "lat": 38.41,
+      "lon": 14.96,
+      "side": "island",
+      "group": "Aeolian",
+      "aisNames": [
+        "VULCANO"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "salina",
+      "name": "Salina",
+      "lat": 38.56,
+      "lon": 14.87,
+      "side": "island",
+      "group": "Aeolian",
+      "aisNames": [
+        "SALINA",
+        "SANTA MARINA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "stromboli",
+      "name": "Stromboli",
+      "lat": 38.79,
+      "lon": 15.21,
+      "side": "island",
+      "group": "Aeolian",
+      "aisNames": [
+        "STROMBOLI"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "panarea",
+      "name": "Panarea",
+      "lat": 38.64,
+      "lon": 15.07,
+      "side": "island",
+      "group": "Aeolian",
+      "aisNames": [
+        "PANAREA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "capri",
+      "name": "Capri",
+      "lat": 40.55,
+      "lon": 14.24,
+      "side": "island",
+      "group": "Bay of Naples",
+      "aisNames": [
+        "CAPRI"
+      ],
+      "region": "Campania",
+      "country": "IT"
+    },
+    {
+      "id": "ischia",
+      "name": "Ischia",
+      "lat": 40.73,
+      "lon": 13.95,
+      "side": "island",
+      "group": "Bay of Naples",
+      "aisNames": [
+        "ISCHIA"
+      ],
+      "region": "Campania",
+      "country": "IT"
+    },
+    {
+      "id": "procida",
+      "name": "Procida",
+      "lat": 40.76,
+      "lon": 14.04,
+      "side": "island",
+      "group": "Bay of Naples",
+      "aisNames": [
+        "PROCIDA"
+      ],
+      "region": "Campania",
+      "country": "IT"
+    },
+    {
+      "id": "ponza",
+      "name": "Ponza",
+      "lat": 40.9,
+      "lon": 12.96,
+      "side": "island",
+      "group": "Pontine",
+      "aisNames": [
+        "PONZA"
+      ],
+      "region": "Lazio",
+      "country": "IT"
+    },
+    {
+      "id": "ventotene",
+      "name": "Ventotene",
+      "lat": 40.79,
+      "lon": 13.43,
+      "side": "island",
+      "group": "Pontine",
+      "aisNames": [
+        "VENTOTENE"
+      ],
+      "region": "Lazio",
+      "country": "IT"
+    },
+    {
+      "id": "favignana",
+      "name": "Favignana",
+      "lat": 37.93,
+      "lon": 12.33,
+      "side": "island",
+      "group": "Egadi",
+      "aisNames": [
+        "FAVIGNANA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "levanzo",
+      "name": "Levanzo",
+      "lat": 38,
+      "lon": 12.34,
+      "side": "island",
+      "group": "Egadi",
+      "aisNames": [
+        "LEVANZO"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "marettimo",
+      "name": "Marettimo",
+      "lat": 37.97,
+      "lon": 12.07,
+      "side": "island",
+      "group": "Egadi",
+      "aisNames": [
+        "MARETTIMO"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "lampedusa",
+      "name": "Lampedusa",
+      "lat": 35.5,
+      "lon": 12.61,
+      "side": "island",
+      "group": "Pelagie",
+      "aisNames": [
+        "LAMPEDUSA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "linosa",
+      "name": "Linosa",
+      "lat": 35.86,
+      "lon": 12.87,
+      "side": "island",
+      "group": "Pelagie",
+      "aisNames": [
+        "LINOSA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "pantelleria",
+      "name": "Pantelleria",
+      "lat": 36.83,
+      "lon": 11.94,
+      "side": "island",
+      "group": "Sicily Channel",
+      "aisNames": [
+        "PANTELLERIA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "ustica",
+      "name": "Ustica",
+      "lat": 38.71,
+      "lon": 13.19,
+      "side": "island",
+      "group": "Tyrrhenian",
+      "aisNames": [
+        "USTICA"
+      ],
+      "region": "Sicilia",
+      "country": "IT"
+    },
+    {
+      "id": "tremiti",
+      "name": "Tremiti",
+      "lat": 42.12,
+      "lon": 15.49,
+      "side": "island",
+      "group": "Adriatic",
+      "aisNames": [
+        "TREMITI",
+        "SAN DOMINO"
+      ],
+      "region": "Puglia",
+      "country": "IT"
+    },
+    {
+      "id": "gioia_tauro",
+      "name": "Gioia Tauro",
+      "lat": 38.43,
+      "lon": 15.9,
+      "region": "Calabria",
+      "country": "IT",
+      "aisNames": [
+        "GIOIA TAURO",
+        "GIOIATAURO",
+        "GIOIA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "la_spezia",
+      "name": "La Spezia",
+      "lat": 44.1,
+      "lon": 9.83,
+      "region": "Liguria",
+      "country": "IT",
+      "aisNames": [
+        "LA SPEZIA",
+        "SPEZIA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "trieste",
+      "name": "Trieste",
+      "lat": 45.64,
+      "lon": 13.76,
+      "region": "Friuli Venezia Giulia",
+      "country": "IT",
+      "aisNames": [
+        "TRIESTE"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "ravenna",
+      "name": "Ravenna",
+      "lat": 44.48,
+      "lon": 12.28,
+      "region": "Emilia e Romagna",
+      "country": "IT",
+      "aisNames": [
+        "RAVENNA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "vado_ligure",
+      "name": "Vado Ligure",
+      "lat": 44.27,
+      "lon": 8.44,
+      "region": "Liguria",
+      "country": "IT",
+      "radiusKm": 2.5,
+      "aisNames": [
+        "VADO LIGURE",
+        "VADO"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "savona",
+      "name": "Savona",
+      "lat": 44.31,
+      "lon": 8.49,
+      "region": "Liguria",
+      "country": "IT",
+      "radiusKm": 2.5,
+      "aisNames": [
+        "SAVONA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "taranto",
+      "name": "Taranto",
+      "lat": 40.47,
+      "lon": 17.22,
+      "region": "Puglia",
+      "country": "IT",
+      "aisNames": [
+        "TARANTO"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "bari",
+      "name": "Bari",
+      "lat": 41.14,
+      "lon": 16.87,
+      "region": "Puglia",
+      "country": "IT",
+      "aisNames": [
+        "BARI"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "brindisi",
+      "name": "Brindisi",
+      "lat": 40.65,
+      "lon": 17.99,
+      "region": "Puglia",
+      "country": "IT",
+      "aisNames": [
+        "BRINDISI"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "ancona",
+      "name": "Ancona",
+      "lat": 43.62,
+      "lon": 13.51,
+      "region": "Marche",
+      "country": "IT",
+      "aisNames": [
+        "ANCONA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "venezia",
+      "name": "Venezia",
+      "lat": 45.44,
+      "lon": 12.34,
+      "region": "Veneto",
+      "country": "IT",
+      "radiusKm": 2.5,
+      "aisNames": [
+        "VENEZIA",
+        "VENICE"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "porto_marghera",
+      "name": "Porto Marghera",
+      "lat": 45.45,
+      "lon": 12.26,
+      "region": "Veneto",
+      "country": "IT",
+      "radiusKm": 2.5,
+      "aisNames": [
+        "MARGHERA",
+        "PORTO MARGHERA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "monfalcone",
+      "name": "Monfalcone",
+      "lat": 45.8,
+      "lon": 13.55,
+      "region": "Friuli Venezia Giulia",
+      "country": "IT",
+      "aisNames": [
+        "MONFALCONE"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "augusta",
+      "name": "Augusta",
+      "lat": 37.2,
+      "lon": 15.22,
+      "region": "Sicilia",
+      "country": "IT",
+      "aisNames": [
+        "AUGUSTA"
+      ],
+      "side": "mainland",
+      "commercial": true
+    },
+    {
+      "id": "felixstowe",
+      "name": "Felixstowe",
+      "lat": 51.95,
+      "lon": 1.31,
+      "side": "mainland",
+      "aisNames": [
+        "FELIXSTOWE",
+        "FXT"
+      ],
+      "region": "England",
+      "country": "GB",
+      "commercial": true
+    },
+    {
+      "id": "southampton",
+      "name": "Southampton",
+      "lat": 50.9,
+      "lon": -1.42,
+      "side": "mainland",
+      "aisNames": [
+        "SOUTHAMPTON",
+        "SOTON"
+      ],
+      "region": "England",
+      "country": "GB",
+      "radiusKm": 10,
+      "commercial": true
+    },
+    {
+      "id": "london_gateway",
+      "name": "London Gateway",
+      "lat": 51.51,
+      "lon": 0.49,
+      "side": "mainland",
+      "aisNames": [
+        "LONDON GATEWAY",
+        "LONDONGATEWAY"
+      ],
+      "region": "England",
+      "country": "GB",
+      "radiusKm": 5,
+      "commercial": true
+    },
+    {
+      "id": "liverpool",
+      "name": "Liverpool",
+      "lat": 53.45,
+      "lon": -3.01,
+      "side": "mainland",
+      "aisNames": [
+        "LIVERPOOL"
+      ],
+      "region": "England",
+      "country": "GB",
+      "radiusKm": 12,
+      "commercial": true
+    },
+    {
+      "id": "immingham",
+      "name": "Immingham",
+      "lat": 53.63,
+      "lon": -0.19,
+      "side": "mainland",
+      "aisNames": [
+        "IMMINGHAM"
+      ],
+      "region": "England",
+      "country": "GB",
+      "radiusKm": 6,
+      "commercial": true
+    },
+    {
+      "id": "tilbury",
+      "name": "Tilbury",
+      "lat": 51.46,
+      "lon": 0.35,
+      "side": "mainland",
+      "aisNames": [
+        "TILBURY"
+      ],
+      "region": "England",
+      "country": "GB",
+      "radiusKm": 5,
+      "commercial": true
+    },
+    {
+      "id": "teesport",
+      "name": "Teesport",
+      "lat": 54.6,
+      "lon": -1.15,
+      "side": "mainland",
+      "aisNames": [
+        "TEESPORT",
+        "TEES",
+        "MIDDLESBROUGH"
+      ],
+      "region": "England",
+      "country": "GB",
+      "commercial": true
+    },
+    {
+      "id": "hull",
+      "name": "Hull",
+      "lat": 53.74,
+      "lon": -0.29,
+      "side": "mainland",
+      "aisNames": [
+        "HULL"
+      ],
+      "region": "England",
+      "country": "GB",
+      "radiusKm": 6,
+      "commercial": true
+    },
+    {
+      "id": "valencia",
+      "name": "Valencia",
+      "lat": 39.44,
+      "lon": -0.31,
+      "side": "mainland",
+      "aisNames": [
+        "VALENCIA"
+      ],
+      "region": "Valencia",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "algeciras",
+      "name": "Algeciras",
+      "lat": 36.13,
+      "lon": -5.43,
+      "side": "mainland",
+      "aisNames": [
+        "ALGECIRAS"
+      ],
+      "region": "Andalusia",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "barcelona",
+      "name": "Barcelona",
+      "lat": 41.35,
+      "lon": 2.16,
+      "side": "mainland",
+      "aisNames": [
+        "BARCELONA"
+      ],
+      "region": "Catalonia",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "bilbao",
+      "name": "Bilbao",
+      "lat": 43.36,
+      "lon": -3.05,
+      "side": "mainland",
+      "aisNames": [
+        "BILBAO"
+      ],
+      "region": "Basque Country",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "tarragona",
+      "name": "Tarragona",
+      "lat": 41.1,
+      "lon": 1.22,
+      "side": "mainland",
+      "aisNames": [
+        "TARRAGONA"
+      ],
+      "region": "Catalonia",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "cartagena_es",
+      "name": "Cartagena",
+      "lat": 37.58,
+      "lon": -0.98,
+      "side": "mainland",
+      "aisNames": [
+        "CARTAGENA"
+      ],
+      "region": "Murcia",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "vigo",
+      "name": "Vigo",
+      "lat": 42.24,
+      "lon": -8.73,
+      "side": "mainland",
+      "aisNames": [
+        "VIGO"
+      ],
+      "region": "Galicia",
+      "country": "ES",
+      "commercial": true
+    },
+    {
+      "id": "sines",
+      "name": "Sines",
+      "lat": 37.95,
+      "lon": -8.83,
+      "side": "mainland",
+      "aisNames": [
+        "SINES"
+      ],
+      "region": "Alentejo",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "lisbon",
+      "name": "Lisboa",
+      "lat": 38.70,
+      "lon": -9.16,
+      "side": "mainland",
+      "aisNames": [
+        "LISBON",
+        "LISBOA"
+      ],
+      "region": "Lisboa",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "leixoes",
+      "name": "Leixões",
+      "lat": 41.18,
+      "lon": -8.70,
+      "side": "mainland",
+      "aisNames": [
+        "LEIXOES",
+        "PORTO"
+      ],
+      "region": "Norte",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "setubal",
+      "name": "Setúbal",
+      "lat": 38.52,
+      "lon": -8.89,
+      "side": "mainland",
+      "aisNames": [
+        "SETUBAL"
+      ],
+      "region": "Setúbal",
+      "country": "PT",
+      "commercial": true
+    },
+    {
+      "id": "rotterdam",
+      "name": "Rotterdam",
+      "lat": 51.95,
+      "lon": 4.14,
+      "side": "mainland",
+      "aisNames": [
+        "ROTTERDAM",
+        "RTM"
+      ],
+      "region": "South Holland",
+      "country": "NL",
+      "radiusKm": 20,
+      "commercial": true
+    },
+    {
+      "id": "amsterdam",
+      "name": "Amsterdam",
+      "lat": 52.42,
+      "lon": 4.85,
+      "side": "mainland",
+      "aisNames": [
+        "AMSTERDAM"
+      ],
+      "region": "North Holland",
+      "country": "NL",
+      "radiusKm": 15,
+      "commercial": true
+    },
+    {
+      "id": "vlissingen",
+      "name": "Vlissingen",
+      "lat": 51.44,
+      "lon": 3.58,
+      "side": "mainland",
+      "aisNames": [
+        "VLISSINGEN",
+        "FLUSHING"
+      ],
+      "region": "Zeeland",
+      "country": "NL",
+      "commercial": true
+    },
+    {
+      "id": "moerdijk",
+      "name": "Moerdijk",
+      "lat": 51.7,
+      "lon": 4.61,
+      "side": "mainland",
+      "aisNames": [
+        "MOERDIJK"
+      ],
+      "region": "North Brabant",
+      "country": "NL",
+      "commercial": true
+    },
+    {
+      "id": "eemshaven",
+      "name": "Eemshaven",
+      "lat": 53.44,
+      "lon": 6.83,
+      "side": "mainland",
+      "aisNames": [
+        "EEMSHAVEN"
+      ],
+      "region": "Groningen",
+      "country": "NL",
+      "commercial": true
+    }
+  ],
+  "locodes": {
+    "ITGOA": "genoa",
+    "ITCVV": "civitavecchia",
+    "ITLIV": "livorno",
+    "ITNAP": "naples",
+    "ITSAL": "salerno",
+    "ITOLB": "olbia",
+    "ITGAI": "golfo_aranci",
+    "ITCAG": "cagliari",
+    "ITPTO": "porto_torres",
+    "ITPMO": "palermo",
+    "ITCTA": "catania",
+    "ITMSN": "messina",
+    "ITTPS": "trapani",
+    "ITPFE": "portoferraio",
+    "ITMLZ": "milazzo",
+    "ITPRJ": "capri",
+    "ITISH": "ischia",
+    "ITPRO": "procida",
+    "ITPNZ": "ponza",
+    "ITLMP": "lampedusa",
+    "ITPIO": "piombino",
+    "ITLEV": "levanzo",
+    "ITSPE": "la_spezia",
+    "ITTRS": "trieste",
+    "ITGIT": "gioia_tauro",
+    "ITRAN": "ravenna",
+    "ITTAR": "taranto",
+    "ITAOI": "ancona",
+    "ITVCE": "venezia",
+    "ITBRI": "bari",
+    "ITBDS": "brindisi",
+    "ITSVN": "savona",
+    "ITAUG": "augusta",
+    "ITVDL": "vado_ligure",
+    "GBFXT": "felixstowe",
+    "GBSOU": "southampton",
+    "GBLGP": "london_gateway",
+    "GBLIV": "liverpool",
+    "GBIMM": "immingham",
+    "GBTIL": "tilbury",
+    "GBTEE": "teesport",
+    "GBHUL": "hull",
+    "ESVLC": "valencia",
+    "ESALG": "algeciras",
+    "ESBCN": "barcelona",
+    "ESBIO": "bilbao",
+    "ESTAR": "tarragona",
+    "ESVGO": "vigo",
+    "PTSIN": "sines",
+    "PTLIS": "lisbon",
+    "PTLEI": "leixoes",
+    "PTSET": "setubal",
+    "NLRTM": "rotterdam",
+    "NLAMS": "amsterdam",
+    "NLVLI": "vlissingen",
+    "NLMOE": "moerdijk",
+    "NLEEM": "eemshaven"
+  },
+  "operators": [
+    {
+      "id": "tirrenia",
+      "name": "Tirrenia / CIN",
+      "keywords": [
+        "TIRRENIA"
+      ],
+      "freight": true
+    },
+    {
+      "id": "gnv",
+      "name": "Grandi Navi Veloci",
+      "keywords": [
+        "GNV",
+        "GRANDI NAVI VELOCI"
+      ],
+      "freight": true
+    },
+    {
+      "id": "moby",
+      "name": "Moby Lines",
+      "keywords": [
+        "MOBY"
+      ],
+      "freight": true
+    },
+    {
+      "id": "grimaldi",
+      "name": "Grimaldi Lines",
+      "keywords": [
+        "GRIMALDI"
+      ],
+      "freight": true,
+      "prefixes": [
+        "GRANDE "
+      ]
+    },
+    {
+      "id": "corsica_sardinia",
+      "name": "Corsica Sardinia Ferries",
+      "keywords": [
+        "CORSICA",
+        "SARDINIA FERRIES"
+      ],
+      "freight": true
+    },
+    {
+      "id": "caremar",
+      "name": "Caremar",
+      "keywords": [
+        "CAREMAR"
+      ],
+      "freight": false
+    },
+    {
+      "id": "siremar",
+      "name": "Siremar",
+      "keywords": [
+        "SIREMAR"
+      ],
+      "freight": false
+    },
+    {
+      "id": "liberty_lines",
+      "name": "Liberty Lines",
+      "keywords": [
+        "LIBERTY LINES",
+        "USTICA LINES"
+      ],
+      "freight": false
+    },
+    {
+      "id": "snav",
+      "name": "SNAV",
+      "keywords": [
+        "SNAV"
+      ],
+      "freight": true
+    },
+    {
+      "id": "toremar",
+      "name": "Toremar",
+      "keywords": [
+        "TOREMAR"
+      ],
+      "freight": false
+    },
+    {
+      "id": "laziomar",
+      "name": "Laziomar",
+      "keywords": [
+        "LAZIOMAR"
+      ],
+      "freight": false
+    },
+    {
+      "id": "alilauro",
+      "name": "Alilauro",
+      "keywords": [
+        "ALILAURO"
+      ],
+      "freight": false
+    },
+    {
+      "id": "nlg",
+      "name": "Navigazione Libera del Golfo",
+      "keywords": [
+        "NLG",
+        "LIBERA DEL GOLFO"
+      ],
+      "freight": false
+    },
+    {
+      "id": "blunavy",
+      "name": "Blu Navy",
+      "keywords": [
+        "BLU NAVY"
+      ],
+      "freight": false
+    },
+    {
+      "id": "caronte",
+      "name": "Caronte & Tourist",
+      "keywords": [
+        "CARONTE",
+        "BLU JET"
+      ],
+      "freight": true
+    },
+    {
+      "id": "maersk",
+      "name": "Maersk",
+      "keywords": [
+        "MAERSK"
+      ],
+      "freight": false
+    },
+    {
+      "id": "msc_line",
+      "name": "MSC",
+      "keywords": [
+        "MSC"
+      ],
+      "freight": false
+    },
+    {
+      "id": "cma_cgm",
+      "name": "CMA CGM",
+      "keywords": [
+        "CMA CGM",
+        "CMACGM"
+      ],
+      "freight": false
+    },
+    {
+      "id": "hapag_lloyd",
+      "name": "Hapag-Lloyd",
+      "keywords": [
+        "HAPAG"
+      ],
+      "freight": false
+    },
+    {
+      "id": "cosco",
+      "name": "COSCO",
+      "keywords": [
+        "COSCO"
+      ],
+      "freight": false
+    },
+    {
+      "id": "evergreen",
+      "name": "Evergreen",
+      "keywords": [
+        "EVERGREEN"
+      ],
+      "freight": false,
+      "prefixes": [
+        "EVER "
+      ]
+    },
+    {
+      "id": "stena",
+      "name": "Stena Line",
+      "keywords": [
+        "STENA"
+      ],
+      "freight": true
+    },
+    {
+      "id": "dfds",
+      "name": "DFDS",
+      "keywords": [
+        "DFDS"
+      ],
+      "freight": true,
+      "suffixes": [
+        " SEAWAYS"
+      ]
+    },
+    {
+      "id": "po_ferries",
+      "name": "P&O Ferries",
+      "keywords": [
+        "P&O",
+        "PRIDE OF"
+      ],
+      "freight": true
+    },
+    {
+      "id": "brittany",
+      "name": "Brittany Ferries",
+      "keywords": [
+        "BRITTANY"
+      ],
+      "freight": true
+    },
+    {
+      "id": "zim",
+      "name": "ZIM",
+      "keywords": [],
+      "prefixes": [
+        "ZIM "
+      ]
+    },
+    {
+      "id": "wilson",
+      "name": "Wilson",
+      "keywords": [],
+      "prefixes": [
+        "WILSON "
+      ]
+    },
+    {
+      "id": "bbc_chartering",
+      "name": "BBC Chartering",
+      "keywords": [],
+      "prefixes": [
+        "BBC "
+      ]
+    },
+    {
+      "id": "xpress_feeders",
+      "name": "X-Press Feeders",
+      "keywords": [
+        "X-PRESS"
+      ]
+    },
+    {
+      "id": "spliethoff",
+      "name": "Spliethoff",
+      "keywords": [],
+      "suffixes": [
+        "GRACHT"
+      ]
+    }
+  ],
+  "imoRegistry": {}
+}

@@ -1,0 +1,168 @@
+'use strict';
+
+// Per-port freight status, derived from our OWN live vessel data (no external
+// call). For each port: how many freight vessels are stopped AT the port
+// (waiting/berthed) and how many are INBOUND (under way with this port as their
+// resolved destination), plus a congestion level. Powers the ports view / the
+// "where do I see port congestion" question.
+//
+// Pure (port + vessel list + a destination resolver in, status out) so it
+// unit-tests without I/O; the relay wires it over its live vessel map.
+
+const { haversineKm } = require('./ferry-eta.cjs');
+
+const DEFAULTS = {
+  radiusKm: 8,           // "at the port" = within this of the terminal
+  stoppedKnots: 1,       // at/below this counts as stopped
+  freshMs: 30 * 60_000,  // ignore vessels that stopped reporting
+  busyAt: 4,             // atPort >= this -> busy
+  congestedAt: 8,        // atPort >= this -> congested
+};
+
+// radiusKm above is only the DEFAULT — a port row may carry its own `radiusKm`, because one global
+// figure cannot fit both a compact terminal and a sprawling complex. Two ways it was wrong:
+// Rotterdam's port runs ~24 km inland from its coordinate, so 8 km missed half of it; and four
+// pairs of ports sit closer than 16 km apart (Savona/Vado Ligure 6.0, Venezia/Porto Marghera 6.3,
+// London Gateway/Tilbury 11.2, Immingham/Hull 13.9), so their 8 km discs OVERLAPPED and a vessel
+// berthed at one was counted at both. port-status.test.cjs enforces the non-overlap invariant.
+const radiusFor = (port, o) => (Number.isFinite(port && port.radiusKm) ? port.radiusKm : o.radiusKm);
+
+// busyAt/congestedAt are ABSOLUTE vessel counts, and were calibrated when every port was Italian.
+// They do not scale: Rotterdam clears 8 on an ordinary Tuesday while Setubal rarely reaches 4, so
+// one pair of numbers reads "congested" forever at the big ports and "clear" forever at the small
+// ones. A port row may override either. The genuinely size-independent signal is congestionRel
+// (each port against its OWN dow x hour baseline) — prefer it; this stays for the raw count.
+const thresholdsFor = (port, o) => ({
+  busyAt: Number.isFinite(port && port.busyAt) ? port.busyAt : o.busyAt,
+  congestedAt: Number.isFinite(port && port.congestedAt) ? port.congestedAt : o.congestedAt,
+});
+
+const NAV_AT_ANCHOR = 1;
+const NAV_MOORED = 5;
+
+const KN_TO_KMH = 1.852; // 1 knot = 1.852 km/h — for the geometric arrival ETA
+// Cumulative "arriving within N hours" buckets (a vessel <6h out counts in all four).
+// These define the logged-history schema (h6/h12/…) — changing them is a data
+// migration, not a per-call knob, so they live here rather than in DEFAULTS.
+const ETA_BUCKETS_H = [6, 12, 24, 48];
+
+function isStopped(v, stoppedKnots) {
+  if (v.navStatus === NAV_AT_ANCHOR || v.navStatus === NAV_MOORED) return true;
+  return Number.isFinite(v.speed) && v.speed <= stoppedKnots;
+}
+
+function congestionLevel(atPort, o) {
+  if (atPort >= o.congestedAt) return 'congested';
+  if (atPort >= o.busyAt) return 'busy';
+  return 'clear';
+}
+
+/**
+ * Status for one port. `resolveDest(destString) -> {portId}|null` maps a
+ * vessel's AIS destination to a port id (use resolveDestinationPort). Pure.
+ */
+function computePortStatus(port, vessels, resolveDest, now = Date.now(), opts = {}) {
+  const o = { ...DEFAULTS, ...opts };
+  const radiusKm = radiusFor(port, o);
+  const thresholds = thresholdsFor(port, o);
+  let atPort = 0;
+  let atAnchor = 0; // navStatus "at anchor" = waiting for a berth (queue → leading indicator)
+  let atBerth = 0; // navStatus "moored" = berthed / being served
+  let inbound = 0;
+  const inboundEta = {}; // cumulative arrival counts by geometric ETA (h6/h12/h24/h48)
+  for (const h of ETA_BUCKETS_H) inboundEta[`h${h}`] = 0;
+  for (const v of vessels || []) {
+    if (!v) continue;
+    if (Number.isFinite(v.timestamp) && now - v.timestamp > o.freshMs) continue;
+    // Distance to the port, computed once and reused for both the at-port check + ETA.
+    const distKm = (Number.isFinite(v.lat) && Number.isFinite(v.lon)) ? haversineKm(v, port) : Infinity;
+    // At port: stopped within the radius. Split anchor (waiting) vs berth (served).
+    if (distKm <= radiusKm && isStopped(v, o.stoppedKnots)) {
+      atPort++;
+      if (v.navStatus === NAV_AT_ANCHOR) atAnchor++;
+      else if (v.navStatus === NAV_MOORED) atBerth++;
+      continue;
+    }
+    // Inbound: destination resolves to this port and the vessel is under way.
+    if (v.destination && Number.isFinite(v.speed) && v.speed > o.stoppedKnots) {
+      const d = resolveDest && resolveDest(v.destination);
+      if (d && d.portId === port.portId) {
+        inbound++;
+        // Geometric ETA (physics: distance / speed) — NOT the crew-typed AIS ETA field.
+        const etaH = distKm / (v.speed * KN_TO_KMH);
+        for (const h of ETA_BUCKETS_H) if (etaH <= h) inboundEta[`h${h}`]++;
+      }
+    }
+  }
+  return {
+    portId: port.portId,
+    name: port.name,
+    lat: port.lat,
+    lon: port.lon,
+    region: port.region || null,
+    atPort,
+    atAnchor,
+    atBerth,
+    inbound,
+    inboundEta,
+    congestion: congestionLevel(atPort, thresholds),
+    // The thresholds this label was produced with, so "6 at port" is interpretable rather than a
+    // bare word — and so smoothPortStatus can recompute the label without re-reading the registry.
+    busyAt: thresholds.busyAt,
+    congestedAt: thresholds.congestedAt,
+  };
+}
+
+/**
+ * Status for every port. `ports` may be an ARRAY of port objects (each with an
+ * `id`) — as in maritime-ports.data.json — or an object keyed by port id. The
+ * emitted portId always comes from the port's own `id` (else the map key) so it
+ * matches resolveDest()'s portId for inbound counting. `filter(port)` optionally
+ * restricts which ports (e.g. commercial only). Ports without coords are skipped.
+ * Sorted by congestion severity then atPort count, desc.
+ */
+function computeAllPortStatus(ports, vessels, resolveDest, now = Date.now(), opts = {}, filter = null) {
+  const entries = Array.isArray(ports) ? ports.map((p) => [p && p.id, p]) : Object.entries(ports || {});
+  const out = [];
+  for (const [key, p] of entries) {
+    if (!p) continue;
+    if (filter && !filter(p)) continue;
+    if (!Number.isFinite(p.lat) || !Number.isFinite(p.lon)) continue;
+    out.push(computePortStatus({ ...p, portId: p.id || key }, vessels, resolveDest, now, opts));
+  }
+  const rank = { congested: 2, busy: 1, clear: 0 };
+  out.sort((a, b) => (rank[b.congestion] - rank[a.congestion]) || (b.atPort - a.atPort) || (b.inbound - a.inbound));
+  return out;
+}
+
+function median(nums) {
+  if (!nums.length) return 0;
+  const s = [...nums].sort((a, b) => a - b);
+  const m = Math.floor(s.length / 2);
+  return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2);
+}
+
+/**
+ * Smooth each port's atPort over a rolling history (Map portId -> number[]) and
+ * recompute congestion from the median — so transient poll noise can't flip a
+ * port or jiggle the count. Mutates the ports (adds atPortRaw, overwrites atPort
+ * + congestion) and the history Map. `n` = window length.
+ */
+function smoothPortStatus(ports, history, n = 5, opts = {}) {
+  const o = { ...DEFAULTS, ...opts };
+  for (const p of ports) {
+    const h = history.get(p.portId) || [];
+    h.push(p.atPort);
+    while (h.length > n) h.shift();
+    history.set(p.portId, h);
+    const sm = median(h);
+    p.atPortRaw = p.atPort;
+    p.atPort = sm;
+    // Reuse THIS port's thresholds (stamped by computePortStatus), not the fleet defaults —
+    // otherwise smoothing silently re-labels an overridden port with the global numbers.
+    p.congestion = congestionLevel(sm, thresholdsFor(p, o));
+  }
+  return ports;
+}
+
+module.exports = { computePortStatus, computeAllPortStatus, congestionLevel, median, smoothPortStatus, radiusFor, DEFAULTS };

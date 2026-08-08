@@ -1,0 +1,53 @@
+{
+  "display_information": {
+    "name": "Marco",
+    "description": "Your freight-ops coworker — live Italian-port freight tracking, in Slack.",
+    "background_color": "#0b3d2e",
+    "long_description": "Marco is an AI coworker that tracks live commercial freight traffic (cargo ships and RoPax ferries) across Italian ports. Ask about port congestion, where a vessel is, live ETAs and delays, or set proactive watches that alert your channel when a port clears or a ship runs late. No dashboard, no setup — he lives in Slack and DMs you when something changes."
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "Marco",
+      "always_online": true
+    },
+    "app_home": {
+      "home_tab_enabled": true,
+      "messages_tab_enabled": true,
+      "messages_tab_read_only_enabled": false
+    }
+  },
+  "oauth_config": {
+    "redirect_urls": [
+      "https://italy-freight-assistant-production.up.railway.app/slack/oauth/callback"
+    ],
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "im:history",
+        "im:write",
+        "users:read",
+        "team:read"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "request_url": "https://italy-freight-assistant-production.up.railway.app/slack/events",
+      "bot_events": [
+        "app_mention",
+        "message.im",
+        "app_home_opened",
+        "app_uninstalled",
+        "tokens_revoked"
+      ]
+    },
+    "interactivity": {
+      "is_enabled": true,
+      "request_url": "https://italy-freight-assistant-production.up.railway.app/slack/interactions"
+    },
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": false,
+    "token_rotation_enabled": false
+  }
+}

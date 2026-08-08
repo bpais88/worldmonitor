@@ -1,0 +1,35 @@
+{
+  "$schema": "https://developer.microsoft.com/en-us/json-schemas/teams/v1.19/MicrosoftTeams.schema.json",
+  "manifestVersion": "1.19",
+  "version": "1.0.0",
+  "id": "e3361fe3-23d1-4608-ba1f-41f3c649435f",
+  "developer": {
+    "name": "World Monitor",
+    "websiteUrl": "https://italy-freight-assistant-production.up.railway.app/",
+    "privacyUrl": "https://italy-freight-assistant-production.up.railway.app/privacy",
+    "termsOfUseUrl": "https://italy-freight-assistant-production.up.railway.app/support"
+  },
+  "name": {
+    "short": "Marco",
+    "full": "Marco — freight-ops coworker"
+  },
+  "description": {
+    "short": "Your freight-ops coworker for Italian ports — live cargo & ferry traffic.",
+    "full": "Marco tracks every commercial cargo ship and RoPax ferry across Italian ports from live AIS data. @mention or DM him: \"which ports are congested?\", \"what's delayed and why?\", \"any MSC ships near Genoa?\". Same brain as the Slack app — now in Teams."
+  },
+  "icons": {
+    "color": "color.png",
+    "outline": "outline.png"
+  },
+  "accentColor": "#1a1a2e",
+  "bots": [
+    {
+      "botId": "e3361fe3-23d1-4608-ba1f-41f3c649435f",
+      "scopes": ["personal", "team", "groupChat"],
+      "supportsFiles": false,
+      "isNotificationOnly": false
+    }
+  ],
+  "permissions": ["identity", "messageTeamMembers"],
+  "validDomains": ["italy-freight-assistant-production.up.railway.app"]
+}

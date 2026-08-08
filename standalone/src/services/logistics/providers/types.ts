@@ -1,0 +1,78 @@
+// Vessel data provider abstraction — the "free now, paid later" seam.
+//
+// AisStreamProvider (free aisstream.io via the relay) implements this today.
+// SpireProvider / MarineTrafficProvider / DatalasticProvider can implement the
+// same interface later for open-ocean coverage + enrichment, without the UI or
+// the logistics engine changing.
+
+import type { VesselPosition } from '../types';
+import type { ShipCategory } from '../classify';
+
+/** A candidate explanation for a delay (weather, news, ...). */
+export interface DelayReason {
+  source: string;
+  kind: string;
+  summary: string;
+  confidence: number;
+  url?: string;
+  detail?: string;
+}
+
+/** Delay status from the relay's ETA-drift detection (Method B). */
+export interface VesselDelay {
+  /** Predicted arrival is sliding later vs the recent trend. */
+  slipping?: boolean;
+  /** Stopped mid-crossing (not in port). */
+  stalled?: boolean;
+  /** How many minutes the predicted arrival moved later over the window. */
+  etaGrowthMin?: number;
+  windowMin?: number;
+  samples?: number;
+  /** Ranked candidate reasons for the delay (highest confidence first). */
+  reasons?: DelayReason[];
+}
+
+/** A live vessel position enriched with its coarse category. */
+export interface LiveVessel extends VesselPosition {
+  category: ShipCategory;
+  /** AIS navigational status code (0=under way, 1=at anchor, 5=moored, ...). */
+  navStatus?: number;
+  /** Authoritative operator id/name resolved by the relay (single source of truth). */
+  operatorId?: string;
+  operatorName?: string;
+  /** Delay status computed by the relay, if available. */
+  delay?: VesselDelay;
+}
+
+/** Viewport + filter for a vessel query. */
+export interface VesselQuery {
+  /** Bounding box as [swLat, swLon, neLat, neLon]. */
+  bbox?: [number, number, number, number];
+  /** Restrict to these coarse categories (e.g. ['passenger']). */
+  categories?: ShipCategory[];
+  /** Restrict to freight vessels (cargo + RoPax-by-operator) — relay-side filter. */
+  freight?: boolean;
+  /** Max vessels to return. */
+  limit?: number;
+}
+
+/** Freshness signals from the feed (relay), so the UI can show data age / warmup. */
+export interface FeedMeta {
+  /** When the relay built the response (epoch ms). */
+  generatedAt?: number;
+  /** Relay hasn't completed one full tile sweep since boot — count still filling in. */
+  warming?: boolean;
+  /** Ingest has stalled (no recent successful poll) — data is aging. */
+  stale?: boolean;
+  /** Seconds since the last successful upstream poll. */
+  ageSec?: number;
+}
+
+/** Source of live vessel positions for the logistics engine. */
+export interface VesselDataProvider {
+  readonly id: string;
+  /** Vessels currently inside the query viewport. */
+  getVesselsInBounds(query: VesselQuery): Promise<LiveVessel[]>;
+  /** Freshness meta from the most recent fetch, if the provider tracks it. */
+  readonly lastMeta?: FeedMeta;
+}

@@ -1,0 +1,291 @@
+import { test } from 'node:test';
+import { strict as assert } from 'node:assert';
+import { buildOpsReport, buildUnreachableReport, isReportDue, nextCleanSince, classifyDegradation } from './ops-report.mjs';
+
+// A healthy /health body, shaped exactly like the live relay's (captured 2026-07-14).
+const healthy = () => ({
+  status: 'ok',
+  connected: true,
+  trips: {
+    enabled: true, openTripsTracked: 619, openTripsInGrace: 153, tripsResumed: 3314,
+    oldestOpenTripAgeMin: 4000, tripPointsBuffered: 0, tripsOpened: 2246, tripsArrived: 1435,
+    tripsAbandoned: 789, tripPointRows: 81162, tripPointsDropped: 0, lastTripWriteOk: true,
+    lastTripError: null, degraded: false,
+  },
+  portHistory: {
+    enabled: true, dbEnabled: true, degraded: false, zones: 39, snapshotRows: 9126, eventRows: 10862,
+    lastWriteOk: true, lastError: null,
+    baselineMaturity: { buckets: 6552, trusted: 0, trustedFrac: 0, portsWithTrusted: 0, maxDays: 2, minDaysToTrust: 3 },
+  },
+});
+
+const TUE = Date.parse('2026-07-14T06:01:00Z');
+const SUN = Date.parse('2026-07-19T06:01:00Z');
+
+test('clean relay past the 7-day window reports the gate as satisfied', () => {
+  const r = buildOpsReport({ health: healthy(), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /✅ LAUNCH GATE SATISFIED — trips clean 12d/);
+  assert.match(r, /open decision #7/);
+  assert.match(r, /arrived 1435 · abandoned 789 \(65% arrive\)/);
+  assert.match(r, /0\/6552 trusted \(0%\) · 0\/39 ports · maxDays 2\/3 — trust is ~1 week out/);
+  assert.doesNotMatch(r, /⚠️/); // a clean relay produces no anomaly lines
+});
+
+test('degraded trips lead with the gate reset, not the numbers', () => {
+  const h = healthy();
+  h.trips.degraded = true;
+  h.trips.lastTripWriteOk = false;
+  h.trips.lastTripError = 'ECONNRESET';
+  const r = buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-14' });
+  assert.match(r.split('\n')[0], /🚨 GATE RESET/);
+  assert.match(r, /ECONNRESET/);
+});
+
+test('mid-window clean streak counts the day', () => {
+  const r = buildOpsReport({ health: healthy(), now: TUE, cleanSince: '2026-07-11' });
+  assert.match(r, /⏳ Launch gate: day 3 of 7 clean/);
+});
+
+test('anomalies surface: dropped points, oldest-open near the 120h cap, wide grace', () => {
+  const h = healthy();
+  h.trips.tripPointsDropped = 12;
+  h.trips.oldestOpenTripAgeMin = 7112;   // 98.8% of the 7200 cap that would flip degraded
+  h.trips.openTripsInGrace = 400;        // 400/619 = 65% of open trips
+  const r = buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /⚠️ tripPointsDropped=12/);
+  assert.match(r, /⚠️ oldestOpenTripAgeMin 7112 is within 5% of the 7200 cap/);
+  assert.match(r, /⚠️ 65% of open trips are in the anchor-loss grace window/);
+});
+
+test('first trusted baselines are called out; a mature fraction flags the backtest', () => {
+  const h = healthy();
+  h.portHistory.baselineMaturity = { buckets: 6552, trusted: 40, trustedFrac: 0.006, portsWithTrusted: 3, maxDays: 3, minDaysToTrust: 3 };
+  assert.match(buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' }), /🎉 first trusted buckets/);
+  h.portHistory.baselineMaturity = { buckets: 6552, trusted: 4000, trustedFrac: 0.61, portsWithTrusted: 30, maxDays: 5, minDaysToTrust: 3 };
+  assert.match(buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' }), /backtest is becoming feasible/);
+});
+
+test('a relay predating the baselineMaturity field is noted, not treated as an error', () => {
+  const h = healthy();
+  delete h.portHistory.baselineMaturity;
+  const r = buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /baselineMaturity missing from \/health .* not an error/);
+});
+
+test('the Sunday checklist only appears on Sundays, and gains the WoW line from 2026-07-26', () => {
+  assert.doesNotMatch(buildOpsReport({ health: healthy(), now: TUE, cleanSince: '2026-07-02' }), /Sunday checklist/);
+  const sun = buildOpsReport({ health: healthy(), now: SUN, cleanSince: '2026-07-02' });
+  assert.match(sun, /— Sunday checklist —/);
+  assert.match(sun, /npm run report:corridor/);
+  assert.doesNotMatch(sun, /Week-over-week deltas are now/); // Jul 19 < Jul 26
+  const later = buildOpsReport({ health: healthy(), now: Date.parse('2026-07-26T06:01:00Z'), cleanSince: '2026-07-02' });
+  assert.match(later, /Week-over-week deltas are now methodologically valid/);
+});
+
+test('an unreachable relay is louder than a degraded one', () => {
+  const r = buildUnreachableReport({ error: 'fetch failed', attempts: 2 });
+  assert.match(r.split('\n')[0], /🚨 RELAY UNREACHABLE/);
+  assert.match(r, /2 attempt\(s\)/);
+});
+
+test('degradation is attributed: a real fault vs the relay waiting on its own daily sweep', () => {
+  const t = (over) => ({ degraded: true, lastTripWriteOk: true, tripPointsBuffered: 0, oldestOpenTripAgeMin: 7300, ...over });
+  assert.equal(classifyDegradation({ degraded: false }), 'clean');
+  // Past the 7200 cap but inside one 24h sweep interval — the sweep just hasn't run. Benign.
+  assert.equal(classifyDegradation(t()), 'sweep-lag');
+  assert.equal(classifyDegradation(t({ oldestOpenTripAgeMin: 7200 + 1440 })), 'sweep-lag'); // boundary
+  // Beyond cap + a full sweep interval: the sweep ran and did NOT clear it. Real.
+  assert.equal(classifyDegradation(t({ oldestOpenTripAgeMin: 7200 + 1441 })), 'broken');
+  // Real faults, regardless of trip age.
+  assert.equal(classifyDegradation(t({ lastTripWriteOk: false })), 'broken');
+  assert.equal(classifyDegradation(t({ tripPointsBuffered: 4000 })), 'broken'); // buffer at high water
+  assert.equal(classifyDegradation({ degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 100 }), 'broken'); // unattributable
+});
+
+test('the relay\'s published thresholds win over our defaults (#108)', () => {
+  // A relay swept hourly gets an hour of slack, not a day — so 7300 min is the sweep FAILING, not lag.
+  const hourly = { degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 7300, maxOpenAgeMin: 7200, sweepIntervalMin: 60 };
+  assert.equal(classifyDegradation(hourly), 'broken');
+  assert.equal(classifyDegradation({ ...hourly, oldestOpenTripAgeMin: 7250 }), 'sweep-lag');
+  // A relay with a tuned-down cap is honored too, rather than measured against a hardcoded 7200.
+  assert.equal(classifyDegradation({ degraded: true, lastTripWriteOk: true, oldestOpenTripAgeMin: 3000, maxOpenAgeMin: 2880, sweepIntervalMin: 1440 }), 'sweep-lag');
+});
+
+test('the gate clock resets on a real fault or an unread day, but not on benign sweep lag', () => {
+  const at = { today: '2026-07-14', cleanSince: '2026-07-02' };
+  assert.equal(nextCleanSince({ state: 'broken', ...at }), '2026-07-14');
+  // A day we could not verify cannot count toward "7 consecutive VERIFIED clean days".
+  assert.equal(nextCleanSince({ state: 'unreachable', ...at }), '2026-07-14');
+  // Sweep lag is a threshold artifact, not a fault — the streak survives it.
+  assert.equal(nextCleanSince({ state: 'sweep-lag', ...at }), '2026-07-02');
+  assert.equal(nextCleanSince({ state: 'clean', ...at }), '2026-07-02');
+  assert.equal(nextCleanSince({ state: 'clean', today: '2026-07-14', cleanSince: null }), '2026-07-02'); // first run
+});
+
+test('a trip waiting on the daily sweep reports as benign, not as a gate reset', () => {
+  const h = healthy();
+  h.trips.degraded = true;
+  h.trips.oldestOpenTripAgeMin = 7300; // crossed the 120h cap, sweep hasn't run yet
+  const r = buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' });
+  assert.doesNotMatch(r, /GATE RESET/);
+  assert.match(r, /benign.*waiting for the daily sweep/s);
+  assert.match(r, /gate clock NOT reset \(day 12 of 7\)/);
+});
+
+test('due once per day, after the send hour, and never twice', () => {
+  const at = (t) => Date.parse(`2026-07-14T${t}Z`);
+  assert.equal(isReportDue({ now: at('05:59:00'), lastSent: '2026-07-13' }), false); // before the hour
+  assert.equal(isReportDue({ now: at('06:00:00'), lastSent: '2026-07-13' }), true);
+  assert.equal(isReportDue({ now: at('06:00:00'), lastSent: '2026-07-14' }), false); // already sent today
+  assert.equal(isReportDue({ now: at('09:30:00'), lastSent: '2026-07-13' }), true);  // late boot, inside catch-up
+  assert.equal(isReportDue({ now: at('23:00:00'), lastSent: '2026-07-13' }), false); // past catch-up — skip to tomorrow
+});
+
+// --- fallback-feed monitoring ---------------------------------------------------------------
+// These exist because the Marinesia fallback 403'd from 2026-07-22 and went unnoticed for TEN
+// DAYS. Nothing watched it: portHistory.degraded covers the durable store, not the feed. A dead
+// fallback is invisible exactly while the primary is healthy, so it surfaces on the one day you
+// needed it. The shapes below are taken from the real /health during the outage.
+
+const withMarinesia = (over = {}) => ({
+  ...healthy(),
+  uptimeSec: 7200,   // up 2h — well past any warming grace
+  marinesia: {
+    enabled: true, tiles: 25, lastPollAt: '2026-07-14T06:00:00Z', upserts: 12345, lastError: null,
+    tileAgesSec: Array(25).fill(30), warming: false, stale: false, ageSec: 30, ...over,
+  },
+});
+
+test('a healthy fallback is reported and raises nothing', () => {
+  const r = buildOpsReport({ health: withMarinesia(), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /Fallback · marinesia ok · 25\/25 tiles polled/);
+  assert.doesNotMatch(r, /⚠️/);
+});
+
+test('THE OUTAGE: enabled but never once polled is flagged as dead, not degraded', () => {
+  const r = buildOpsReport({
+    health: withMarinesia({ lastPollAt: null, upserts: 0, tileAgesSec: Array(25).fill(null), lastError: 'Marinesia non-JSON response (HTTP 403)' }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /⚠️ marinesia has NEVER polled successfully/);
+  assert.match(r, /HTTP 403/);
+  assert.match(r, /the fallback is dead, not degraded/);
+});
+
+test('one permanently-dark tile is flagged — it alone stops the fallback engaging', () => {
+  // The landlocked-tile bug: a tile that always 404s keeps tilesSeen below tileCount, which keeps
+  // `warming` true forever, which means no port is ever granted fallback coverage.
+  const ages = Array(25).fill(30); ages[4] = null;
+  const r = buildOpsReport({ health: withMarinesia({ tileAgesSec: ages }), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /⚠️ marinesia 24\/25 tiles have ever polled/);
+});
+
+test('a transient lastError still surfaces once the sweep is otherwise complete', () => {
+  const r = buildOpsReport({ health: withMarinesia({ lastError: 'Marinesia error (HTTP 429): Too Many Requests' }), now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /⚠️ marinesia lastError: .*429/);
+});
+
+test('a deliberately disabled fallback is stated but NOT nagged about daily', () => {
+  const r = buildOpsReport({ health: { ...healthy(), marinesia: { enabled: false } }, now: TUE, cleanSince: '2026-07-02' });
+  assert.match(r, /Fallback · marinesia disabled/);
+  assert.doesNotMatch(r, /⚠️/); // a config choice, not an anomaly
+});
+
+test('a relay predating the field says nothing at all about the fallback', () => {
+  const r = buildOpsReport({ health: healthy(), now: TUE, cleanSince: '2026-07-02' });
+  assert.doesNotMatch(r, /Fallback ·/);
+  assert.doesNotMatch(r, /⚠️/);
+});
+
+test('THE SECOND OUTAGE SHAPE: polled once, then stalled — every tile age non-null', () => {
+  // The failure the first version could not see. After a successful sweep the tile ages stay
+  // non-null and lastPollAt stays truthy, and a later success on any tile can clear lastError — so
+  // counting non-null entries reports "25/25 polled" and raises nothing while the feed is dead.
+  // The relay computes `stale` from its own sweep length, so trust that.
+  const r = buildOpsReport({
+    health: withMarinesia({ stale: true, ageSec: 3600, tileAgesSec: Array(25).fill(3600), lastError: null }),
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /⚠️ marinesia STALE/);
+  assert.match(r, /3600s ago/);
+  assert.match(r, /has stopped feeding/);
+});
+
+test('a relay still warming after restart is NOT called dead', () => {
+  // A 52-tile sweep takes ~11 minutes at 13s/tile. If the daily report lands in that window nothing
+  // has polled yet on a perfectly healthy feed — the first version would have cried wolf daily.
+  // uptimeSec is what says "this is a fresh boot" rather than "this has been broken for hours".
+  const r = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, lastPollAt: null, upserts: 0, tileAgesSec: Array(25).fill(null) }), uptimeSec: 90 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /Fallback · marinesia warming/);
+  assert.doesNotMatch(r, /⚠️/);
+});
+
+test('a FRESH warming boot suppresses the partial-tile alarm but never staleness', () => {
+  const ages = Array(25).fill(30); ages[4] = null;
+  const warmingPartial = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, tileAgesSec: ages }), uptimeSec: 90 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.doesNotMatch(warmingPartial, /⚠️/);
+  // Staleness is meaningful from the first moment — it never waits for the grace to expire.
+  const warmingStale = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, stale: true, ageSec: 900 }), uptimeSec: 90 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(warmingStale, /⚠️ marinesia STALE/);
+});
+
+test('a tile that never polls is reported EVEN THOUGH warming stays true forever', () => {
+  // The trap in the first version. relayFreshness keeps `warming` true until every distinct tile
+  // has been seen, so one permanently-dark tile pins it true — and suppressing on `warming` alone
+  // made this alarm unreachable in exactly the case it was written for (the landlocked tile).
+  // Bound the grace by elapsed time: the oldest tile age shows the sweep has had its turn.
+  // Elapsed time comes from the relay's UPTIME, not from tile ages: every tileAgesSec entry is the
+  // age of that tile's most recent success, so with the poller cycling every ~13s the maximum just
+  // oscillates around one sweep and never grows. Using it as an elapsed-time proxy left this alarm
+  // permanently suppressed — the whole bug this test pins.
+  const ages = Array(25).fill(300); ages[4] = null;   // healthy tiles cycling; one never polled
+  const r = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, stale: false, tileAgesSec: ages }), uptimeSec: 7200 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(r, /⚠️ marinesia 24\/25 tiles have ever polled/);
+});
+
+test('the same partial sweep is silent while it is genuinely still warming', () => {
+  const ages = Array(25).fill(40); ages[4] = null;     // sweep mid-flight
+  const r = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, stale: false, tileAgesSec: ages }), uptimeSec: 120 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.doesNotMatch(r, /⚠️/);
+});
+
+test('tile ages alone can never expire the grace — the trap this replaced', () => {
+  // Pins the specific failure: tileAgesSec measures time since each tile's LAST success, so with a
+  // 25-tile sweep the maximum sits around 325s forever. Any threshold derived from it stays
+  // unreached, so a dark tile would be suppressed indefinitely. Uptime is what breaks the tie.
+  const cycling = Array(25).fill(325); cycling[4] = null;
+  const dark = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, tileAgesSec: cycling }), uptimeSec: 86_400 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.match(dark, /⚠️ marinesia 24\/25 tiles/, 'a day of uptime must expire the grace');
+
+  const young = buildOpsReport({
+    health: { ...withMarinesia({ warming: true, tileAgesSec: cycling }), uptimeSec: 60 },
+    now: TUE, cleanSince: '2026-07-02',
+  });
+  assert.doesNotMatch(young, /⚠️/, 'the identical tile ages must stay silent one minute after boot');
+});
+
+test('a relay with no uptimeSec falls back to trusting warming', () => {
+  // Older relays predate the field. Under-report rather than cry wolf on every restart.
+  const ages = Array(25).fill(300); ages[4] = null;
+  const h = withMarinesia({ warming: true, tileAgesSec: ages });
+  delete h.uptimeSec;
+  assert.doesNotMatch(buildOpsReport({ health: h, now: TUE, cleanSince: '2026-07-02' }), /⚠️/);
+});
