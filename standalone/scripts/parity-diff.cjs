@@ -40,7 +40,6 @@ const ACCEPTED = [
   [/^\/health body\.(delays|disruptions|tracked)$/, 'added: freight state the fork surfaced only on /metrics or not at all'],
   [/^\/health body\.auth\./, 'reshaped: auth reports {authHeader, required}; the fork also reported Vercel-preview origin handling it no longer needs'],
   [/^\/health body\.(db|upstreamPaused)$/, 'added/removed: explicit db flag; no upstream pause (no drain queue)'],
-  [/^\/health body\.trips\.notPorted$/, 'added: marks trips as NOT IMPLEMENTED here, distinct from disabled-by-config'],
   [/^\/metrics body\.portHistory$/, 'added: snapshot/event counters the fork only exposed on /health'],
   [/^\/ais\/port-history body\.db$/, 'added: explicit db flag so callers can tell fallback from durable'],
   [/^\/ais\/port-history body\.snapshots\[\d+\]\.ports\[\d+\]\.congestionRel/, 'added: snapshots carry congestionRel too (one status path, not two)'],

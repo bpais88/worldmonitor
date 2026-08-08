@@ -52,11 +52,14 @@ observable behaviour captured into `relay-http.test.cjs` (16 tests).
       shape and headers; only production proves behaviour under live AIS + Postgres.
 - [ ] (S) Background-job soak with real keys: aisstream reconnect, Marinesia sweep vs the
       2000/tile cap, baseline refresh.
-- [ ] **NOT PORTED — trips lifecycle (Phase B).** decideTrip / planGeofenceActions / trip_points
-      writing does not run in this entry. /health reports `trips.notPorted: true` rather than
-      pretending. Affects /ais/trip data, get_voyage_stats and dwell/origin backfill. It was
-      TRIPS_ENABLED-gated and off by default, so nothing regresses today — but it is a feature
-      gap, not a parity detail, and it is the next real chunk of work.
+- [x] (T) **Trips lifecycle (Phase B) — PORTED.** decideTrip (open/re-route/stall/eta-patch/point
+      capture), anchor-loss reconciliation with the grace window, geofence CLOSE side (arrival
+      finish, exit origin/dwell backfill), boot resume from Postgres, batched point flush with a
+      drop-oldest cap, daily abandon/prune maintenance, and the cold-boot phantom-enter guard.
+      `relay-trips.test.cjs` (10 tests) drives the WIRING through the real relay with a stubbed
+      db — the pure decisions were already covered; what the extraction could break was how this
+      entry calls them. /health.trips now reports the live pipeline (18 keys, matching the
+      predecessor) instead of a placeholder.
 
 ## 3. Marco (moved wholesale)
 

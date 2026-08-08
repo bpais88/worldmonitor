@@ -18,6 +18,8 @@ repository.
 | Frontend (logistics + Freight components) | moved as-is; builds, typechecks clean |
 | Panel / sanitize / i18n / vite config / api plumbing | clean-room rewrites (headers explain each) |
 | Relay HTTP entry | clean-room, characterization-tested — 16 tests incl. fail-closed auth |
+| Trips lifecycle (Phase B) | ported and wired — 10 wiring tests |
+| Parity vs the fork's relay | 15/15 identical (`npm run parity`) |
 | e2e | 4 Playwright smoke tests against the real relay + a production build |
 | CI | `.github/workflows/ci.yml` (test, typecheck+build, e2e) |
 

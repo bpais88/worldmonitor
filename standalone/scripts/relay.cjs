@@ -39,12 +39,18 @@ const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmAll, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { assemblePortContext } = require('./port-context.cjs');
-const { summarizeTrips, tripsDegraded } = require('./trip-lifecycle.cjs');
+const { decideTrip, planGeofenceActions, originFromRecentExit, summarizeTrips, tripsDegraded } = require('./trip-lifecycle.cjs');
 
 const { ports: ALL_PORTS } = require('../src/config/maritime-ports.data.json');
 
 // ---------------------------------------------------------------- config ----
-const num = (name, def, min) => Math.max(min ?? -Infinity, Number(process.env[name]) || def);
+// Explicit 0 must survive: `Number(v) || def` silently swallows it, so setting e.g.
+// TRIP_ANCHOR_GRACE_MIN=0 to disable a grace window would quietly keep the 90-minute default.
+const num = (name, def, min) => {
+  const raw = process.env[name];
+  const parsed = raw === undefined || raw === '' ? NaN : Number(raw);
+  return Math.max(min ?? -Infinity, Number.isFinite(parsed) ? parsed : def);
+};
 
 const CONFIG = {
   port: num('PORT', 3004, 1),
@@ -65,7 +71,27 @@ const CONFIG = {
   enrichTtlMs: num('ENRICH_TTL_MS', 30 * 60_000, 60_000),
   upstashUrl: process.env.UPSTASH_REDIS_REST_URL || '',
   upstashToken: process.env.UPSTASH_REDIS_REST_TOKEN || '',
+  // Phase B trips. OFF unless armed AND a durable store exists — a trip trail with nowhere to land
+  // is just memory that lies to /health.
+  tripsEnabled: process.env.TRIPS_ENABLED === '1',
+  tripPointGapMs: num('TRIP_POINT_GAP_MS', 5 * 60_000, 60_000),      // downsample: <=1 point/5min/trip
+  tripPointsFlushMs: num('TRIP_POINTS_FLUSH_MS', 60_000, 15_000),
+  tripPointsBufferMax: num('TRIP_POINTS_BUFFER_MAX', 5000, 100),      // drop-oldest hard cap
+  tripDestStableTicks: num('TRIP_DEST_STABLE_TICKS', 2, 1),           // re-route flicker guard
+  tripMaxOpenAgeH: num('TRIP_MAX_OPEN_AGE_H', 120, 1),
+  tripPointsRetentionDays: num('TRIP_POINTS_RETENTION_DAYS', 90, 1),
+  tripSweepMs: num('TRIP_SWEEP_MS', 24 * 60 * 60_000, 60 * 60_000),
+  tripFinalizeMs: num('TRIP_FINALIZE_MS', 5 * 60_000, 60_000),
+  tripBootGraceTicks: num('TRIP_BOOT_GRACE_TICKS', 3, 1),
+  tripAnchorGraceMin: num('TRIP_ANCHOR_GRACE_MIN', 90, 0),
+  tripRecentExitTtlMs: num('TRIP_RECENT_EXIT_TTL_MS', 6 * 60 * 60_000, 30 * 60_000),
 };
+const TRIP_OPTS = {
+  minPointGapMs: CONFIG.tripPointGapMs,
+  destStableTicks: CONFIG.tripDestStableTicks,
+  anchorGraceMs: CONFIG.tripAnchorGraceMin * 60_000,
+};
+const TRIP_POINTS_HIGH_WATER = Math.floor(CONFIG.tripPointsBufferMax * 0.8);
 // A tile is fresh for one full sweep + backoff margin (never below the shared default).
 const MARINESIA_STALE_MS = Math.max(DEFAULT_STALE_MS, MARINESIA_TILES.length * CONFIG.marinesiaPollMs + 90_000);
 
@@ -97,6 +123,21 @@ function makeState() {
     meteoalarmWarnings: [],
     portContext: new Map(),  // portId -> {context, ts}
     disruptions: { events: [], refreshedAt: null },
+    // Phase B trips. `ready` gates every mutation until loadOpenTrips has seeded from Postgres —
+    // acting before that would re-open trips the DB already has.
+    trips: {
+      byMmsi: new Map(),          // mmsi -> tripState (see trip-lifecycle.cjs); the DB is authoritative
+      pendingPoints: [],          // buffered trip_points, flushed in batches off the hot path
+      recentExitByMmsi: new Map(),// mmsi -> {portId, ts}: origin for a trip opened just AFTER departure
+      ready: false,
+      flushing: false,
+      tickCount: 0,               // delay ticks since boot — drives the boot-grace window
+      resumed: 0,                 // anchor recovered within grace -> fragmentation prevented
+      // Cold-boot phantom-enter guard: on the FIRST geofence tick every vessel already inside a
+      // zone diffs as a fresh 'enter', which would close trips that never arrived. Skip that tick's
+      // enters only; exits are genuine (membership starts empty, so nothing can falsely exit).
+      skipFirstEnters: true,
+    },
     timers: [],
   };
 }
@@ -274,7 +315,41 @@ function delayTick(state, now = Date.now()) {
       info.voyageAgeMin = Math.round((now - voyage.startTs) / 60_000);
     }
     state.etaInfoByMmsi.set(v.mmsi, info);
+
+    // Phase B ANCHOR side: decideTrip is the pure decision, applyTripActions only performs it.
+    if (tripsOn() && state.trips.ready && voyage) {
+      const fresh = !Number.isFinite(v.timestamp) || now - v.timestamp <= PORT_DEFAULTS.freshMs;
+      const { actions, nextState } = decideTrip(state.trips.byMmsi.get(v.mmsi), voyage, {
+        now, fresh,
+        speedStalled: !!(drift && drift.stalled),
+        etaSlipMin: drift && Number.isFinite(drift.etaGrowthMin) ? drift.etaGrowthMin : null,
+        opts: TRIP_OPTS,
+      });
+      if (actions.length) applyTripActions(state, v.mmsi, actions, { v, eta, drift, now });
+      if (nextState === null) state.trips.byMmsi.delete(v.mmsi);
+      else state.trips.byMmsi.set(v.mmsi, nextState);
+    }
   }
+
+  // Phase B anchor-LOSS reconciliation, in one place rather than scattered across the delete sites
+  // above. Routed through decideTrip(prev, null) so the grace window applies: the trip stays open
+  // (and geofence-closable) until the loss has held, and a same-dest re-anchor resumes it instead
+  // of churning abandon -> re-open. Skipped during boot grace, when the fleet is still refilling
+  // and a seeded trip's vessel may simply not have reported yet.
+  state.trips.tickCount++;
+  if (tripsOn() && state.trips.ready && state.trips.tickCount > CONFIG.tripBootGraceTicks) {
+    for (const [mmsi, t] of state.trips.byMmsi) {
+      if (state.voyageByMmsi.has(mmsi)) continue;
+      const { actions, nextState } = decideTrip(t, null, { now, opts: TRIP_OPTS });
+      if (actions.length) applyTripActions(state, mmsi, actions, { now });
+      if (nextState === null) state.trips.byMmsi.delete(mmsi);
+      else state.trips.byMmsi.set(mmsi, nextState);
+    }
+  }
+  for (const [mmsi, ex] of state.trips.recentExitByMmsi) {
+    if (now - ex.ts > CONFIG.tripRecentExitTtlMs) state.trips.recentExitByMmsi.delete(mmsi);
+  }
+
   if (newTrips) void registerTrips(newTrips, now);
   state.store.prune(now);
 }
@@ -314,6 +389,19 @@ function geofenceTick(state, now = Date.now()) {
   for (const gf of covered) next.set(gf.id, nextCovered.get(gf.id) || new Set());
   const events = diffMembership(state.portHistory.membership, next, now, state.portHistory.enterTimes, covered);
   state.portHistory.membership = next;
+  if (events.length && tripsOn() && state.trips.ready) {
+    // Phase B CLOSE side: a destination ENTER closes the trip; EXITs feed origin/dwell backfills.
+    const skipEnters = state.trips.skipFirstEnters;
+    state.trips.skipFirstEnters = false;
+    const { arrivals, exits, arrivedMmsi } = planGeofenceActions(events, state.trips.byMmsi, { skipEnters });
+    for (const m of arrivedMmsi) { const t = state.trips.byMmsi.get(m); if (t) t.status = 'arrived'; }
+    if (arrivals.length) void db.finishTrip(arrivals); // distance/avg_speed filled by the finalize sweep
+    if (exits.length) {
+      for (const e of exits) state.trips.recentExitByMmsi.set(e.mmsi, { portId: e.portId, ts: e.ts });
+      void db.backfillTripOrigin(exits);
+      void db.backfillDestDwell(exits);
+    }
+  }
   if (events.length) {
     if (db.enabled) void db.writeEvents(events, { source: aisFresh ? 'aisstream' : 'marinesia' });
     else {
@@ -415,31 +503,149 @@ async function enrichTick(state, explainers, now = Date.now()) {
   }
 }
 
+// Drop-oldest cap so a persistent DB outage can't grow the point buffer without bound.
+function capTripPoints(state) {
+  while (state.trips.pendingPoints.length > CONFIG.tripPointsBufferMax) {
+    state.trips.pendingPoints.shift();
+    db.stats.tripPointsDropped = (db.stats.tripPointsDropped || 0) + 1;
+  }
+}
+
 /**
- * The /health trips block. NOT YET PORTED: the Phase B trip write path (decideTrip /
- * planGeofenceActions / trip_points) does not run in this entry, so these are the honest
- * disabled-state values — the same shape the predecessor emits with TRIPS_ENABLED unset.
- * ops-report.mjs renders this block directly; omitting it prints "undefined" in Slack.
- * See PARITY_MANIFEST.md for the port-the-trips-lifecycle item.
+ * Dispatch the pure decideTrip() actions to Postgres (fire-and-forget) + buffer trip_points.
+ * decideTrip owns every decision; this only performs them.
+ */
+function applyTripActions(state, mmsi, actions, ctx) {
+  const { v, eta, drift, now } = ctx;
+  for (const a of actions) {
+    switch (a.type) {
+      case 'abandon':
+        void db.abandonTrips([a.tripId], a.reason);
+        break;
+      case 'resume': // anchor recovered inside the grace window — same trip continues, no DB write
+        state.trips.resumed++;
+        break;
+      case 'open': {
+        // exit-before-open: a vessel that recently LEFT another port gets that as its origin here,
+        // because backfillTripOrigin only catches the exit that fires after the trip is open.
+        const origin = originFromRecentExit(state.trips.recentExitByMmsi.get(mmsi), a.destPortId, a.openedAt);
+        void db.openTrip({
+          mmsi, destPortId: a.destPortId, openedAt: a.openedAt, departureEta: a.departureEta,
+          originPortId: origin ? origin.portId : null, departedAt: origin ? origin.ts : null,
+        }).then((id) => {
+          // Bind the id only if this entry is still THAT open trip — a re-route may have replaced
+          // it while the insert was in flight.
+          const e = state.trips.byMmsi.get(mmsi);
+          if (e && e.tripId == null && e.destPortId === a.destPortId && id != null) e.tripId = id;
+        });
+        break;
+      }
+      case 'markStalled': void db.markStalled(a.tripId); break;
+      case 'patchEta': void db.patchTripEta(a.tripId, a.etaTs); break;
+      case 'bumpSlip': void db.bumpTripEtaSlip(a.tripId, a.slipMin); break;
+      case 'capturePoint':
+        state.trips.pendingPoints.push({
+          tripId: a.tripId, ts: now, lat: v.lat, lon: v.lon,
+          speedKn: Number.isFinite(v.speed) ? v.speed : null,
+          course: Number.isFinite(v.course) ? v.course : null,
+          eta: eta ? eta.etaTs : null,
+          etaSlipMin: drift && Number.isFinite(drift.etaGrowthMin) ? Math.round(drift.etaGrowthMin) : null,
+        });
+        capTripPoints(state);
+        break;
+      default: break;
+    }
+  }
+}
+
+/** Flush buffered points in one batch; re-queue (bounded) on failure so a blip doesn't lose the trail. */
+async function flushTripPoints(state) {
+  if (!tripsOn() || state.trips.flushing || !state.trips.pendingPoints.length) return;
+  state.trips.flushing = true;
+  const batch = state.trips.pendingPoints.splice(0, state.trips.pendingPoints.length);
+  try {
+    const n = await db.appendTripPoints(batch);
+    if (n === 0 && batch.length && db.enabled) {
+      state.trips.pendingPoints.unshift(...batch);
+      capTripPoints(state);
+    }
+  } catch (e) {
+    console.warn('[relay] trip_points flush failed:', e.message);
+  } finally {
+    state.trips.flushing = false;
+  }
+}
+
+/**
+ * Daily sweep: abandon open trips past the cap (never arrived / went dark), prune old ABANDONED
+ * trips' points. Arrived trips keep their points forever — they are the voyage-replay artifact.
+ */
+async function tripMaintenance(state) {
+  if (!tripsOn()) return;
+  const [abandonedIds, pruned] = await Promise.all([
+    db.abandonStaleTrips(CONFIG.tripMaxOpenAgeH),
+    db.pruneTripPoints(CONFIG.tripPointsRetentionDays),
+  ]);
+  // Reconcile in memory by ID, not by a recomputed age cutoff: a vessel whose anchor is still live
+  // keeps its entry 'open', so without this we would keep capturing points against an abandoned
+  // trip and never open a replacement. Matching ids avoids racing the SQL now().
+  let reconciled = 0;
+  if (abandonedIds.length) {
+    const ab = new Set(abandonedIds);
+    for (const t of state.trips.byMmsi.values()) {
+      if (t.status === 'open' && t.tripId != null && ab.has(t.tripId)) { t.status = 'abandoned'; reconciled++; }
+    }
+  }
+  if (abandonedIds.length || pruned || reconciled) {
+    console.log(`[relay] trips maintenance: abandoned ${abandonedIds.length} (${reconciled} in-memory), pruned ${pruned} points`);
+  }
+}
+
+/** Seed tripByMmsi from Postgres before any lifecycle mutation is allowed. */
+async function resumeTrips(state) {
+  if (!tripsOn()) { state.trips.ready = true; return; }
+  try {
+    const { trips, capped } = await db.loadOpenTrips();
+    for (const [mmsi, t] of trips) {
+      state.trips.byMmsi.set(mmsi, {
+        tripId: t.tripId, destPortId: t.destPortId, openedAt: t.openedAt, status: t.status,
+        lastPointTs: 0, stalledMarked: !!t.stalled, etaPatched: t.departureEta != null,
+        pendingDest: null, pendingTicks: 0, anchorLostSince: null,
+      });
+    }
+    if (capped) console.warn('[relay] trips: loadOpenTrips hit the cap — possible open-trip leak');
+    console.log(`[relay] trips: seeded ${trips.size} open/arrived from Postgres`);
+  } catch (e) {
+    console.warn('[relay] trips: loadOpenTrips failed:', e.message);
+  }
+  state.trips.ready = true;
+}
+
+const tripsOn = () => CONFIG.tripsEnabled && db.enabled;
+
+/**
+ * The /health trips block (sync, no I/O): db.cjs writer counters + the relay's in-memory gauges.
+ * oldestOpenTripAgeMin is the direct open-trip-leak indicator; tripPointsBuffered is the direct
+ * write-backpressure one. ops-report.mjs renders this block verbatim.
  */
 function buildTripsHealth(state, now = Date.now()) {
-  const g = summarizeTrips(new Map(), now); // no trips tracked in this entry yet
-  const maxOpenAgeMin = num('TRIP_MAX_OPEN_AGE_H', 120, 1) * 60;
-  const sweepIntervalMin = Math.round(num('TRIP_SWEEP_MS', 24 * 60 * 60_000, 60 * 60_000) / 60_000);
+  const g = summarizeTrips(state.trips.byMmsi, now);
+  const maxOpenAgeMin = CONFIG.tripMaxOpenAgeH * 60;
+  const sweepIntervalMin = Math.round(CONFIG.tripSweepMs / 60_000);
+  const buffered = state.trips.pendingPoints.length;
   return {
-    enabled: false,
-    notPorted: true, // explicit: not "off by config", but "not implemented in this entry"
+    enabled: tripsOn(),
     openTripsTracked: g.openCount,
-    openTripsInGrace: g.graceCount,
-    tripsResumed: 0,
+    openTripsInGrace: g.graceCount, // riding the anchor-loss grace window right now
+    tripsResumed: state.trips.resumed,
     oldestOpenTripAgeMin: g.oldestOpenAgeMin,
-    tripPointsBuffered: 0,
-    recentExitsTracked: 0,
-    tripsOpened: 0,
-    tripsArrived: 0,
-    tripsAbandoned: 0,
+    tripPointsBuffered: buffered,
+    recentExitsTracked: state.trips.recentExitByMmsi.size,
+    tripsOpened: db.stats.tripsOpened ?? 0,
+    tripsArrived: db.stats.tripsArrived ?? 0,
+    tripsAbandoned: db.stats.tripsAbandoned ?? 0,
     tripPointRows: db.stats.tripPointRows ?? 0,
-    tripPointsDropped: 0,
+    tripPointsDropped: db.stats.tripPointsDropped ?? 0,
     lastTripWriteAt: db.stats.lastTripWriteAt ?? null,
     lastTripWriteOk: db.stats.lastTripWriteOk ?? null,
     lastTripError: db.stats.lastTripError ?? null,
@@ -447,7 +653,7 @@ function buildTripsHealth(state, now = Date.now()) {
     sweepIntervalMin,
     degraded: tripsDegraded({
       lastTripWriteOk: db.stats.lastTripWriteOk ?? null,
-      pointsBuffered: 0, pointsHighWater: Infinity,
+      pointsBuffered: buffered, pointsHighWater: TRIP_POINTS_HIGH_WATER,
       oldestOpenAgeMin: g.oldestOpenAgeMin, maxOpenAgeMin, sweepIntervalMin,
     }),
   };
@@ -706,10 +912,23 @@ function createRelay({ startIngest = true, startJobs = true } = {}) {
       bootAnd(async () => { await db.refreshBaselines(); state.baselines = await db.loadBaselines(); }, 24 * 3600 * 1000);
       void db.syncPorts(ALL_PORTS);
     }
+    // Trips must be seeded from Postgres before any lifecycle mutation; `ready` gates the ticks.
+    void resumeTrips(state);
+    if (CONFIG.tripsEnabled) {
+      every(() => void flushTripPoints(state), CONFIG.tripPointsFlushMs);
+      every(() => void db.finalizeArrivedGeo(), CONFIG.tripFinalizeMs); // distance/avg speed post-arrival
+      bootAnd(() => void tripMaintenance(state), CONFIG.tripSweepMs);
+      if (!db.enabled) console.warn('[relay] TRIPS_ENABLED=1 but no DATABASE_URL — trips stay off');
+    }
   }
 
   const stop = () => { for (const t of state.timers) clearInterval(t); server.close(); };
-  return { server, handler, state, stop };
+  // Tick functions ride along so a test can step the pipeline deterministically instead of
+  // waiting on intervals.
+  return {
+    server, handler, state, stop,
+    delayTick, geofenceTick, flushTripPoints, capTripPoints, tripMaintenance, buildTripsHealth,
+  };
 }
 
 /**
@@ -736,4 +955,10 @@ function main() {
 
 if (require.main === module) main();
 
-module.exports = { createRelay, CONFIG, portFeed, portLocalDowHour, assertAuthConfigured };
+// Ticks and trip internals are exported so the wiring can be driven directly in tests — the pure
+// modules are already covered; what needs exercising is how this file calls them.
+module.exports = {
+  createRelay, CONFIG, portFeed, portLocalDowHour, assertAuthConfigured,
+  delayTick, geofenceTick, flushTripPoints, capTripPoints, tripMaintenance, resumeTrips,
+  buildTripsHealth, buildPortHistoryHealth,
+};
