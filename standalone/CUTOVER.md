@@ -4,25 +4,27 @@ Taking `standalone/` from a staging directory inside the worldmonitor fork to a 
 product. Written to be executed in order; each step says how you know it worked, and what to do if
 it didn't. Nothing here is irreversible until step 7.
 
-Assumes: `PARITY_MANIFEST.md` rows marked (T) are green (`npm test`), and you accept that git
-history is not being preserved (decided 2026-08-08).
+Assumes: `PARITY_MANIFEST.md` rows marked (T) are green (`npm test`), and two decisions already
+taken (2026-08-08): git history is not preserved, and **nothing existing is rebuilt** — the same
+Postgres, the same Upstash, and the same Railway services carry over. This runbook is written for
+that path: it re-points infrastructure rather than provisioning it.
 
 ---
 
 ## 0. Before you start
 
-Have ready:
-- The AIS keys (`AISSTREAM_API_KEY`, `MARINESIA_API_KEY`) — the ones the fork's relay uses today.
-- The Postgres connection string (`DATABASE_URL`).
-- A new Upstash Redis database (see step 4 for why not the existing one).
-- Anthropic + whichever channel credentials Marco actually uses in production.
+**Nothing is provisioned. Nothing is migrated. No data moves.** The existing Railway services keep
+their environment variables, their domains and their database connection; only the repository they
+deploy from changes. Postgres and Upstash are untouched throughout.
 
-Decide two things now, because they change later steps:
-- **Postgres: share or copy?** Pointing the new relay at the *same* Neon database is zero-migration
-  and keeps all trip/baseline history. Running both relays against it simultaneously is safe for
-  reads but means both write snapshots — acceptable briefly, but keep the overlap short.
-- **Domain.** The web app's CSP `connect-src` in `index.html` currently allows `localhost:3004`
-  only, plus the Vercel proxy path. Production needs the real relay origin added.
+Have ready:
+- Access to the existing Railway project (to change each service's source repo).
+- The one still-undecided value: the production relay origin, for the web app's CSP.
+
+Still open, and it changes step 6:
+- **Domain.** `index.html`'s CSP `connect-src` allows `localhost:3004` and the Vercel proxy path
+  only. Production needs the real relay origin added or the browser silently blocks every call —
+  and it presents as a data problem, not a config one.
 
 ---
 
@@ -42,33 +44,43 @@ in staging.
 
 ---
 
-## 2. Database
+## 2. Database — nothing to do
 
-Run the migrations in order against the target Postgres:
+You are keeping the existing Postgres. The schema is already there, the history stays, no
+migrations run. Skip to step 3.
 
-```bash
-for f in scripts/migrations/0*.sql; do psql "$DATABASE_URL" -f "$f"; done
-```
-
-**Check:** `psql "$DATABASE_URL" -c '\dt'` lists `ports`, `port_snapshots`, `port_events`,
-`port_baselines`, `trips`, `trip_points`, `disruption_log`.
-
-**If you are sharing the existing database, skip this** — the tables are already there and the
-migrations are idempotent but there is no reason to run them.
-
-> **Do this too:** purge `port_snapshots` for the twelve ports whose radius changed
-> (rotterdam, amsterdam, liverpool, southampton, savona, vado_ligure, venezia, porto_marghera,
-> london_gateway, tilbury, immingham, hull). Their baselines otherwise blend old and new geometry
-> for up to 8 weeks. `scripts/purge-radius-history.cjs` does exactly this.
+> **One optional cleanup, unrelated to this migration.** The per-port radii shipped to production
+> on 2026-08-01, so the rolling 8-week baseline window still holds ~7 weeks of snapshots taken with
+> the OLD geometry for twelve ports (rotterdam, amsterdam, liverpool, southampton, savona,
+> vado_ligure, venezia, porto_marghera, london_gateway, tilbury, immingham, hull). Until those age
+> out, `congestionRel` reads low for the shrunk ports and high for the widened ones.
+> `scripts/purge-radius-history.cjs` deletes exactly those rows; the baseline then rebuilds clean
+> in `BASELINE_MIN_DAYS` (3). Doing nothing is also valid — it self-corrects by ~2026-09-26.
 
 ---
 
-## 3. Relay service
+## 3. Relay — a temporary second service, NOT a re-point yet
 
-Deploy `scripts/relay.cjs` (Railway, or anything that runs Node 22).
+Do **not** re-point the existing relay service yet. Step 5 compares old against new, and you cannot
+compare against something you have replaced.
 
-Environment: copy `.env.example` and fill it. `RELAY_SHARED_SECRET` is **required** — the relay
-refuses to boot without it, deliberately, so a missing variable can never publish the fleet.
+Create a second Railway service in the same project, from `bpais88/seaosea`. Copy the existing
+relay service's environment variables verbatim, then add:
+
+```
+RELAY_READ_ONLY=1
+```
+
+**This flag is why the parity run is safe.** Two relays against one database would double-write
+port snapshots, duplicate geofence enter/exit events, and race the unique-open-trip constraint —
+damaging the very history you are keeping. In read-only mode the new relay reads Postgres normally,
+serves every endpoint, and performs no write of any kind: no snapshots, no events, no trips, no
+baseline recompute, no voyage counters. `/health` reports `readOnly: true`, and the boot line says
+`db=READ-ONLY`, so a relay can never be in this mode without it being obvious.
+
+The service's start command comes from the repo's `railway.json` (`node scripts/relay.cjs`), so it
+switches automatically. `RELAY_SHARED_SECRET` is required — the relay refuses to boot without it,
+deliberately, so a missing variable can never publish the fleet.
 
 **Check, in this order:**
 1. `curl https://<relay>/health` → 200, `status: "ok"`.
@@ -89,23 +101,22 @@ subdivide that region in `scripts/marinesia.cjs` (raise its grid) and redeploy.
 
 ---
 
-## 4. Upstash
+## 4. Upstash — nothing to do
 
-Create a **new** database rather than sharing. The fork's instance mixes this product's keys
-(`relay:voyages:*`) with worldmonitor's (`relay:oref:*`, `market:*`); a clean instance means the
-split is real rather than a naming convention.
+Keeping the existing instance. Voyage counters carry over, so `/ais/voyages/daily` keeps its
+history.
 
-Cost of a fresh instance: per-day voyage counters restart, so `/ais/voyages/daily` shows zeros for
-prior days. Nothing else carries over in Redis.
-
-**Check:** `curl -H "x-relay-key: $SECRET" https://<relay>/ais/voyages/daily?days=3` → 200 with
-three dated rows.
+The trade-off you are accepting: that instance still holds worldmonitor's keys (`relay:oref:*`,
+`market:*`) alongside this product's (`relay:voyages:*`). The split is real in code but not in the
+key space. Nothing breaks — the namespaces never collide — but if you later want a clean separation,
+point the relay at a fresh instance and accept that per-day voyage counts restart. Nothing else in
+Redis is durable.
 
 ---
 
 ## 5. Parity — the gate
 
-With the new relay live and the fork's relay still running:
+Both relays are now live: the existing one writing as usual, the new one read-only beside it.
 
 ```bash
 npm run parity -- --old https://<fork-relay> --new https://<new-relay> \
@@ -119,19 +130,29 @@ This is the step that matters most. The local run (fork relay vs this one, both 
 shape and headers. Only this run proves behaviour with live AIS and real Postgres — the two things
 the sandbox could never exercise.
 
+Two caveats specific to running it read-only, so a difference here is not misread as a bug:
+- `/health` will differ on `readOnly` and on write-counter fields (`lastWriteAt`, `snapshotRows`
+  climbing on the old relay only). Expected.
+- Trips are off in read-only mode, so `/health.trips.enabled` is false on the new side. Compare
+  trips behaviour after the cutover instead, once the new relay is the one writing.
+
 ---
 
 ## 6. Web + Marco
 
-**Web (Vercel):** new project, root = repo root. Set `RELAY_URL`, `RELAY_SHARED_SECRET`,
-`API_VALID_KEYS` (**required** where routes set `requireApiKey` — an empty list denies with 503,
-deliberately). Add the relay origin to `connect-src` in `index.html`.
+**Web (Vercel):** this one genuinely is new — the existing project serves the worldmonitor
+dashboard and would keep doing so. Create a project from `bpais88/seaosea`, root = repo root. Set
+`RELAY_URL`, `RELAY_SHARED_SECRET`, and `API_VALID_KEYS` (**required** where routes set
+`requireApiKey` — an empty list denies with 503, deliberately). Add the relay origin to
+`connect-src` in `index.html`.
 
 **Check:** the deployed page renders the board, the Ports view lists ports, and vessels appear once
 AIS is flowing. `npm run test:e2e` locally covers the empty-state path; this is the populated one.
 
-**Marco (Railway, `assistant/railway.json`):** deploy separately, point `RELAY_URL` at the new
-relay, re-point each channel's webhook URL.
+**Marco (Railway):** re-point the existing assistant service's source repo to `bpais88/seaosea`.
+Its environment carries over untouched, and because the webhook URLs belong to the service (not the
+repo), **no channel needs re-registering** — Slack, Teams, Telegram and WhatsApp keep working
+across the switch.
 
 **Check per channel** — a live message on each platform you actually run. Then confirm the ops
 report renders: it reads `/health.trips` and `/health.portHistory`, and those blocks exist
@@ -143,14 +164,17 @@ precisely because the parity harness caught them missing.
 
 Only now, and only after step 5 passed:
 
-1. Point DNS / clients at the new relay.
-2. Watch `/health` and the freight-monitor Slack alerts for one full day.
-3. Turn off the fork's relay service.
-4. Delete the ferry code from the worldmonitor fork (or archive the fork entirely — nothing in it
-   is needed by this product any more).
+1. Stop the OLD relay service (the one deploying from `worldmonitor`). One writer at a time.
+2. Remove `RELAY_READ_ONLY` from the new service and redeploy. It is now the writer.
+3. Point DNS / clients at it — or simply move the custom domain across, which keeps every existing
+   client URL valid.
+4. Watch `/health` for one full day: `connected`, `marinesia.tileAgesSec`, `portHistory.lastWriteOk`,
+   and the freight-monitor Slack alerts.
+5. Only then: delete the ferry code from the worldmonitor fork, or archive the fork entirely.
 
-**Rollback at any point before (3):** re-point clients at the fork's relay. Both read the same
-Postgres if you shared it, so no data is stranded.
+**Rollback, at any point:** re-add `RELAY_READ_ONLY=1` to the new service and restart the old one.
+Both read the same Postgres, so no data is stranded and nothing needs restoring — that is the whole
+reason for keeping one database.
 
 ---
 

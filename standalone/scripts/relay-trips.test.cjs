@@ -197,3 +197,40 @@ test('an exit is remembered so a trip opened just after departure still gets its
   assert.equal(called('backfillDestDwell').length, 1, 'exit backfills dwell');
   assert.ok(state.trips.recentExitByMmsi.has('900000010'), 'exit remembered for exit-before-open');
 });
+
+// ---- read-only mode (cutover safety: a second relay against PRODUCTION Postgres) ----
+
+test('SECURITY-OF-DATA: read-only mode serves everything and writes nothing', async () => {
+  // The parity gate needs the new relay live alongside the old one, both pointed at the same
+  // database. Without this, the second relay double-writes snapshots and geofence events and
+  // races the unique-open-trip constraint — corrupting the very history we are trying to keep.
+  const path = require.resolve('./relay.cjs');
+  delete require.cache[path];
+  process.env.RELAY_READ_ONLY = '1';
+  const ro = require('./relay.cjs');
+  try {
+    assert.equal(ro.CONFIG.readOnly, true);
+    assert.equal(ro.canWrite(), false, 'db.enabled is true here, yet writes must be refused');
+
+    calls.length = 0;
+    const r = ro.createRelay({ startIngest: false, startJobs: false });
+    r.state.trips.ready = true;
+    r.state.lastAisFrameAt = Date.now();
+    r.state.store.applyFull(underway('900000099'));
+    r.delayTick(r.state);
+    r.geofenceTick(r.state);
+
+    for (const w of ['openTrip', 'appendTripPoints', 'writeSnapshot', 'writeEvents',
+      'finishTrip', 'abandonTrips', 'syncPorts', 'refreshBaselines']) {
+      assert.equal(called(w).length, 0, `read-only must not call db.${w}`);
+    }
+    // ...but the data still SERVES, or the parity run would compare against an empty relay.
+    const ports = r.state.portHistory.snapshots;
+    assert.ok(Array.isArray(ports), 'in-memory history still accumulates for reads');
+    r.stop();
+  } finally {
+    delete process.env.RELAY_READ_ONLY;
+    delete require.cache[path];
+    require('./relay.cjs'); // restore the normal-mode module for any later test
+  }
+});

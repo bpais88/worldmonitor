@@ -85,7 +85,14 @@ const CONFIG = {
   tripBootGraceTicks: num('TRIP_BOOT_GRACE_TICKS', 3, 1),
   tripAnchorGraceMin: num('TRIP_ANCHOR_GRACE_MIN', 90, 0),
   tripRecentExitTtlMs: num('TRIP_RECENT_EXIT_TTL_MS', 6 * 60 * 60_000, 30 * 60_000),
+  // READ-ONLY: serve every endpoint from a real database but never write to it. Exists for the
+  // cutover parity gate — running a second relay against PRODUCTION Postgres would otherwise
+  // double-write snapshots and geofence events, and race the unique-open-trip constraint. Also
+  // useful for staging a build against real data without touching it.
+  readOnly: process.env.RELAY_READ_ONLY === '1',
 };
+/** True when durable writes are permitted. Reads are unaffected by read-only mode. */
+const canWrite = () => db.enabled && !CONFIG.readOnly;
 const TRIP_OPTS = {
   minPointGapMs: CONFIG.tripPointGapMs,
   destStableTicks: CONFIG.tripDestStableTicks,
@@ -270,7 +277,7 @@ async function upstashCmd(cmd) {
 const VOYAGE_KEY = (day) => `relay:voyages:count:${day}`;
 const utcDay = (ts) => new Date(ts).toISOString().slice(0, 10);
 async function registerTrips(n, now = Date.now()) {
-  if (!n) return;
+  if (!n || CONFIG.readOnly) return;
   try {
     await upstashCmd(['INCRBY', VOYAGE_KEY(utcDay(now)), String(n)]);
     await upstashCmd(['EXPIRE', VOYAGE_KEY(utcDay(now)), String(120 * 24 * 3600)]);
@@ -403,7 +410,7 @@ function geofenceTick(state, now = Date.now()) {
     }
   }
   if (events.length) {
-    if (db.enabled) void db.writeEvents(events, { source: aisFresh ? 'aisstream' : 'marinesia' });
+    if (canWrite()) void db.writeEvents(events, { source: aisFresh ? 'aisstream' : 'marinesia' });
     else {
       state.portHistory.events.push(...events);
       if (state.portHistory.events.length > HISTORY_MAX_EVENTS) state.portHistory.events.splice(0, state.portHistory.events.length - HISTORY_MAX_EVENTS);
@@ -411,7 +418,7 @@ function geofenceTick(state, now = Date.now()) {
   }
   if (now - state.portHistory.lastSnapshotAt >= CONFIG.portSnapshotMs) {
     const ports = computePorts(state, state.portSnapshotHistory, now);
-    if (db.enabled) {
+    if (canWrite()) {
       void db.writeSnapshot(now, ports, { source: aisFresh ? 'aisstream' : 'marinesia' }).then((ok) => {
         if (ok) state.portHistory.lastSnapshotAt = now;
       });
@@ -434,7 +441,7 @@ async function disruptionsRefresh(state) {
   ]);
   const batches = settled.filter((s) => s.status === 'fulfilled').map((s) => s.value).filter(Array.isArray);
   state.disruptions = { events: mergeDisruptionEvents(batches.flat()), refreshedAt: Date.now() };
-  if (db.enabled) void db.logDisruptionsFirstSeen(state.disruptions.events);
+  if (canWrite()) void db.logDisruptionsFirstSeen(state.disruptions.events);
 }
 
 async function meteoalarmRefresh(state) {
@@ -621,7 +628,7 @@ async function resumeTrips(state) {
   state.trips.ready = true;
 }
 
-const tripsOn = () => CONFIG.tripsEnabled && db.enabled;
+const tripsOn = () => CONFIG.tripsEnabled && canWrite();
 
 /**
  * The /health trips block (sync, no I/O): db.cjs writer counters + the relay's in-memory gauges.
@@ -758,6 +765,7 @@ function buildRoutes(state) {
         auth: { authHeader: CONFIG.authHeader, required: !CONFIG.allowUnauthenticated },
         delays: { flagged: state.delayByMmsi.size, withReasons: state.reasonsByMmsi.size },
         db: db.enabled,
+        readOnly: CONFIG.readOnly,
         portHistory: buildPortHistoryHealth(state),
         trips: buildTripsHealth(state),
         disruptions: { count: state.disruptions.events.length, refreshedAt: state.disruptions.refreshedAt },
@@ -909,8 +917,11 @@ function createRelay({ startIngest = true, startJobs = true } = {}) {
     bootAnd(() => void meteoalarmRefresh(state), CONFIG.meteoalarmRefreshMs);
     every(() => void portContextRefresh(state), CONFIG.portContextMs);
     if (db.enabled) {
-      bootAnd(async () => { await db.refreshBaselines(); state.baselines = await db.loadBaselines(); }, 24 * 3600 * 1000);
-      void db.syncPorts(ALL_PORTS);
+      bootAnd(async () => {
+        if (canWrite()) await db.refreshBaselines();   // recompute is a write; loading is not
+        state.baselines = await db.loadBaselines();
+      }, 24 * 3600 * 1000);
+      if (canWrite()) void db.syncPorts(ALL_PORTS);
     }
     // Trips must be seeded from Postgres before any lifecycle mutation; `ready` gates the ticks.
     void resumeTrips(state);
@@ -949,7 +960,8 @@ function main() {
   const relay = createRelay();
   relay.server.listen(CONFIG.port, () => {
     const auth = CONFIG.secret ? 'on' : 'OFF (ALLOW_UNAUTHENTICATED_RELAY=1)';
-    console.log(`[relay] freight relay listening on :${CONFIG.port} (db=${db.enabled ? 'on' : 'off'}, auth=${auth})`);
+    const dbMode = !db.enabled ? 'off' : CONFIG.readOnly ? 'READ-ONLY' : 'on';
+    console.log(`[relay] freight relay listening on :${CONFIG.port} (db=${dbMode}, auth=${auth})`);
   });
 }
 
@@ -958,7 +970,7 @@ if (require.main === module) main();
 // Ticks and trip internals are exported so the wiring can be driven directly in tests — the pure
 // modules are already covered; what needs exercising is how this file calls them.
 module.exports = {
-  createRelay, CONFIG, portFeed, portLocalDowHour, assertAuthConfigured,
+  createRelay, CONFIG, canWrite, portFeed, portLocalDowHour, assertAuthConfigured,
   delayTick, geofenceTick, flushTripPoints, capTripPoints, tripMaintenance, resumeTrips,
   buildTripsHealth, buildPortHistoryHealth,
 };
