@@ -47,6 +47,25 @@ git init && git add -A && git commit -m "Initial commit: Seaosea, extracted from
 If anything fails here it is a path problem, not a logic problem — every one of those suites passed
 in staging.
 
+**Then, immediately — Actions tab → disable four workflows.** Pushing to `main` arms every
+`schedule:` trigger in `.github/workflows/`, against a repo that has none of the secrets yet:
+
+| Workflow | Schedule | Secrets it needs |
+|---|---|---|
+| `freight-monitor` | **every 10 min** | `RELAY_SHARED_SECRET`, `SLACK_WEBHOOK_URL` |
+| `assistant-eval` | daily 06:00 + on push | `ANTHROPIC_API_KEY` |
+| `voice-drift` | daily 06:30 | `ELEVENLABS_API_KEY` |
+| `sar-occupancy` | Mondays 05:00 | `RELAY_SHARED_SECRET`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` |
+
+All four come back on together at step 7, item 1.
+
+`freight-monitor` is the urgent one: 144 failed runs a day, every one an email. Leave `ci.yml`
+enabled — it needs no secrets and it is the signal worth having.
+
+Re-enabling is **step 7, item 1** — not optional, and not a calendar reminder. Step 7 has you watch
+the freight-monitor alerts for a full day, which cannot happen while the workflow that sends them is
+switched off.
+
 ---
 
 ## 2. Database — nothing to do
@@ -198,14 +217,23 @@ precisely because the parity harness caught them missing.
 
 Only now, and only after step 5 passed:
 
-1. Stop the OLD relay service (the one deploying from `worldmonitor`). One writer at a time.
-2. Remove `RELAY_READ_ONLY` from the new service and redeploy. It is now the writer.
-3. Move the custom domain from the old service to the new one. **No client changes anywhere** —
+1. **Re-enable the scheduled workflows disabled in step 1** — this is the other half of that
+   decision, and it belongs here rather than in a reminder you might not read.
+   - Settings → Secrets and variables → Actions. Add all six, taking the values from the Railway
+     services you already have — none of them are new: `RELAY_SHARED_SECRET`, `SLACK_WEBHOOK_URL`,
+     `ANTHROPIC_API_KEY`, `ELEVENLABS_API_KEY`, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`.
+   - Actions tab → enable `freight-monitor`, `assistant-eval`, `voice-drift`, `sar-occupancy`.
+   - Prove it before relying on it: `freight-monitor` → "Run workflow" → confirm one green run and
+     one Slack message land. A workflow that is enabled but misconfigured is indistinguishable from
+     a quiet system, which is the exact failure this whole step exists to prevent.
+2. Stop the OLD relay service (the one deploying from `worldmonitor`). One writer at a time.
+3. Remove `RELAY_READ_ONLY` from the new service and redeploy. It is now the writer.
+4. Move the custom domain from the old service to the new one. **No client changes anywhere** —
    Marco, the edge proxies and any external caller keep the URL they already have. This is the
    whole payoff of keeping the domain.
-4. Watch `/health` for one full day: `connected`, `marinesia.tileAgesSec`, `portHistory.lastWriteOk`,
-   and the freight-monitor Slack alerts.
-5. Only then: delete the ferry code from the worldmonitor fork, or archive the fork entirely.
+5. Watch `/health` for one full day: `connected`, `marinesia.tileAgesSec`, `portHistory.lastWriteOk`,
+   and the freight-monitor Slack alerts — live now because of item 1.
+6. Only then: delete the ferry code from the worldmonitor fork, or archive the fork entirely.
 
 **Rollback, at any point:** move the domain back, re-add `RELAY_READ_ONLY=1` to the new service and
 restart the old one. Both read the same Postgres, so no data is stranded and nothing needs
