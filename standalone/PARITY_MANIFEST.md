@@ -20,24 +20,26 @@ Legend: [x] verified in this scaffold · [ ] open · (T/P/S) = verification meth
 - [x] (T) SAR occupancy, corridor report, vessels query, AIS keys — respective suites
 - Total moved backend suites green here: **285/285**
 
-## 2. Relay HTTP service — THE ONE REWRITE (pending)
+## 2. Relay HTTP service — WRITTEN (clean-room), live parity still open
 
-The old `ais-relay.cjs` entry is upstream-licensed; a clean entry must be written.
-Closed only by characterization tests written against the OLD relay first, then a
-side-by-side parity diff (P) on:
+`relay.cjs` + `relay-http.cjs` + `vessel-store.cjs` replace the upstream-licensed entry.
+Contract fidelity came from characterization: the predecessor was booted locally and its
+observable behaviour captured into `relay-http.test.cjs` (16 tests).
 
-- [ ] (P) GET /ais/ports (congestion + congestionRel + coverageOk + uncoveredPorts)
-- [ ] (P) GET /ais/vessels (+ operator/type/freight filters, limit)
-- [ ] (P) GET /ais/geofences · /ais/port-history · /ais/port-series · /ais/port-profile
-- [ ] (P) GET /ais/trip · /ais/vessel-profile · /ais/voyages/daily · /ais/disruptions
-- [ ] (P) GET /health · /metrics (shape, not values)
-- [ ] (P) auth (x-relay-key 401), CORS, compression, rate limiting
-- [ ] (S) Background jobs wired in the new entry: aisstream ingest, marinesia sweep,
-      geofence tick, ferry delays, trips, baselines refresh, disruptions refresh,
-      meteoalarm refresh, port context, vessel sync
-- [ ] (S) NOT ported (upstream tenants, deliberately absent): /oref/*, /opensky*, /rss*,
-      /worldbank, /polymarket, /ucdp-events, /notam, /yahoo-chart, /youtube-live,
-      /telegram channel feed, market-quote seeder
+- [x] (T) GET /ais/ports (congestion + congestionRel + coverageOk + uncoveredPorts)
+- [x] (T) GET /ais/vessels (+ freight filter, limit, bbox, operator)
+- [x] (T) GET /ais/geofences (per-port radius reaches the geofence layer)
+- [x] (T) GET /ais/trip · /ais/vessel-profile · /ais/port-profile · /ais/port-series (db-less shapes)
+- [x] (T) GET /ais/voyages/daily · /ais/disruptions (+ country filter)
+- [x] (T) GET /health · /metrics
+- [x] (T) auth matrix, CORS, preflight, 405/404, gzip
+- [x] (T) SECURITY: fail-closed — no secret means refuse to boot; wrong/empty/prefix keys 401
+- [x] (T) DIVERGENCE: the 10 fork tenant endpoints return 404 by design
+- [ ] (P) **Live side-by-side parity diff against the deployed relay** — the one thing
+      characterization cannot prove, because this sandbox has no AIS keys and no Postgres.
+      Replay identical requests at old and new, diff JSON modulo timestamps.
+- [ ] (S) Background-job soak with real keys: aisstream reconnect, Marinesia sweep vs the
+      2000/tile cap, baseline refresh, trips lifecycle.
 
 ## 3. Marco (moved wholesale)
 
@@ -50,25 +52,29 @@ side-by-side parity diff (P) on:
 
 - [x] (S) Builds + typechecks (0 errors) with clean-room Panel/sanitize/i18n and fresh vite config
 - [ ] (S) Visual smoke: board renders, map tiles, region tabs, vessel popup, replay controls
-- [ ] (S) NEW Playwright smoke spec (the app has never had e2e — add at cutover)
+- [x] (S) Playwright smoke spec — 4 tests against the REAL relay + a production build:
+      board mounts, Ports view loads live rows, empty fleet renders an empty state
+      (not a crash or an invented count), map host + bundle load
 - [x] Clean-room Panel.ts / sanitize.ts / i18n.ts written from observed interface (see headers)
 
 ## 5. API proxies (moved; _relay.js clean-room)
 
 - [ ] (S) Each of 8 /api/ais-* functions returns relay data on the new Vercel project
 - [x] Clean-room `_relay.js` (createRelayHandler) written from observed contract
+- [x] (T) Fail-closed key gate + constant-time compare + no query-string keys — `api/_relay.test.mjs`
 
 ## 6. Ops / periphery
 
-- [ ] (S) Workflows re-created: ferry-monitor (RELAY_URL secret → new host), sar-occupancy,
-      assistant-tests, assistant-eval, voice-drift + fresh lint/typecheck
-- [ ] (S) Env manifest populated in new infra (see findings doc iteration 4 list)
+- [x] (S) Workflows written: `.github/workflows/ci.yml` (test + typecheck/build + e2e) and
+      `freight-monitor.yml` (10-min Slack alerts). Still to port: sar-occupancy,
+      assistant-eval, voice-drift.
+- [x] `.env.example` written — all three deployables, every var, with what breaks if absent
+- [ ] (S) Env populated in the new infra
 - [ ] (S) Upstash: new ferry database; keys start fresh (voyage counts reset — accepted) or migrated
 - [ ] (S) Postgres: point DATABASE_URL at the same Neon DB (zero-migration) or dump/restore
 - [ ] (S) Domain, CSP connect-src in index.html, theme localStorage key decision
 
 ## Known gaps carried over (pre-existing, not regressions)
 
-- No e2e coverage (row 4.3)
 - `TRIPS_ENABLED` off by default — decide for new deploy
 - ferry-monitor workflow name-coupled to old Railway host

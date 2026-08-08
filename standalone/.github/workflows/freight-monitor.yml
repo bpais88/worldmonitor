@@ -1,0 +1,29 @@
+name: Freight monitor
+
+# Every 10 minutes: pull flagged freight vessels from the relay, dedupe against Upstash memory,
+# post Slack alerts. Carried over from the fork; RELAY_URL now points at this project's own relay.
+#
+# Repo secrets:   RELAY_SHARED_SECRET, SLACK_WEBHOOK_URL, UPSTASH_REDIS_REST_URL, UPSTASH_REDIS_REST_TOKEN
+# Repo variable:  RELAY_URL
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - run: npm ci --omit=dev
+      - run: node assistant/ops-report.mjs
+        env:
+          RELAY_URL: ${{ vars.RELAY_URL }}
+          RELAY_SHARED_SECRET: ${{ secrets.RELAY_SHARED_SECRET }}
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          UPSTASH_REDIS_REST_URL: ${{ secrets.UPSTASH_REDIS_REST_URL }}
+          UPSTASH_REDIS_REST_TOKEN: ${{ secrets.UPSTASH_REDIS_REST_TOKEN }}

@@ -17,10 +17,13 @@ repository.
 | Marco assistant | moved wholesale — 155/155 tests green |
 | Frontend (logistics + Freight components) | moved as-is; builds, typechecks clean |
 | Panel / sanitize / i18n / vite config / api plumbing | clean-room rewrites (headers explain each) |
-| Relay HTTP entry | **NOT YET PORTED** — the one remaining rewrite; see PARITY_MANIFEST.md §2 |
+| Relay HTTP entry | clean-room, characterization-tested — 16 tests incl. fail-closed auth |
+| e2e | 4 Playwright smoke tests against the real relay + a production build |
+| CI | `.github/workflows/ci.yml` (test, typecheck+build, e2e) |
 
-Until the relay entry exists, this scaffold has no live data source of its own —
-the frontend and Marco still point at a deployed relay via env config.
+Everything runs standalone: `node scripts/relay.cjs` serves live data with no dependency
+on the fork. What remains before cutover is infrastructure and a live parity diff against
+the deployed relay — see PARITY_MANIFEST.md.
 
 ## Layout
 
@@ -33,10 +36,13 @@ the frontend and Marco still point at a deployed relay via env config.
 
 ```
 npm install
-npm test              # relay module suites + assistant suites
+cp .env.example .env  # RELAY_SHARED_SECRET is required — the relay refuses to boot without it
+npm test              # relay modules + assistant + edge-proxy auth (301 + 155 + 5)
 npm run typecheck
-npm run dev           # web app on :3000
 npm run build
+npm run test:e2e      # boots the real relay + a preview build, drives it with Playwright
+npm run dev           # web app on :3000
+node scripts/relay.cjs  # the relay on :3004
 ```
 
 ## Provenance & license boundary
@@ -46,5 +52,6 @@ a per-file creation + blame audit against the full upstream history). Files that
 upstream-authored in the fork (Panel, sanitize, i18n, vite config, api/_relay, the relay
 HTTP entry) are replaced by clean-room implementations written from their observed
 interfaces — each carries a header saying so. The upstream worldmonitor project is AGPL
-and none of its code is included here. The relay entry rewrite (in progress) completes
-that boundary; see PARITY_MANIFEST.md for what remains and how each item is verified.
+and none of its code is included here. With the relay entry rewritten, that boundary is
+complete: no file in this tree derives from upstream source. See PARITY_MANIFEST.md for
+what remains before cutover and how each item is verified.
