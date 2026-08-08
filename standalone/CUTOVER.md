@@ -189,6 +189,50 @@ that moves, rollback is a single Railway action, not a redeploy of every consume
 
 ---
 
+## 8. Trips — arm a week after cutover, not during it
+
+Decided 2026-08-08: **do not change trips behaviour at the same moment you change relays.** The
+lifecycle is ported and covered by 11 wiring tests, but it has never run against real Postgres under
+real traffic — it is the least battle-tested code in the repo. Changing two things at once means a
+problem in either is hard to attribute to either.
+
+During steps 3-6 this is automatic: the new relay is read-only, so trips are off there whatever the
+env says, while the old relay keeps writing exactly as it does today. **No gap in trip history
+during the parity window.** The choice only arrives at step 7, when the new relay becomes the writer.
+
+**First, check what production actually does today** (this is still unverified):
+
+```bash
+curl -s https://<relay>/health | jq '.trips.enabled'
+```
+
+**If it returns `false`** — nothing to do at cutover. Leave `TRIPS_ENABLED` unset, run for a week,
+then follow "arming" below.
+
+**If it returns `true`** — you have live trip history worth protecting, and disabling it would open
+a gap in that history for the sake of caution. Prefer to keep it on through the cutover, and treat
+the first 24 hours as the soak: the watch list below is the same either way. Only force it off if
+the relay shows any instability in step 7's first hours.
+
+**Arming, whenever you do it:** set `TRIPS_ENABLED=1` (it also needs `DATABASE_URL`, or it stays off
+regardless and logs why). Then watch `/health.trips` for a day:
+
+- `degraded: true` — the pipeline is unhappy. The three causes are `lastTripWriteOk: false`,
+  `tripPointsBuffered` at the high-water mark (4000), or an open trip past its cap awaiting the
+  daily sweep. The third is benign; the first two are not.
+- `tripPointsDropped > 0` — the buffer overflowed and breadcrumbs were lost. Should stay at 0.
+- `oldestOpenTripAgeMin` climbing past `maxOpenAgeMin` (7200) — the direct open-trip-leak signal.
+- `tripsArrived` vs `tripsAbandoned` — a healthy ratio means the geofence CLOSE side is firing. All
+  abandons and no arrivals would mean arrivals are not being detected.
+
+`assistant/ops-report.mjs` already renders every one of these into the scheduled Slack report, so
+the watching is mostly done for you.
+
+**Backing out:** unset `TRIPS_ENABLED` and redeploy. Writes stop immediately; rows already written
+stay valid, and `resumeTrips()` picks the open ones back up whenever you re-arm.
+
+---
+
 ## Known-open, deliberately
 
 These are documented gaps, not oversights — decide each on its own merits:
@@ -204,5 +248,4 @@ These are documented gaps, not oversights — decide each on its own merits:
   entry; tiles, timezones and parity gates follow automatically. Cost: each country lengthens the
   fallback sweep.
 - **Only Italy has an official strike registry.** Everyone else gets hedged news matches.
-- **`TRIPS_ENABLED` is off by default.** The lifecycle is ported and tested; arming it is a
-  decision, and it needs `DATABASE_URL` or it stays off regardless.
+- **`TRIPS_ENABLED`** — decided: arm it a week after cutover, not during (see step 8).
