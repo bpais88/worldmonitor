@@ -19,12 +19,12 @@ deploy from changes. Postgres and Upstash are untouched throughout.
 
 Have ready:
 - Access to the existing Railway project (to change each service's source repo).
-- The one still-undecided value: the production relay origin, for the web app's CSP.
+- The relay's public URL — needed as an ENV VALUE (`RELAY_URL`), not a code change.
 
-Still open, and it changes step 6:
-- **Domain.** `index.html`'s CSP `connect-src` allows `localhost:3004` and the Vercel proxy path
-  only. Production needs the real relay origin added or the browser silently blocks every call —
-  and it presents as a data problem, not a config one.
+> **The CSP does not need touching.** In production the browser only ever calls `/api/ais-*` on its
+> own origin, which `connect-src 'self'` already allows; every direct-to-relay path in the frontend
+> is gated on `hostname === 'localhost'` and is a dev-only fallback. The relay URL is used
+> server-side by the edge proxies and by Marco, never by the browser.
 
 ---
 
@@ -143,8 +143,8 @@ Two caveats specific to running it read-only, so a difference here is not misrea
 **Web (Vercel):** this one genuinely is new — the existing project serves the worldmonitor
 dashboard and would keep doing so. Create a project from `bpais88/seaosea`, root = repo root. Set
 `RELAY_URL`, `RELAY_SHARED_SECRET`, and `API_VALID_KEYS` (**required** where routes set
-`requireApiKey` — an empty list denies with 503, deliberately). Add the relay origin to
-`connect-src` in `index.html`.
+`requireApiKey` — an empty list denies with 503, deliberately). No CSP change needed: the browser
+talks only to `/api/*` on its own origin.
 
 **Check:** the deployed page renders the board, the Ports view lists ports, and vessels appear once
 AIS is flowing. `npm run test:e2e` locally covers the empty-state path; this is the populated one.
