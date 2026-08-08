@@ -72,7 +72,7 @@ export function isReportDue({ now, lastSent, hourUtc = OPS_REPORT_HOUR_UTC }) {
 }
 
 /**
- * Why is trips.degraded set? The relay flips it for three reasons (ais-relay.cjs buildTripsHealth):
+ * Why is trips.degraded set? The relay flips it for three reasons (relay.cjs buildTripsHealth):
  * a failing write, the point buffer at high water, or the oldest open trip past the 120h cap. Only
  * the first two mean the pipeline is actually unhealthy. The third is usually just the daily sweep
  * not having run yet — benign, self-clearing, and NOT a gate reset. Returns:

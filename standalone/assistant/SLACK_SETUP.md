@@ -34,8 +34,8 @@ together.
 
 Run in your terminal:
 ```
-! printf 'xoxb-...' > /Users/brunopais/worldmonitor/.slack-bot-token
-! printf 'your-signing-secret' > /Users/brunopais/worldmonitor/.slack-signing-secret
+! printf 'xoxb-...' > .slack-bot-token
+! printf 'your-signing-secret' > .slack-signing-secret
 ```
 …and just tell me your **member ID** (it's not sensitive). I'll set them as
 Railway variables and deploy.

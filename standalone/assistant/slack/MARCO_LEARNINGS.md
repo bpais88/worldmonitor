@@ -1,6 +1,6 @@
 # Marco — Learnings & Reusable Patterns
 
-A consolidated engineering reference for **Marco**, a multi-workspace Slack AI agent built on the `worldmonitor` Italian-port freight/maritime tracker. Scope tags are preserved throughout: `generalizable-any-agent`, `generalizable-slack`, and `worldmonitor-specific`.
+A consolidated engineering reference for **Marco**, a multi-workspace Slack AI agent built on the `seaosea` European freight/maritime tracker. Scope tags are preserved throughout: `generalizable-any-agent`, `generalizable-slack`, and `seaosea-specific`.
 
 ---
 
@@ -12,7 +12,7 @@ The system decomposes into three concentric layers:
 
 - **Platform-neutral core** — `agent.mjs` (the agentic loop), `guardrails.mjs` (action policy), `watches.mjs`, `usage.mjs`, `store.mjs` (KV), `config.mjs` (env binding), and the domain tools under `assistant/tools/`. Keyed by an opaque `tenantId`; never branches on platform.
 - **Slack adapter** — `assistant/slack/server.mjs` (the HTTP backbone), `verify.mjs`, `oauth.mjs`, `installations.mjs`, `pending.mjs`, `permissions.mjs`, `memory.mjs`, `onboarding.mjs`, `legal.mjs`, and `marco-app-manifest.json`.
-- **Domain (worldmonitor) data plane** — `relay.mjs` (authenticated GET client to the AIS/ports backend), `tools/freight.mjs`, `tools/weather.mjs`, `tools/watches.mjs`, `tools/actions.mjs`, plus the shared freshness module (`scripts/freshness.cjs` / `src/services/logistics/freshness.ts`).
+- **Domain (seaosea) data plane** — `relay.mjs` (authenticated GET client to the AIS/ports backend), `tools/freight.mjs`, `tools/weather.mjs`, `tools/watches.mjs`, `tools/actions.mjs`, plus the shared freshness module (`scripts/freshness.cjs` / `src/services/logistics/freshness.ts`).
 
 Key architectural principle (`MULTI_PLATFORM.md`): **one brain, thin per-platform adapters.** Only message *receive → run → send* is platform-specific; everything else is keyed by an opaque tenant id so a second platform (Teams) is roughly a day of adapter work rather than a rewrite. **Now realized — Marco runs on Microsoft Teams in production from the same core; see §14.**
 
@@ -225,7 +225,7 @@ Stores **simplified text turns** (`[{role:'user'},{role:'assistant'}]` — user 
 
 `recordUsage(teamId, {input, output})` increments `usage:<team>:<YYYY-MM-DD>` (TTL ~40 days) from `runAgent`'s returned usage; `server.mjs` logs per-message and per-day totals. **Observe-only — no cap enforced yet.** Tokens are the true cost unit (output costs several × input); record real numbers first to size a credit/limit later from data rather than guessing.
 
-### Domain tools (`worldmonitor-specific`)
+### Domain tools (`seaosea-specific`)
 
 - **`relay.mjs`** — `relayGet(path)` wraps fetch against `RELAY_URL` with an optional shared-secret header (`RELAY_AUTH_HEADER`/`RELAY_SHARED_SECRET`), throwing on non-2xx. **All** freight/weather tools call `relayGet` — one place for base URL, auth, and error shape. (Env binding centralized in `config.mjs`.)
 - **`tools/freight.mjs`** — `find_freight_vessels` etc.
@@ -302,7 +302,7 @@ Freshness decision logic lives in **one pure computation** consumed by three sur
 
 **The "absent meta ⇒ fresh" convention is applied at two layers, in two different files — know the distinction when reusing:**
 
-- **Disable-gate (one layer up):** `feedFreshness()` in `scripts/ais-relay.cjs` returns `{}` when the producing feed is *disabled* (no `MARINESIA_API_KEY` ⇒ no poll ⇒ `lastPollAt` null). Emitting nothing lets clients treat absent meta as fresh — see §12 for why this matters.
+- **Disable-gate (one layer up):** `feedFreshness()` in `scripts/relay.cjs` returns `{}` when the producing feed is *disabled* (no `MARINESIA_API_KEY` ⇒ no poll ⇒ `lastPollAt` null). Emitting nothing lets clients treat absent meta as fresh — see §12 for why this matters.
 - **Happy-path-absent (tool layer):** `feedNote(j)` returns `null` when data is fresh, and tools spread it as `...(feed ? { feed } : {})` so the `feed` field is simply absent on the happy path.
 
 Same contract — *absent meta means fresh* — enforced once where the signal is produced (disable-gate) and once where it's surfaced to the model (tool field). The provider (`src/services/logistics/providers/aisstream.ts`) captures response meta into `lastMeta` on each fetch.
@@ -373,7 +373,7 @@ The codebase is structured so the hard logic is **pure and network-free**:
 
 ## 13. Skill Blueprint — Extract vs Strip
 
-A checklist for turning Marco into a **reusable Slack-agent skill**. Modules tagged `generalizable-any-agent` or `generalizable-slack` are extraction candidates; `worldmonitor-specific` code is the seam to parameterize or strip.
+A checklist for turning Marco into a **reusable Slack-agent skill**. Modules tagged `generalizable-any-agent` or `generalizable-slack` are extraction candidates; `seaosea-specific` code is the seam to parameterize or strip.
 
 ### Extraction order (the dependency spine)
 
@@ -399,7 +399,7 @@ onboarding.mjs  +  legal.mjs  +  manifest   (lifecycle / distribution)
 
 - [ ] **`assistant/store.mjs`** — Upstash-REST-or-in-memory KV behind one API. *(Extract first — zero internal deps.)*
 - [ ] **`assistant/slack/verify.mjs`** — Slack signature verification. Copy as-is. Foundation of the whole trust model. *(Extract first — zero internal deps.)*
-- [ ] **`assistant/slack/server.mjs` backbone** — the raw-http skeleton: GET(unsigned)/POST(signed) split, verify-then-parse, `url_verification` challenge, ack-fast + detached handler, `event_id` dedupe Set, loop-prevention filters, `apiFor(botToken)` token-bound helper factory. Strip the worldmonitor tool wiring and watch-ticker data fetch (see §C).
+- [ ] **`assistant/slack/server.mjs` backbone** — the raw-http skeleton: GET(unsigned)/POST(signed) split, verify-then-parse, `url_verification` challenge, ack-fast + detached handler, `event_id` dedupe Set, loop-prevention filters, `apiFor(botToken)` token-bound helper factory. Strip the seaosea tool wiring and watch-ticker data fetch (see §C).
 - [ ] **`assistant/slack/oauth.mjs`** — pure `authorizeUrl`, KV-backed single-use CSRF state (`newState`/`consumeState`, 10-min TTL), injectable `exchangeCode` that normalizes to a flat install shape.
 - [ ] **`assistant/slack/installations.mjs`** — per-`team_id` install + config store with set-based index, self-pruning list, config-merged-over-defaults, idempotent `addActionUser`.
 - [ ] **`assistant/guardrails.mjs`** — pure three-state action policy (`evaluateToolCall`). Tool-agnostic; copy with its test (six branches).
@@ -421,7 +421,7 @@ onboarding.mjs  +  legal.mjs  +  manifest   (lifecycle / distribution)
 - [ ] **Legal copy constants** — `SUPPORT_EMAIL`, `ENTITY`, `UPDATED`, and every retention/deletion claim (must match real TTLs — see §12).
 - [ ] **Config schema** — `DEFAULT_CONFIG` (`{ports, operators, actionUsers, onboarded}`): keep `actionUsers`/`onboarded`, replace `ports`/`operators` with the new domain's config keys.
 - [ ] **Tunables** — `MAX_STEPS`, `max_tokens`, watch TTL/interval (`WATCH_TICK_MS`), memory window (8 pairs / 1h), usage TTL (~40d), pending TTL (30m), dedupe cap (1000).
-- [ ] **Audience timezone** — the hardcoded `Europe/Amsterdam` IANA zone is worldmonitor-specific; expose as config.
+- [ ] **Audience timezone** — the hardcoded `Europe/Amsterdam` IANA zone is seaosea-specific; expose as config.
 - [ ] **`assistant/config.mjs`** — the **env-binding seam**: `RELAY_*` / `SLACK_*` / `UPSTASH_*` / `ANTHROPIC_*` are all read here (e.g. `relay.mjs` imports from it). This file *is* the env contract; re-point the domain-data vars and keep the platform ones. The full env list lives in **§11** — that env contract (`SLACK_*` / `UPSTASH_*` / `ANTHROPIC_*` / domain `RELAY_*` / `MARINESIA_*`) is part of the configuration surface, not an afterthought.
 - [x] **Generalized delivery record (BUILT — see §14; `MULTI_PLATFORM.md`)** — replaced Slack-specific `{teamId, botToken}` with `{platform, tenantId, deliver, installedBy, installedAt}` and a single `send(install, {channelId, threadId, text, blocks})` that branches on `install.platform`. The watch ticker and approval flow now call `send()` instead of `slackApi` directly. **This is the seam the Teams adapter plugs into, and Teams is *not* a clone of Slack's token model:**
   - Teams has **no per-tenant token** — there's a single app credential plus a **stored conversation reference** per channel; you cannot "post to a channel by id" without that reference.
@@ -429,12 +429,12 @@ onboarding.mjs  +  legal.mjs  +  manifest   (lifecycle / distribution)
   - Approve/Reject buttons map to Teams **Adaptive Cards** (the pending-action flow in `pending.mjs` is otherwise unchanged).
   - These are exactly why `deliver` is abstract: a Slack `deliver` is a bot token, a Teams `deliver` is `{serviceUrl, conversationReference}`.
 
-### C. Strip / replace (`worldmonitor-specific`)
+### C. Strip / replace (`seaosea-specific`)
 
 - [ ] **`assistant/relay.mjs`** — the authenticated GET client to the AIS/ports backend (`RELAY_URL`, `RELAY_SHARED_SECRET`). Replace with the new domain's data client.
 - [ ] **`assistant/tools/freight.mjs`, `tools/weather.mjs`, `tools/watches.mjs`, `tools/actions.mjs`** — domain tools. Replace with the new domain's tool objects (the loop and registry pattern stay; only the tool array changes).
 - [ ] **`post_report_to_channel` / `save_freight_report`** — Marco's specific action tools (keep the *patterns*: live-ctx injection, filename sanitization; drop the freight specifics).
-- [ ] **The shared freshness module** (`scripts/freshness.cjs`, `scripts/ais-relay.cjs`'s `feedFreshness`, `src/services/logistics/freshness.ts`, `aisstream.ts`, the FE badge/CSS) — keep the *pattern* (one pure module → backend/FE/agent, with the disable-gate + happy-path-absent two-layer convention), strip the AIS-tile-sweep specifics; re-implement for whatever liveness signal the new domain has (or omit).
+- [ ] **The shared freshness module** (`scripts/freshness.cjs`, `scripts/relay.cjs`'s `feedFreshness`, `src/services/logistics/freshness.ts`, `aisstream.ts`, the FE badge/CSS) — keep the *pattern* (one pure module → backend/FE/agent, with the disable-gate + happy-path-absent two-layer convention), strip the AIS-tile-sweep specifics; re-implement for whatever liveness signal the new domain has (or omit).
 - [ ] **Watch condition logic** — the *what* a watch evaluates (port congestion, delayed vessels) is domain-specific; keep `evaluateWatches`'s baseline/transition machinery (including directional transitions), swap the conditions.
 - [ ] **Marinesia / aisstream / Open-Meteo deps & their env vars** — domain data sources; remove.
 

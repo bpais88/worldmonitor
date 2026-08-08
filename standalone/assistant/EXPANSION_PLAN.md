@@ -12,7 +12,7 @@ asks for passenger-ferry schedules.
 
 ## Why this is config + data, not a rewrite
 
-- **Two services, same repo:** `worldmonitor-relay` (runs `scripts/ais-relay.cjs` + `marinesia.cjs`
+- **Two services, same repo:** `seaosea-relay` (runs `scripts/relay.cjs` + `marinesia.cjs`
   — owns the AIS feed, `/ais/ports` congestion, `/ais/vessels`) and `italy-freight-assistant` (Marco,
   queries the relay). The expansion is **mostly a relay change**; the assistant only needs copy.
 - **Port-agnostic data model:** ports are a JSON dataset (`src/config/maritime-ports.data.json`,
@@ -25,7 +25,7 @@ asks for passenger-ferry schedules.
 
 The reliable feed needs a **Marinesia API key + quota** sized for the new regions. Italy is 9 tiles
 (3×3 grid); UK/ES/NL add **~25–30 more tiles** (more coastline). **Pricing isn't public — contact
-Marinesia sales.** Then set `MARINESIA_API_KEY` on the **`worldmonitor-relay`** service. Until then,
+Marinesia sales.** Then set `MARINESIA_API_KEY` on the **`seaosea-relay`** service. Until then,
 PR-1 runs on the current **aisstream** feed (global; the vessels are already there) so we can build +
 validate the data before the feed swap.
 
@@ -57,8 +57,8 @@ validate the data before the feed swap.
 
 - Refactor `scripts/marinesia.cjs`: `MARINESIA_TILES` → `REGION_TILES = { it, gb, es, nl }`, each a
   `makeGrid(bbox)`; env to select active regions (`MARINESIA_REGIONS=it,gb,es,nl`).
-- `scripts/ais-relay.cjs` polls all active regions round-robin (mind the 5 req/min rate + 2000/tile cap).
-- Set `MARINESIA_API_KEY` (+ regions) on `worldmonitor-relay`; the reliability swap from aisstream.
+- `scripts/relay.cjs` polls all active regions round-robin (mind the 5 req/min rate + 2000/tile cap).
+- Set `MARINESIA_API_KEY` (+ regions) on `seaosea-relay`; the reliability swap from aisstream.
 
 ### PR-3 — Assistant copy/prompts (assistant only)
 

@@ -42,7 +42,7 @@ in order: (1) verified IMO registry (Equasis per-hull) → `imo-registry`; (2) A
 freight operator → `ropax-operator`; else `null` (tankers 80-89, HSC, passenger-tourist excluded).
 `isFreightVessel` = `freightReason(...) !== null`.
 
-**Writer** (`syncVesselDim` in `scripts/ais-relay.cjs` → `db.syncVessels`): on boot + every
+**Writer** (`syncVesselDim` in `scripts/relay.cjs` → `db.syncVessels`): on boot + every
 `VESSEL_SYNC_MS` (default 10 min), build the freight roster via `buildVesselList(..., isFreight)` and
 batch-upsert. `first_seen` is set once; `last_seen` + attributes refresh on conflict; **COALESCE**
 preserves a known `imo`/`name`/dimension against a later position-only frame that lacks it;

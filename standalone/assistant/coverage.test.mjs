@@ -1,6 +1,6 @@
 // Guard: Marco's model-facing COVERAGE prose must name exactly the countries whose ports he
 // actually serves. The relay single-sources its port list from src/config/maritime-ports.data.json
-// (scripts/ais-relay.cjs), so when a commercial port in a NEW country lands there, this test fails
+// (scripts/relay.cjs), so when a commercial port in a NEW country lands there, this test fails
 // until the coverage claims are updated — otherwise the model treats that country's ports as out of
 // scope and skips the freight tools (the "Rotterdam" bug fixed in #59). Covers the shared brain:
 // DEFAULT_SYSTEM, MARCO_PERSONA, and the two freight tool descriptions the model reads when deciding

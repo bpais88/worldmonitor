@@ -50,7 +50,7 @@ Cross-cutting: every response carries an as-of timestamp + the feed caveat; scop
 
 ## Serving surface
 
-- **Relay** (`scripts/ais-relay.cjs`, new handler branches, all PRIVATE behind `x-relay-key`): `/ais/trip?id=|mmsi=`
+- **Relay** (`scripts/relay.cjs`, new handler branches, all PRIVATE behind `x-relay-key`): `/ais/trip?id=|mmsi=`
   (status-aware cache: immutable arrived/abandoned → `max-age=3600,s-maxage=86400`; open → `max-age=30`),
   `/ais/vessel-profile?mmsi=`, `/ais/port-profile?port=`.
 - **Web proxies** (`api/ais-trip.js`, `api/ais-vessel-profile.js`, `api/ais-port-profile.js` via `createRelayHandler`,
