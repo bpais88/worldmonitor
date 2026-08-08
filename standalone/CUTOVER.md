@@ -17,9 +17,14 @@ that path: it re-points infrastructure rather than provisioning it.
 their environment variables, their domains and their database connection; only the repository they
 deploy from changes. Postgres and Upstash are untouched throughout.
 
+**The relay keeps its current domain** (decided 2026-08-08). That is the largest simplification in
+this runbook: `RELAY_URL` never changes, so Marco, the edge proxies and any external caller need no
+update at all. The cutover becomes "move the domain between two Railway services", not "re-point
+every client".
+
 Have ready:
-- Access to the existing Railway project (to change each service's source repo).
-- The relay's public URL — needed as an ENV VALUE (`RELAY_URL`), not a code change.
+- Access to the existing Railway project (to change each service's source repo, and to move the
+  custom domain between services at step 7).
 
 > **The CSP does not need touching.** In production the browser only ever calls `/api/ais-*` on its
 > own origin, which `connect-src 'self'` already allows; every direct-to-relay path in the frontend
@@ -150,9 +155,13 @@ talks only to `/api/*` on its own origin.
 AIS is flowing. `npm run test:e2e` locally covers the empty-state path; this is the populated one.
 
 **Marco (Railway):** re-point the existing assistant service's source repo to `bpais88/seaosea`.
-Its environment carries over untouched, and because the webhook URLs belong to the service (not the
-repo), **no channel needs re-registering** — Slack, Teams, Telegram and WhatsApp keep working
-across the switch.
+Its environment carries over untouched — and since the relay keeps its domain, `RELAY_URL` is
+already correct. Because webhook URLs belong to the service rather than the repo, **no channel
+needs re-registering**: Slack, Teams, Telegram and WhatsApp keep working across the switch.
+
+> `BOARD_URL` (the "live board" link in the corridor report footer) is the one URL that does change,
+> because the web app is a new Vercel project. Set it once that project has its domain; leaving it
+> unset omits the line rather than printing a stale one.
 
 **Check per channel** — a live message on each platform you actually run. Then confirm the ops
 report renders: it reads `/health.trips` and `/health.portHistory`, and those blocks exist
@@ -166,15 +175,17 @@ Only now, and only after step 5 passed:
 
 1. Stop the OLD relay service (the one deploying from `worldmonitor`). One writer at a time.
 2. Remove `RELAY_READ_ONLY` from the new service and redeploy. It is now the writer.
-3. Point DNS / clients at it — or simply move the custom domain across, which keeps every existing
-   client URL valid.
+3. Move the custom domain from the old service to the new one. **No client changes anywhere** —
+   Marco, the edge proxies and any external caller keep the URL they already have. This is the
+   whole payoff of keeping the domain.
 4. Watch `/health` for one full day: `connected`, `marinesia.tileAgesSec`, `portHistory.lastWriteOk`,
    and the freight-monitor Slack alerts.
 5. Only then: delete the ferry code from the worldmonitor fork, or archive the fork entirely.
 
-**Rollback, at any point:** re-add `RELAY_READ_ONLY=1` to the new service and restart the old one.
-Both read the same Postgres, so no data is stranded and nothing needs restoring — that is the whole
-reason for keeping one database.
+**Rollback, at any point:** move the domain back, re-add `RELAY_READ_ONLY=1` to the new service and
+restart the old one. Both read the same Postgres, so no data is stranded and nothing needs
+restoring — that is the whole reason for keeping one database. Because the domain is the only thing
+that moves, rollback is a single Railway action, not a redeploy of every consumer.
 
 ---
 
