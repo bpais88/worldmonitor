@@ -1,4 +1,4 @@
-# Cutover runbook
+# Cutover runbook — Seaosea
 
 Taking `standalone/` from a staging directory inside the worldmonitor fork to a live, independent
 product. Written to be executed in order; each step says how you know it worked, and what to do if
@@ -29,9 +29,9 @@ Decide two things now, because they change later steps:
 ## 1. Cut the repository
 
 ```bash
-cp -r standalone /path/to/freight-monitor
-cd /path/to/freight-monitor
-git init && git add -A && git commit -m "Initial commit: freight monitor extracted from the worldmonitor fork"
+cp -r standalone /path/to/seaosea
+cd /path/to/seaosea
+git init && git add -A && git commit -m "Initial commit: Seaosea, extracted from the worldmonitor fork"
 ```
 
 **Check:** `npm ci && npm test` → 311 relay + 155 assistant + 5 api, all green.

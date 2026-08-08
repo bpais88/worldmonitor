@@ -56,7 +56,7 @@ cd assistant/teams && zip -j -X marco-teams.zip manifest.json color.png outline.
 
 Teams (a **work/school** account — personal Microsoft accounts can't sideload custom apps) →
 **Apps → Manage your apps → Upload an app → Upload a custom app** → pick the zip → **Add**. Then
-DM Marco or `@mention` him in a channel: *"which Italian ports are congested?"*
+DM Marco or `@mention` him in a channel: *"which European ports are congested?"*
 (Custom-app upload must be enabled in the tenant's Teams admin settings.)
 
 ## Distribution ladder (the "Add to Teams" equivalent of "Add to Slack")

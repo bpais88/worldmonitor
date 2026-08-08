@@ -1,6 +1,6 @@
-# Freight Monitor — standalone scaffold
+# Seaosea — standalone scaffold
 
-European maritime freight monitoring: live AIS port congestion, vessel delays and ETAs,
+Seaosea is European maritime freight monitoring: live AIS port congestion, vessel delays and ETAs,
 disruption intelligence (strikes, water levels, chokepoints), and Marco, the freight
 assistant (Slack / Teams / Telegram / WhatsApp / voice).
 
