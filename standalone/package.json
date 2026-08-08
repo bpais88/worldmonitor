@@ -15,7 +15,8 @@
     "assistant:cli": "node assistant/cli.mjs",
     "assistant:serve": "node assistant/server.mjs",
     "test:api": "node --test api/*.test.mjs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "parity": "node scripts/parity-diff.cjs"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.105.0",

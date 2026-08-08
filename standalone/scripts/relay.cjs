@@ -39,6 +39,7 @@ const { makePortCongestionExplainer } = require('./explainer-port-congestion.cjs
 const { makeCrossVesselExplainer } = require('./explainer-cross-vessel.cjs');
 const { fetchMeteoalarmAll, makeMeteoalarmExplainer } = require('./explainer-meteoalarm.cjs');
 const { assemblePortContext } = require('./port-context.cjs');
+const { summarizeTrips, tripsDegraded } = require('./trip-lifecycle.cjs');
 
 const { ports: ALL_PORTS } = require('../src/config/maritime-ports.data.json');
 
@@ -414,6 +415,84 @@ async function enrichTick(state, explainers, now = Date.now()) {
   }
 }
 
+/**
+ * The /health trips block. NOT YET PORTED: the Phase B trip write path (decideTrip /
+ * planGeofenceActions / trip_points) does not run in this entry, so these are the honest
+ * disabled-state values — the same shape the predecessor emits with TRIPS_ENABLED unset.
+ * ops-report.mjs renders this block directly; omitting it prints "undefined" in Slack.
+ * See PARITY_MANIFEST.md for the port-the-trips-lifecycle item.
+ */
+function buildTripsHealth(state, now = Date.now()) {
+  const g = summarizeTrips(new Map(), now); // no trips tracked in this entry yet
+  const maxOpenAgeMin = num('TRIP_MAX_OPEN_AGE_H', 120, 1) * 60;
+  const sweepIntervalMin = Math.round(num('TRIP_SWEEP_MS', 24 * 60 * 60_000, 60 * 60_000) / 60_000);
+  return {
+    enabled: false,
+    notPorted: true, // explicit: not "off by config", but "not implemented in this entry"
+    openTripsTracked: g.openCount,
+    openTripsInGrace: g.graceCount,
+    tripsResumed: 0,
+    oldestOpenTripAgeMin: g.oldestOpenAgeMin,
+    tripPointsBuffered: 0,
+    recentExitsTracked: 0,
+    tripsOpened: 0,
+    tripsArrived: 0,
+    tripsAbandoned: 0,
+    tripPointRows: db.stats.tripPointRows ?? 0,
+    tripPointsDropped: 0,
+    lastTripWriteAt: db.stats.lastTripWriteAt ?? null,
+    lastTripWriteOk: db.stats.lastTripWriteOk ?? null,
+    lastTripError: db.stats.lastTripError ?? null,
+    maxOpenAgeMin,
+    sweepIntervalMin,
+    degraded: tripsDegraded({
+      lastTripWriteOk: db.stats.lastTripWriteOk ?? null,
+      pointsBuffered: 0, pointsHighWater: Infinity,
+      oldestOpenAgeMin: g.oldestOpenAgeMin, maxOpenAgeMin, sweepIntervalMin,
+    }),
+  };
+}
+
+/**
+ * The /health portHistory block ops-report.mjs renders. baselineMaturity is derived from the
+ * in-memory baselines (buckets are port x dow x hour, and a dow x hour recurs weekly, so "trusted"
+ * takes ~3 weeks of history) — sync, no PG round-trip on the health path.
+ */
+function buildPortHistoryHealth(state) {
+  let trusted = 0;
+  let maxDays = 0;
+  const trustedPorts = new Set();
+  for (const [key, b] of state.baselines) {
+    if (b.days > maxDays) maxDays = b.days;
+    if (b.days >= db.BASELINE_MIN_DAYS) { trusted++; trustedPorts.add(key.slice(0, key.indexOf(':'))); }
+  }
+  return {
+    enabled: true,
+    dbEnabled: db.enabled,
+    degraded: !db.enabled, // wanted the durable store, running on the in-memory fallback
+    zones: GEOFENCES.length,
+    openZones: state.portHistory.membership.size,
+    lastSnapshotAt: state.portHistory.lastSnapshotAt || null,
+    lastWriteAt: db.stats.lastWriteAt,
+    lastWriteOk: db.stats.lastWriteOk,
+    snapshotRows: db.stats.snapshotRows,
+    eventRows: db.stats.eventRows,
+    baselineBuckets: db.stats.baselineBuckets,
+    baselineRefreshedAt: db.stats.baselineRefreshedAt,
+    vesselsSynced: db.stats.vesselsSynced,
+    vesselsSyncedAt: db.stats.vesselsSyncedAt,
+    baselineMaturity: {
+      buckets: state.baselines.size,
+      trusted,
+      trustedFrac: state.baselines.size ? Math.round((trusted / state.baselines.size) * 1000) / 1000 : 0,
+      portsWithTrusted: trustedPorts.size,
+      maxDays,
+      minDaysToTrust: db.BASELINE_MIN_DAYS,
+    },
+    lastError: db.stats.lastError,
+  };
+}
+
 // ---------------------------------------------------------------- routes ----
 function decorateVessel(state, v) {
   const info = state.etaInfoByMmsi.get(v.mmsi);
@@ -436,6 +515,11 @@ function buildRoutes(state) {
   const CACHE = { short: { 'Cache-Control': 'public, max-age=5', 'CDN-Cache-Control': 'public, max-age=10' },
     ports: { 'Cache-Control': 'public, max-age=15', 'CDN-Cache-Control': 'public, max-age=30' },
     static: { 'Cache-Control': 'public, max-age=300, s-maxage=300' },
+    // Per-endpoint, matching the predecessor: these drive CDN behaviour, so drift here changes
+    // how stale a client's data can be. Verified by scripts/parity-diff.cjs.
+    history: { 'Cache-Control': 'public, max-age=60, s-maxage=60' },
+    voyages: { 'Cache-Control': 'public, max-age=60' },
+    trip: { 'Cache-Control': 'public, max-age=30, s-maxage=30' },
     db: { 'Cache-Control': 'public, max-age=300, s-maxage=600' },
     profile: { 'Cache-Control': 'public, max-age=60, s-maxage=120' } };
   const dbless = () => ({ found: false, db: false, generatedAt: Date.now() });
@@ -449,15 +533,27 @@ function buildRoutes(state) {
         messages: state.aisMessages,
         connected: aisstreamFresh(state),
         tracked: state.store.positions.size,
+        // ops-report.mjs (the 10-minute freight monitor) renders straight off these fields —
+        // upserts/stale/warming/ageSec included. Dropping any of them prints "undefined" in Slack
+        // instead of a verdict, which is the failure mode that let the 2026-07-22 fallback outage
+        // run for ten days unnoticed. The parity harness caught their absence; keep them.
         marinesia: {
           enabled: !!CONFIG.marinesiaKey,
           tiles: MARINESIA_TILES.length,
           lastPollAt: m.lastPollAt ? new Date(m.lastPollAt).toISOString() : null,
-          lastError: m.lastError,
           tileAgesSec: MARINESIA_TILES.map((_, i) => (m.tileLastOkAt.has(i) ? Math.round((Date.now() - m.tileLastOkAt.get(i)) / 1000) : null)),
+          upserts: m.upserts,
+          lastError: m.lastError,
+          ...feedFreshness(state),
         },
-        delays: { flagged: state.delayByMmsi.size },
+        vessels: state.store.positions.size,
+        memory: (() => { const u = process.memoryUsage(); const mb = (n) => `${Math.round(n / 1048576)}MB`;
+          return { rss: mb(u.rss), heapUsed: mb(u.heapUsed), heapTotal: mb(u.heapTotal) }; })(),
+        auth: { authHeader: CONFIG.authHeader, required: !CONFIG.allowUnauthenticated },
+        delays: { flagged: state.delayByMmsi.size, withReasons: state.reasonsByMmsi.size },
         db: db.enabled,
+        portHistory: buildPortHistoryHealth(state),
+        trips: buildTripsHealth(state),
         disruptions: { count: state.disruptions.events.length, refreshedAt: state.disruptions.refreshedAt },
       });
     } },
@@ -508,10 +604,14 @@ function buildRoutes(state) {
       if (db.enabled) {
         const hours = Math.min(Math.max(Number(url.searchParams.get('hours')) || 24, 1), 24 * 14);
         // queryPortHistory takes sinceMs, not hours — passing {hours} silently widens to its default window.
-        return sendJson(req, res, 200, CACHE.profile, await db.queryPortHistory({ sinceMs: Date.now() - hours * 3600_000 }));
+        return sendJson(req, res, 200, CACHE.history, await db.queryPortHistory({ sinceMs: Date.now() - hours * 3600_000 }));
       }
-      sendJson(req, res, 200, CACHE.profile, {
-        snapshots: state.portHistory.snapshots, events: state.portHistory.events, db: false, generatedAt: Date.now(),
+      // snapshotCount/eventCount are part of the shape callers read — not derivable client-side
+      // once the arrays are capped.
+      sendJson(req, res, 200, CACHE.history, {
+        snapshots: state.portHistory.snapshots, events: state.portHistory.events,
+        snapshotCount: state.portHistory.snapshots.length, eventCount: state.portHistory.events.length,
+        db: false, generatedAt: Date.now(),
       });
     } },
 
@@ -532,11 +632,11 @@ function buildRoutes(state) {
       try { counts = (await upstashCmd(['MGET', ...dates.map(VOYAGE_KEY)])) || []; } catch { /* no store -> zeros */ }
       const daily = dates.map((date, i) => ({ date, trips: Number(counts[i]) || 0 }));
       const total = daily.reduce((n, d) => n + d.trips, 0);
-      sendJson(req, res, 200, CACHE.db, { daily, totalTrips: total, days, generatedAt: Date.now() });
+      sendJson(req, res, 200, CACHE.voyages, { daily, totalTrips: total, days, generatedAt: Date.now() });
     } },
 
     { match: (p) => p === '/ais/trip', handler: async (req, res, url) => {
-      sendJson(req, res, 200, CACHE.db, db.enabled ? await db.queryTrip({ id: url.searchParams.get('id') || undefined }) : dbless());
+      sendJson(req, res, 200, CACHE.trip, db.enabled ? await db.queryTrip({ id: url.searchParams.get('id') || undefined }) : dbless());
     } },
 
     { match: (p) => p === '/ais/vessel-profile', handler: async (req, res, url) => {
@@ -597,7 +697,7 @@ function createRelay({ startIngest = true, startJobs = true } = {}) {
   if (startJobs) {
     const explainers = makeDelayExplainers(state);
     every(() => delayTick(state), CONFIG.delayTickMs);
-    every(() => geofenceTick(state), CONFIG.geofenceTickMs);
+    bootAnd(() => geofenceTick(state), CONFIG.geofenceTickMs); // snapshot at boot, not 60s later
     every(() => void enrichTick(state, explainers), CONFIG.enrichMs);
     bootAnd(() => void disruptionsRefresh(state), CONFIG.disruptionRefreshMs);
     bootAnd(() => void meteoalarmRefresh(state), CONFIG.meteoalarmRefreshMs);

@@ -35,11 +35,28 @@ observable behaviour captured into `relay-http.test.cjs` (16 tests).
 - [x] (T) auth matrix, CORS, preflight, 405/404, gzip
 - [x] (T) SECURITY: fail-closed — no secret means refuse to boot; wrong/empty/prefix keys 401
 - [x] (T) DIVERGENCE: the 10 fork tenant endpoints return 404 by design
-- [ ] (P) **Live side-by-side parity diff against the deployed relay** — the one thing
-      characterization cannot prove, because this sandbox has no AIS keys and no Postgres.
-      Replay identical requests at old and new, diff JSON modulo timestamps.
+- [x] (P) **Parity harness written AND run** — `scripts/parity-diff.cjs` replays 15 requests at
+      both relays and diffs the JSON. Run locally with the fork's relay on :3999 and this one on
+      :3004 (both keyless/degraded): **15/15 identical, 0 differing**. Every remaining difference
+      is in an explicit ACCEPTED list with a written reason, so real drift stays loud.
+      It caught four things characterization missed, because the contract I wrote down was
+      simply wrong in places:
+        · /health had lost `portHistory` and `trips` — the blocks assistant/ops-report.mjs
+          renders directly. The 10-minute freight monitor would have printed "undefined".
+        · marinesia.upserts/stale/warming/ageSec were gone — the exact fields that exist because
+          a dead fallback went unnoticed for ten days in 2026-07.
+        · cache-control drift on /ais/port-history, /ais/voyages/daily and /ais/trip (CDN
+          staleness is part of the contract).
+        · port history was empty for the first 60s after every restart — no boot snapshot.
+- [ ] (P) Re-run the harness against the DEPLOYED relay before cutover. The local run proves
+      shape and headers; only production proves behaviour under live AIS + Postgres.
 - [ ] (S) Background-job soak with real keys: aisstream reconnect, Marinesia sweep vs the
-      2000/tile cap, baseline refresh, trips lifecycle.
+      2000/tile cap, baseline refresh.
+- [ ] **NOT PORTED — trips lifecycle (Phase B).** decideTrip / planGeofenceActions / trip_points
+      writing does not run in this entry. /health reports `trips.notPorted: true` rather than
+      pretending. Affects /ais/trip data, get_voyage_stats and dwell/origin backfill. It was
+      TRIPS_ENABLED-gated and off by default, so nothing regresses today — but it is a feature
+      gap, not a parity detail, and it is the next real chunk of work.
 
 ## 3. Marco (moved wholesale)
 
