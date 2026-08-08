@@ -10,6 +10,7 @@
 //   - JSON errors: {"error": "..."}
 
 const zlib = require('node:zlib');
+const crypto = require('node:crypto');
 
 const CORS = {
   'Access-Control-Allow-Origin': '*',
@@ -30,9 +31,22 @@ function makeRateLimiter({ windowMs = 60_000, max = 300 } = {}) {
 }
 
 function clientIp(req) {
+  // Rightmost X-Forwarded-For hop: appended by OUR proxy, unlike the leftmost
+  // entry which the client controls (spoofable -> a fresh limiter bucket per request).
   const fwd = req.headers['x-forwarded-for'];
-  if (typeof fwd === 'string' && fwd.length) return fwd.split(',')[0].trim();
+  if (typeof fwd === 'string' && fwd.length) {
+    const hops = fwd.split(',');
+    return hops[hops.length - 1].trim() || 'unknown';
+  }
   return req.socket?.remoteAddress || 'unknown';
+}
+
+/** Constant-time secret comparison (hash both sides so lengths always match). */
+function secretMatches(provided, secret) {
+  if (!secret) return false;
+  const a = crypto.createHash('sha256').update(String(provided)).digest();
+  const b = crypto.createHash('sha256').update(String(secret)).digest();
+  return crypto.timingSafeEqual(a, b);
 }
 
 /** Send JSON (or a prebuilt string), gzipping when the client accepts it. */
@@ -63,19 +77,19 @@ function makeHandler({ routes, secret, authHeader = 'x-relay-key', allowUnauthen
     const pathname = url.pathname;
 
     if (req.method === 'OPTIONS') { res.writeHead(204, CORS); return res.end(); }
-    if (req.method !== 'GET' && pathname !== '/telegram') {
-      return sendJson(req, res, 405, {}, { error: 'method not allowed' });
-    }
+    if (req.method !== 'GET') return sendJson(req, res, 405, {}, { error: 'method not allowed' });
 
     const route = routes.find((r) => r.match(pathname));
     if (!route) return sendJson(req, res, 404, {}, { error: 'not found' });
 
-    if (!route.public && !allowUnauthenticated) {
-      const provided = String(req.headers[authHeader] || '');
-      if (!secret || provided !== secret) return sendJson(req, res, 401, {}, { error: 'unauthorized' });
-    }
+    // Limiter BEFORE auth, so failed-auth floods (and timing probes) are throttled too.
     if (!limiter(clientIp(req), Date.now(), route.rateMax)) {
       return sendJson(req, res, 429, { 'Retry-After': '60' }, { error: 'rate limited' });
+    }
+    if (!route.public && !allowUnauthenticated) {
+      if (!secretMatches(req.headers[authHeader] || '', secret)) {
+        return sendJson(req, res, 401, {}, { error: 'unauthorized' });
+      }
     }
 
     try {

@@ -507,7 +507,8 @@ function buildRoutes(state) {
     { match: (p) => p === '/ais/port-history', handler: async (req, res, url) => {
       if (db.enabled) {
         const hours = Math.min(Math.max(Number(url.searchParams.get('hours')) || 24, 1), 24 * 14);
-        return sendJson(req, res, 200, CACHE.profile, await db.queryPortHistory({ hours }));
+        // queryPortHistory takes sinceMs, not hours — passing {hours} silently widens to its default window.
+        return sendJson(req, res, 200, CACHE.profile, await db.queryPortHistory({ sinceMs: Date.now() - hours * 3600_000 }));
       }
       sendJson(req, res, 200, CACHE.profile, {
         snapshots: state.portHistory.snapshots, events: state.portHistory.events, db: false, generatedAt: Date.now(),
@@ -516,23 +517,21 @@ function buildRoutes(state) {
 
     { match: (p) => p === '/ais/port-series', handler: async (req, res, url) => {
       if (!db.enabled) return sendJson(req, res, 200, CACHE.profile, { ts: [], ports: {}, fields: [], hours: 0, tickCount: 0, portCount: 0, generatedAt: Date.now(), db: false });
+      const port = url.searchParams.get('port');
       sendJson(req, res, 200, CACHE.profile, await db.queryPortSeries({
-        port: url.searchParams.get('port') || undefined,
+        ports: port ? [port.toLowerCase()] : undefined, // plural — singular is silently ignored
         hours: Number(url.searchParams.get('hours')) || undefined,
       }));
     } },
 
     { match: (p) => p === '/ais/voyages/daily', handler: async (req, res, url) => {
       const days = Math.min(Math.max(Number(url.searchParams.get('days')) || 14, 1), 120);
-      const daily = [];
-      let total = 0;
-      for (let i = 0; i < days; i++) {
-        const day = utcDay(Date.now() - i * 24 * 3600 * 1000);
-        let trips = 0;
-        try { trips = Number(await upstashCmd(['GET', VOYAGE_KEY(day)])) || 0; } catch { /* no store -> zeros */ }
-        total += trips;
-        daily.push({ date: day, trips });
-      }
+      const dates = Array.from({ length: days }, (_, i) => utcDay(Date.now() - i * 24 * 3600 * 1000));
+      // One MGET, not N serial GETs — 120 awaited round-trips took seconds per request.
+      let counts = [];
+      try { counts = (await upstashCmd(['MGET', ...dates.map(VOYAGE_KEY)])) || []; } catch { /* no store -> zeros */ }
+      const daily = dates.map((date, i) => ({ date, trips: Number(counts[i]) || 0 }));
+      const total = daily.reduce((n, d) => n + d.trips, 0);
       sendJson(req, res, 200, CACHE.db, { daily, totalTrips: total, days, generatedAt: Date.now() });
     } },
 

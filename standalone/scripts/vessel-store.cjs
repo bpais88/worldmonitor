@@ -42,10 +42,16 @@ function makeVesselStore(opts = {}) {
     applyStatic(v, now);
   }
 
+  // Batch eviction: on the global AIS firehose the store sits pinned at the cap, so a
+  // one-at-a-time O(n) scan would run inside the hot message handler on every new MMSI.
+  // Dropping the oldest ~2% per trip makes the scan rare instead of per-insert.
   function evictOldest() {
-    let oldestKey = null; let oldestTs = Infinity;
-    for (const [k, v] of positions) if (v.timestamp < oldestTs) { oldestTs = v.timestamp; oldestKey = k; }
-    if (oldestKey) { positions.delete(oldestKey); statics.delete(oldestKey); }
+    const batch = Math.max(1, Math.floor(o.maxVessels * 0.02));
+    const byAge = [...positions.entries()].sort((a, b) => a[1].timestamp - b[1].timestamp);
+    for (let i = 0; i < batch && i < byAge.length; i++) {
+      positions.delete(byAge[i][0]);
+      statics.delete(byAge[i][0]);
+    }
   }
 
   function prune(now = Date.now()) {
