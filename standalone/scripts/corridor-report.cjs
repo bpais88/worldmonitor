@@ -1,5 +1,10 @@
 'use strict';
 
+// Public URL of the live freight board, printed in the report footer. Deployment-specific, so it
+// comes from the environment rather than being baked in — the fork's hardcoded Vercel preview URL
+// shipped inside customer-facing PDFs. Unset -> the line is omitted rather than printed wrong.
+const BOARD_URL = process.env.BOARD_URL || '';
+
 // Weekly Med Freight Corridor Report — the outward-facing artifact of the analytics layer.
 // Reads the LIVE Neon data (read-only) + the relay's disruption feed, applies the same
 // honest-stats discipline as the serving layer (every number carries its n; thin sections are
@@ -208,7 +213,7 @@ td.num{font-family:'IBM Plex Mono',monospace;font-size:.82rem;text-align:right}
 footer{margin-top:3rem;border-top:1px dashed var(--line);padding-top:1rem;font-family:'IBM Plex Mono',monospace;font-size:.62rem;color:var(--soft);line-height:1.9}
 </style></head><body>
 <header>
-  <div class="kicker">WORLDMONITOR · MED SHORT-SEA INTELLIGENCE</div>
+  <div class="kicker">SEAOSEA · EUROPEAN SHORT-SEA INTELLIGENCE</div>
   <h1>Freight Corridor Report</h1>
   <div class="meta">WEEK ${m.week.week} / ${m.week.year} · ISSUE #1 · GENERATED ${esc(m.dateLabel)} · ITALY + UK + SPAIN + NETHERLANDS · 39 PORTS</div>
 </header>
@@ -233,7 +238,7 @@ ${m.strikes && m.strikes.length ? section('Scheduled strikes — next 14 days', 
     m.strikes.map((s) => `<div class="strike"><b>${esc(new Date(s.startsAt).toISOString().slice(0, 10))}</b> — ${esc(s.summary)}</div>`).join('')) : ''}
 <footer>
   METHOD — AIS-derived, freight vessels only (cargo + RoPax), ${(m.head.snapshots / 1e3).toFixed(0)}k coverage-verified port observations; degraded feed windows excluded. Every figure carries its sample size; sections below threshold are omitted, never padded. On-time is measured against the ETA declared at departure — late promises don't score. Corridors require a geofence-confirmed origin (coverage expanding).<br>
-  WORLDMONITOR · live board: worldmonitor-rouge-delta.vercel.app/ferry.html · report generated ${esc(m.dateLabel)}
+  SEAOSEA${BOARD_URL ? ` · live board: ${esc(BOARD_URL)}` : ''} · report generated ${esc(m.dateLabel)}
 </footer>
 </body></html>`;
   return html;

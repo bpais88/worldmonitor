@@ -13,7 +13,7 @@ export interface KeyValueStorage {
   setItem(key: string, value: string): void;
 }
 
-const STORAGE_KEY = 'worldmonitor_shipments_v1';
+const STORAGE_KEY = 'seaosea_shipments_v1';
 
 class MemoryStorage implements KeyValueStorage {
   private map = new Map<string, string>();

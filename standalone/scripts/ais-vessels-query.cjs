@@ -2,7 +2,7 @@
 
 // Pure query/filter logic for the relay's /ais/vessels endpoint.
 //
-// Extracted from ais-relay.cjs so it can be unit-tested without starting the
+// Extracted from relay.cjs so it can be unit-tested without starting the
 // relay server or a live AIS connection. The relay requires this module and
 // uses these functions directly, so the tests exercise the real code path.
 

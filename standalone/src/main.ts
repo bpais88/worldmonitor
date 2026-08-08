@@ -5,7 +5,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import { FreightPanel } from '@/components/FreightPanel';
 import { initI18n } from '@/services/i18n';
 
-const ABOUT_SEEN_KEY = 'worldmonitor-freight-about-seen';
+const ABOUT_SEEN_KEY = 'seaosea-about-seen';
 
 /**
  * The intro copy explains what Vessels / Ports / Disruptions actually contain, which is genuinely

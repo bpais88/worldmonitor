@@ -14,7 +14,7 @@
 // out the window.
 //
 // THE DELETE ALONE IS NOT ENOUGH — RESTART THE RELAY AFTER --apply
-// congestionRel is served from an in-memory map (`portBaselines` in scripts/ais-relay.cjs), loaded
+// congestionRel is served from an in-memory map (`portBaselines` in scripts/relay.cjs), loaded
 // on boot and refreshed on a 24h timer, with no reload endpoint. Deleting the rows underneath it
 // changes nothing that users see until that reload, so the old geometry's labels stay live for up
 // to a day — the exact wrong-but-confident answer this purge exists to remove. --apply prints the
@@ -169,12 +169,12 @@ async function main() {
   console.log(`DELETED  port_snapshots ${snapRes.length} rows, port_baselines ${baseRes.length} buckets.`);
   console.log('');
   console.log('  !! REQUIRED NEXT STEP — THE PURGE IS NOT YET VISIBLE !!');
-  console.log('  The relay answers congestionRel from an IN-MEMORY baselines map (ais-relay.cjs:');
+  console.log('  The relay answers congestionRel from an IN-MEMORY baselines map (relay.cjs:');
   console.log('  `portBaselines`), loaded on boot and refreshed on a 24h timer. There is no reload');
   console.log('  endpoint. Until it reloads, /ais/ports keeps serving the very percentiles just');
   console.log('  deleted — the old geometry\'s labels, for up to 24 hours, with nothing to show it.');
   console.log('');
-  console.log('      railway redeploy --service worldmonitor-relay --yes');
+  console.log('      railway redeploy --service seaosea-relay --yes');
   console.log('');
   // Scoped to the purged ids ONLY. A whole-response count is useless here: this purge touches 12 of
   // 43 ports, so the other 31 keep healthy baselines and any global count comes back positive

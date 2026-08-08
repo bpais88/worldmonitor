@@ -99,7 +99,7 @@ function matchMeteoalarm(warnings, ctx, now = Date.now()) {
 
 function getText(url, timeoutMs, redirectsLeft = 3) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { timeout: timeoutMs, headers: { 'User-Agent': 'Mozilla/5.0 worldmonitor-relay' } }, (res) => {
+    const req = https.get(url, { timeout: timeoutMs, headers: { 'User-Agent': 'Mozilla/5.0 seaosea-relay' } }, (res) => {
       const s = res.statusCode || 0;
       if (s >= 300 && s < 400 && res.headers.location && redirectsLeft > 0) {
         res.resume();

@@ -60,7 +60,7 @@ function matchNewsToDelay(items, ctx, now = Date.now()) {
 
 function getText(url, timeoutMs, redirectsLeft = 3) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { timeout: timeoutMs, headers: { 'User-Agent': 'Mozilla/5.0 worldmonitor-relay' } }, (res) => {
+    const req = https.get(url, { timeout: timeoutMs, headers: { 'User-Agent': 'Mozilla/5.0 seaosea-relay' } }, (res) => {
       const status = res.statusCode || 0;
       if (status >= 300 && status < 400 && res.headers.location && redirectsLeft > 0) {
         res.resume();

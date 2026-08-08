@@ -1,6 +1,6 @@
 // Coarse vessel categorisation from AIS ship-type codes. Kept tiny and pure so
 // it can be shared between the relay-facing provider and the UI, and unit-tested
-// in isolation. Mirrors the relay's shipTypeCategory() in scripts/ais-relay.cjs.
+// in isolation. Mirrors the relay's shipTypeCategory() in scripts/relay.cjs.
 
 export type ShipCategory = 'passenger' | 'cargo' | 'tanker' | 'hsc' | 'other';
 
