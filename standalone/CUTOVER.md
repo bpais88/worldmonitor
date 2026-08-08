@@ -54,13 +54,38 @@ in staging.
 You are keeping the existing Postgres. The schema is already there, the history stays, no
 migrations run. Skip to step 3.
 
-> **One optional cleanup, unrelated to this migration.** The per-port radii shipped to production
-> on 2026-08-01, so the rolling 8-week baseline window still holds ~7 weeks of snapshots taken with
-> the OLD geometry for twelve ports (rotterdam, amsterdam, liverpool, southampton, savona,
-> vado_ligure, venezia, porto_marghera, london_gateway, tilbury, immingham, hull). Until those age
-> out, `congestionRel` reads low for the shrunk ports and high for the widened ones.
-> `scripts/purge-radius-history.cjs` deletes exactly those rows; the baseline then rebuilds clean
-> in `BASELINE_MIN_DAYS` (3). Doing nothing is also valid — it self-corrects by ~2026-09-26.
+> **One cleanup, unrelated to this migration — DECIDED: purge (2026-08-08).** The per-port radii
+> shipped on 2026-08-01, so the rolling 8-week baseline window still holds ~7 weeks of snapshots
+> taken under the OLD geometry for twelve ports (rotterdam, amsterdam, liverpool, southampton,
+> savona, vado_ligure, venezia, porto_marghera, london_gateway, tilbury, immingham, hull). Until
+> they age out, `congestionRel` blends two geometries: low for the shrunk ports, high for the
+> widened ones — including Rotterdam, and it is the signal both freight tools are told to LEAD with.
+>
+> **Correction to an earlier note in this file: recovery is ~3 WEEKS, not 3 days.** `BASELINE_MIN_DAYS = 3`
+> counts distinct local days *within a (port, dow, hour) bucket*, and a dow x hour bucket recurs once
+> a WEEK — so three observed days means three successive weeks. The `n` column counts weeks, whatever
+> it is named. The real trade is therefore:
+>
+> | | Effect on the 12 ports |
+> |---|---|
+> | **Purge** | `congestionRel: null` — honestly "unknown" — for ~3 weeks |
+> | **Do nothing** | Confidently wrong numbers until ~2026-09-26 (~7 weeks) |
+>
+> Purge wins because unknown degrades safely and a wrong number does not — the same principle as the
+> coverage fix this whole branch started from. Do it BEFORE cutover so the rebuild is already under
+> way and is not confused with migration effects.
+>
+> ```bash
+> node --env-file-if-exists=.env scripts/purge-radius-history.cjs            # dry run (default)
+> node --env-file-if-exists=.env scripts/purge-radius-history.cjs --apply    # execute
+> ```
+>
+> Dry run is the default and prints exactly what `--apply` would delete; the deletes run as one
+> transaction and `port_events`/`trips`/`trip_points` are guarded against writes at runtime.
+> **Restart the relay afterwards** — `congestionRel` is served from an in-memory baseline map
+> refreshed on a 24h timer, so without a restart the old geometry's labels stay live for up to a
+> day, which is the exact wrong-but-confident answer the purge exists to remove. `--apply` prints
+> the redeploy command and a verification query.
 
 ---
 
@@ -242,7 +267,9 @@ These are documented gaps, not oversights — decide each on its own merits:
   at-berth distributions from `port_baselines`. Until then, `congestionRel` is the trustworthy
   signal and both freight tools lead with it.
 - **31 of 43 ports use the default 8 km radius.** Twelve were set from measurable evidence; the
-  rest need port knowledge.
+  rest need port knowledge. Note `port_events` and `trips` keep a documented discontinuity at the
+  2026-08-01 geometry change — they are append-only with no recompute path, so deleting them would
+  be pure loss rather than a refresh (49% of port_events, 42% of arrived trips at time of writing).
 - **Antwerp, Hamburg, Le Havre, Bremerhaven, Gdańsk and Piraeus are not covered** — a product gap
   in something called "European freight". Adding a country is now ports + one `COUNTRY_SOURCES`
   entry; tiles, timezones and parity gates follow automatically. Cost: each country lengthens the
